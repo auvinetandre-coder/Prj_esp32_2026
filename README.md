@@ -1,118 +1,126 @@
+# RouteurSolaireESP32
 
-﻿# RouteurSolaireESP32
+Firmware Arduino IDE pour ESP32 permettant de realiser un routeur solaire photovoltaique local, modulaire, distribue et redondant.
 
-Firmware Arduino IDE pour routeur solaire photovoltaique local, modulaire, distribue et redondant sur ESP32.
-
-Le principe du projet est simple : tous les ESP32 utilisent exactement le meme firmware. Le role reel de chaque module est configure au moment de l'installation depuis l'interface Web locale, puis stocke dans LittleFS.
+Le principe du projet est de garder un seul firmware commun pour tous les ESP32. Le role de chaque module est choisi lors de l'installation depuis l'interface Web locale, puis stocke dans LittleFS.
 
 ## Avertissement securite 230 V
 
-Ce projet pilote des equipements pouvant etre raccordes au secteur 230 V, a un chauffe-eau, a des SSR et a un triac RobotDyn. Ces montages peuvent provoquer electrocution, incendie, destruction materielle ou declenchements dangereux si le cablage, l'isolation, la dissipation thermique ou les protections sont incorrects.
+Ce projet peut piloter des equipements raccordes au secteur 230 V : chauffe-eau, SSR, triac RobotDyn, relais ou contacteur. Une erreur de cablage, d'isolation, de dissipation thermique ou de configuration peut provoquer electrocution, incendie, destruction de materiel ou declenchement dangereux.
 
-Ne jamais intervenir sous tension. Utiliser des protections adaptees : disjoncteur, differentiel, fusible, terre, boitier ferme, bornes isolees, dissipateur SSR, cables dimensionnes, separation basse tension/secteur et arret d'urgence. Le cablage 230 V doit etre realise ou verifie par une personne qualifiee. Tester d'abord sans charge secteur, puis avec une charge resistive de test adaptee.
+Ne jamais intervenir sous tension. Utiliser des protections materielles adaptees : disjoncteur, differentiel, fusible, terre, boitier ferme, bornes isolees, dissipateur SSR, cables dimensionnes, separation basse tension/secteur et arret d'urgence. Le cablage 230 V doit etre realise ou verifie par une personne qualifiee.
 
-Le firmware inclut des securites logicielles, mais elles ne remplacent jamais les securites materielles du chauffe-eau, du tableau electrique, du thermostat, du limiteur thermique ou du montage SSR/triac.
+Les securites logicielles du firmware ne remplacent jamais les securites materielles du chauffe-eau, du thermostat, du limiteur thermique, du tableau electrique ou du montage SSR/triac.
 
 ## Objectifs
 
-- Piloter un chauffe-eau avec le surplus photovoltaique.
-- Fonctionner entierement en local, sans dependance Internet.
-- Utiliser un firmware unique pour tous les ESP32.
+- Router le surplus photovoltaique vers un chauffe-eau.
+- Fonctionner entierement en local, sans Internet.
+- Utiliser un firmware unique multi-role.
 - Configurer dynamiquement les capteurs, actionneurs et regles.
-- Supporter ESP-NOW pour un systeme distribue.
-- Assurer une redondance MASTER/BACKUP avec reprise automatique.
-- Continuer a fonctionner sans WiFi maison grace au fallback point d'acces.
-- Prevoir une extension future, par exemple MQTT.
+- Supporter ESP-NOW pour des modules distribues.
+- Gerer une redondance MASTER/BACKUP.
+- Continuer a fonctionner sans WiFi maison grace au point d'acces local.
+- Prevoir des extensions futures comme MQTT.
 
-## Architecture generale
-
-Le projet est organise en modules Arduino `.h/.cpp` :
+## Architecture
 
 ```text
 RouteurSolaireESP32/
-+-- RouteurSolaireESP32.ino
-+-- README.md
-+-- WIRING.md
-+-- data/
-|   +-- README_LITTLEFS.txt
-|   +-- www/
-|       +-- index.html
-|       +-- app.js
-|       +-- style.css
-+-- config_examples/
-|   +-- device.example.json
-|   +-- system.example.json
-|   +-- sensors.example.json
-|   +-- actuators.example.json
-|   +-- rules.example.json
-+-- tools/
-|   +-- Compiler_RouteurSolaireESP32.bat
-|   +-- Televerser_LittleFS_COM3.bat
-|   +-- Effacer_Flash_ESP32.bat
-+-- src/
-    +-- actuators/
-    +-- communication/
-    +-- config/
-    +-- logger/
-    +-- logic/
-    +-- network/
-    +-- runtime/
-    +-- safety/
-    +-- sensors/
-    +-- status/
-    +-- web/
+|-- RouteurSolaireESP32.ino
+|-- README.md
+|-- WIRING.md
+|-- data/
+|   |-- README_LITTLEFS.txt
+|   `-- www/
+|       |-- index.html
+|       |-- app.js
+|       `-- style.css
+|-- config_examples/
+|   |-- device.example.json
+|   |-- system.example.json
+|   |-- sensors.example.json
+|   |-- actuators.example.json
+|   `-- rules.example.json
+|-- tools/
+|   |-- Compiler_RouteurSolaireESP32.bat
+|   |-- Televerser_LittleFS_COM3.bat
+|   `-- Effacer_Flash_ESP32.bat
+`-- src/
+    |-- actuators/
+    |-- communication/
+    |-- config/
+    |-- logger/
+    |-- logic/
+    |-- network/
+    |-- runtime/
+    |-- safety/
+    |-- sensors/
+    |-- simulation/
+    |-- status/
+    `-- web/
 ```
 
-Sequence de demarrage :
+Modules principaux :
 
-1. Liaison serie a 115200 bauds.
-2. LED d'etat sur GPIO2.
+- `ConfigManager` : fichiers JSON LittleFS.
+- `SensorManager` : centralisation des capteurs.
+- `JSYMK194TManager` : JSY-MK-194T Modbus RTU.
+- `LinkyTICManager` : TIC Linky.
+- `DS18B20Manager` : bus OneWire GPIO4.
+- `ActuatorManager` : SSR, RobotDyn, relais, PWM, sorties digitales.
+- `RuleEngine` : moteur de regles SI / ALORS.
+- `SafetyManager` : securites globales.
+- `SimulationManager` : simulation sans capteurs ni charge 230 V.
+- `EspNowManager` : communication ESP-NOW.
+- `RedundancyManager` : MASTER/BACKUP.
+- `WebUi` : API REST et interface Web.
+- `RuntimeState` : etat global.
+- `Logger` : logs et evenements.
+- `StatusLed` : LED GPIO2.
+
+## Demarrage firmware
+
+Au boot :
+
+1. Initialisation serie 115200 bauds.
+2. LED d'etat GPIO2.
 3. Coupure de toutes les sorties.
 4. Initialisation LittleFS.
-5. Chargement ou creation des fichiers JSON.
-6. Initialisation actionneurs et securites.
-7. Initialisation capteurs.
-8. Connexion WiFi ou point d'acces fallback.
-9. Initialisation ESP-NOW.
-10. Initialisation redondance.
-11. Demarrage interface Web.
-12. Boucle principale non bloquante basee sur `millis()`.
+5. Chargement ou creation des JSON de configuration.
+6. Simulation forcee OFF au reboot.
+7. Initialisation actionneurs.
+8. Initialisation securites.
+9. Initialisation capteurs.
+10. Connexion WiFi ou AP fallback.
+11. Initialisation ESP-NOW.
+12. Initialisation redondance.
+13. Demarrage interface Web.
+14. Boucle principale non bloquante avec `millis()`.
 
-## Roles des ESP32
+## Roles ESP32
 
 Le role est stocke dans `/config/device.json`.
 
-Roles supportes :
+- `MASTER` : controleur actif principal.
+- `BACKUP` : surveille le MASTER et reprend si besoin.
+- `NODE_SENSOR` : module capteurs distant.
+- `NODE_ACTUATOR` : module actionneurs distant.
+- `NODE_MIXED` : capteurs et actionneurs.
 
-- `MASTER`
-- `BACKUP`
-- `NODE_SENSOR`
-- `NODE_ACTUATOR`
-- `NODE_MIXED`
-
-### MASTER
-
-Le MASTER est le controleur actif principal. Il lit les mesures disponibles, evalue les regles, calcule les commandes et pilote les actionneurs critiques locaux ou distants.
-
-### BACKUP
-
-Le BACKUP surveille le MASTER par heartbeat ESP-NOW. Si le MASTER disparait au-dela du timeout configure, le BACKUP devient MASTER actif et incremente l'`epoch` de redondance.
-
-### NODE_SENSOR
-
-Un NODE_SENSOR lit des capteurs locaux puis transmet les valeurs au MASTER via ESP-NOW. Il ne pilote pas de sortie critique.
-
-### NODE_ACTUATOR
-
-Un NODE_ACTUATOR recoit des commandes d'actionneurs via ESP-NOW. Il n'accepte les commandes critiques que du MASTER actif reconnu, avec `masterId`, `epoch`, sequence et TTL valides.
-
-### NODE_MIXED
-
-Un NODE_MIXED peut combiner mesures locales et actionneurs locaux. Il reste soumis aux memes securites que les autres roles.
+Tous les roles utilisent le meme firmware.
 
 ## Redondance MASTER/BACKUP
 
-Le module `RedundancyManager` gere les etats :
+Le MASTER actif envoie des heartbeats via ESP-NOW. Le BACKUP surveille ces messages.
+
+Valeurs par defaut :
+
+- Heartbeat : 300 ms.
+- Takeover : 1000 ms.
+- `epoch` augmente a chaque reprise.
+
+Etats possibles :
 
 - `PASSIVE`
 - `ACTIVE_MASTER`
@@ -121,36 +129,129 @@ Le module `RedundancyManager` gere les etats :
 - `TAKEOVER_ACTIVE`
 - `SPLIT_BRAIN_DETECTED`
 
-Parametres par defaut :
+En cas de double MASTER ou split brain, le SafetyManager doit passer en etat critique.
 
-- Heartbeat : 300 ms
-- Takeover : 1000 ms
+## WiFi
 
-En cas de split brain ou double MASTER detecte, le `SafetyManager` passe en defaut critique et les actionneurs critiques sont coupes.
+WiFi maison par defaut :
 
-## Capteurs supportes
+```text
+SSID: WIFI_SSID_A_CONFIGURER
+Mot de passe: WIFI_PASSWORD_A_CONFIGURER
+```
 
-Capteurs prevus par defaut :
+Point d'acces fallback :
 
-- JSY-MK-194T sur Serial2, RX GPIO16, TX GPIO17.
-- TIC Linky sur Serial1, RX GPIO32.
-- Trois DS18B20 sur bus OneWire GPIO4.
-- Entree analogique.
-- Entree digitale.
-- Capteur virtuel.
-- Capteur distant ESP-NOW.
+```text
+SSID: AP_SSID_A_CONFIGURER
+Mot de passe: AP_PASSWORD_A_CONFIGURER
+IP: 192.168.4.1
+```
+
+Le firmware tente le WiFi maison. En cas d'echec, il demarre un point d'acces local. L'interface Web reste disponible dans les deux cas.
+
+Option disponible : garder l'AP local actif en meme temps que le WiFi maison.
+
+## Interface Web
+
+Interface principale :
+
+```text
+http://adresse-ip/app
+```
+
+Pages :
+
+- Dashboard
+- Capteurs
+- Actionneurs
+- Logique
+- Diagnostic & Simulation
+- Parametres
+
+Interface de secours :
+
+```text
+http://adresse-ip/lite
+```
+
+API utiles :
+
+- `/api/status-lite`
+- `/api/status`
+- `/api/diagnostic`
+- `/api/sensors`
+- `/api/actuators`
+- `/api/rules`
+- `/api/system`
+- `/api/device`
+- `/api/simulation`
+- `/fs`
+
+## Dashboard
+
+Le dashboard affiche :
+
+- nom du module
+- role ESP32
+- WiFi, IP, RSSI
+- etat securite
+- etat simulation
+- source puissance reseau
+- puissance reseau
+- injection
+- surplus
+- consommation
+- SSR1, SSR2, RobotDyn
+- temperatures sonde1/2/3
+- informations ESP : firmware, core Arduino, IDF, CPU, flash, heap, LittleFS
+
+Graphes :
+
+- historique 30 minutes
+- 1 point toutes les 5 secondes
+- echelle visible
+- tooltip au survol
+- personnalisation des blocs et courbes
+
+## Source puissance reseau
+
+Le parametre `router.gridPowerSource` choisit la source officielle de `gridPowerW`.
+
+Valeurs :
+
+- `JSY` : puissance reseau issue du JSY-MK-194T.
+- `TIC` : puissance reseau issue du Linky si exploitable.
+- `AUTO` : TIC si disponible, sinon JSY.
+
+Important : le JSY reste la source conseillee pour le pilotage rapide. La TIC historique donne souvent `PAPP`, qui est une puissance apparente positive. La TIC standard peut donner `SINSTS` et `SINSTI`, plus utiles pour distinguer soutirage et injection.
+
+## Capteurs
+
+Capteurs supportes :
+
+- JSY-MK-194T
+- TIC Linky
+- DS18B20
+- Entree analogique
+- Entree digitale
+- Capteur virtuel
 
 ### JSY-MK-194T
 
-Lecture Modbus RTU manuelle :
+Configuration par defaut :
 
-- Adresse Modbus : 1
-- Vitesse : 4800 bauds
-- Format : 8N1
-- Registre de depart : `0x0048`
-- Verification CRC16
+```text
+Serial2
+RX GPIO16
+TX GPIO17
+Adresse Modbus 1
+4800 bauds
+8N1
+Registre 0x0048
+```
 
-Mesures exposees :
+Mesures :
 
 - `voltageV`
 - `currentA`
@@ -161,40 +262,71 @@ Mesures exposees :
 - `surplusW`
 - `powerFactor`
 - `frequencyHz`
-- `energyDirection`
 - `available`
-- `lastValidReadMs`
 
-Logique de signe :
+Deux pinces sont gerees :
 
-- Si le JSY indique une injection, `gridPowerW` devient negatif.
-- Si `gridPowerW < 0`, alors `injectionW = -gridPowerW`.
-- Si `gridPowerW > 0`, alors `consumptionW = gridPowerW`.
-- `surplusW = injectionW`.
+- `activePowerW1`
+- `currentA1`
+- `activePowerW2`
+- `currentA2`
+
+Dans la page Capteurs, le JSY est un seul capteur avec deux voies :
+
+- Pince 1
+- Pince 2
+
+Roles normalises des pinces :
+
+- `grid`
+- `production`
+- `load`
+- `custom`
+
+Valeurs par defaut :
+
+- Pince 1 : `grid`
+- Pince 2 : `production`
 
 ### TIC Linky
 
-La TIC sert au diagnostic, a la coherence et aux informations energie. Elle ne doit pas etre la mesure principale pour le pilotage rapide.
+Configuration par defaut :
 
-Mesures minimales :
+```text
+Serial1
+RX GPIO32
+mode historique
+1200 bauds
+```
 
-- puissance apparente
-- intensite
-- index energie
-- option tarifaire
-- periode tarifaire
-- etat TIC
-- dernier age de lecture valide
+Mesures :
+
+- `apparentPowerVA`
+- `gridPowerW` si exploitable
+- `currentA`
+- `tariff`
+- `period`
+- `available`
+- `lastValidReadMs`
+
+La TIC sert surtout au diagnostic, a la coherence et aux informations energie. Elle n'est pas la meilleure source pour un pilotage rapide.
 
 ### DS18B20
 
-Les sondes sont volontairement generiques dans le code :
+Bus OneWire :
+
+```text
+GPIO4
+Pull-up 4.7 kOhm vers 3.3 V
+```
+
+Les sondes sont generiques :
 
 - `sonde1`
 - `sonde2`
 - `sonde3`
 
-Le role reel vient de `sensors.json` ou de l'interface Web :
+Le role reel vient de `sensors.json` ou de l'interface :
 
 - `ballon_haut`
 - `ballon_milieu`
@@ -204,25 +336,40 @@ Le role reel vient de `sensors.json` ou de l'interface Web :
 - `ambiance`
 - `autre`
 
-Chaque sonde peut etre critique ou non critique pour le `SafetyManager`. Les adresses OneWire peuvent etre scannees et associees depuis la page Capteurs.
+Chaque sonde peut etre critique ou non critique.
 
-## Actionneurs supportes
+Le scan OneWire affiche les adresses detectees. Exemple :
+
+```json
+{
+  "busGpio": 4,
+  "count": 3,
+  "addresses": [
+    "28-FF-64-1E-85-16-03-5C",
+    "28-3C-01-D6-45-12-04-A9",
+    "28-A1-7B-91-20-19-02-6E"
+  ]
+}
+```
+
+Le scan ne sait pas quelle sonde est en haut/milieu/bas. Il faut associer chaque adresse a `sonde1`, `sonde2` ou `sonde3`.
+
+## Actionneurs
 
 Actionneurs par defaut :
 
 - SSR1 chauffe-eau principal : GPIO26.
 - SSR2 auxiliaire : GPIO25.
-- RobotDyn Triac : zero-cross GPIO27, gate/control GPIO33.
+- RobotDyn Triac : zero-cross GPIO27, controle GPIO33.
 
 Types supportes :
 
 - SSR
 - RobotDyn Triac
-- Relais
+- Relay
 - PWM
-- Sortie digitale
-- Actionneur virtuel
-- Actionneur distant ESP-NOW
+- Digital Output
+- Virtual
 
 Modes supportes :
 
@@ -235,94 +382,33 @@ Modes supportes :
 - `PHASE_ANGLE`
 - `MANUAL_SAFE`
 
-Le mode `PHASE_ANGLE` est reserve au RobotDyn Triac et refuse sur un SSR classique.
+L'interface filtre les modes selon le type choisi.
 
-## Fichiers de configuration LittleFS
+### Modes conseilles
 
-Fichiers utilises :
+SSR :
 
-- `/config/device.json`
-- `/config/system.json`
-- `/config/sensors.json`
-- `/config/actuators.json`
-- `/config/rules.json`
+- `BURST_FIRE`
+- `TRAIN_ONDES_ENTIERES`
+- `ZERO_CROSS_BURST`
+- `LOW_FREQ_PWM`
+- `MANUAL_SAFE`
 
-Chaque fichier contient un champ `version`. Si un fichier est absent, il est recree avec les valeurs par defaut. Si un JSON est corrompu, il est sauvegarde en `.bak`, puis remplace par une configuration saine.
+RobotDyn Triac :
 
-Important : les vrais fichiers `/config/*.json` vivent dans le LittleFS de l'ESP32 et sont modifies par l'interface Web. Ils ne doivent pas etre places dans `data/`, sinon un televersement LittleFS pourrait ecraser les reglages. Les exemples PC sont dans `config_examples/`.
+- `PHASE_ANGLE`
+- `ZERO_CROSS_BURST`
+- `BURST_FIRE`
+- `MANUAL_SAFE`
 
-### device.json
+Relais :
 
-Contient notamment :
+- `ON_OFF`
+- `MANUAL_SAFE`
 
-- `deviceId`
-- `deviceName`
-- `role`
-- `isConfigured`
-- `firmwareVersion`
+Le mode `ON_OFF` est du tout ou rien. Il est adapte a un relais, une sortie digitale ou un contacteur. Il n'est pas adapte au routage progressif d'un chauffe-eau.
 
-### system.json
-
-Contient notamment :
-
-- WiFi maison
-- point d'acces fallback
-- heartbeat redondance
-- timeout takeover
-- seuils injection
-- temperatures limites
-- PID
-- mode simulation
-- options de securite
-
-### sensors.json
-
-Decrit les capteurs locaux, distants ESP-NOW et les sondes DS18B20 generiques.
-
-### actuators.json
-
-Decrit SSR1, SSR2, RobotDyn et les actionneurs ajoutes par l'utilisateur.
-
-### rules.json
-
-Decrit les regles SI / ET / OU / ALORS.
-
-## Interface Web
-
-L'interface est locale, legere et sans CDN obligatoire. Elle reste disponible en WiFi station et en point d'acces fallback.
-
-Pages :
-
-- Dashboard
-- Capteurs
-- Actionneurs
-- Logique
-- Diagnostic
-- Parametres
-- Installation
-
-Le menu lateral gauche est fixe sur desktop et responsive sur mobile.
-
-API principales :
-
-- `GET /api/status`
-- `GET /api/sensors`
-- `GET /api/actuators`
-- `GET /api/rules`
-- `GET /api/config`
-- `POST /api/config/device`
-- `POST /api/config/system`
-- `POST /api/config/sensors`
-- `POST /api/config/actuators`
-- `POST /api/config/rules`
-- `POST /api/actuator/command`
-- `POST /api/safety/manual-stop`
-- `POST /api/system/reboot`
-- `POST /api/simulation/start`
-- `POST /api/simulation/stop`
-- `POST /api/simulation/set-values`
-- `GET /api/logs/export`
-- `POST /api/logs/clear`
+Le mode `PHASE_ANGLE` est reserve au RobotDyn/Triac avec detection zero-cross. Il permet un dosage fin mais peut generer davantage de parasites.
 
 ## Moteur de regles
 
@@ -334,333 +420,394 @@ Structure :
 - `name`
 - `enabled`
 - `priority`
-- `logic` : `AND` ou `OR`
+- `logic`
 - `conditions`
 - `actions`
 
-Les regles sont triees par priorite. Une regle desactivee ou invalide n'est pas executee. En securite critique, aucune regle ne peut forcer une sortie.
+Logique :
 
-Dans l'interface Logique, les conditions utilisent des listes deroulantes :
+- `AND` : toutes les conditions doivent etre vraies.
+- `OR` : une seule condition vraie suffit.
+
+La page Logique utilise des listes deroulantes pour eviter les erreurs :
 
 - Source
 - Mesure
 - Operateur
 - Valeur
 - Unite
+- Actionneur
+- Commande
 
-Cela evite les erreurs de frappe et les regles invalides.
+Les operateurs dependent du type :
 
-## Securite logicielle
+- nombre : `>`, `>=`, `<`, `<=`, `==`, `!=`
+- booleen : `==`, `!=`
+- enum/texte : `==`, `!=`
 
-Le `SafetyManager` centralise les niveaux :
+Il n'y a pas encore de groupes complexes du type :
+
+```text
+(A ET B) OU (C ET D)
+```
+
+## Securites
+
+Niveaux :
 
 - `OK`
 - `WARNING`
 - `DEGRADED`
 - `CRITICAL`
 
-Causes suivies :
+Causes possibles :
 
-- temperature haute
-- sonde DS18B20 critique absente
+- temperature trop haute
+- sonde critique absente
 - JSY absent
 - TIC absente
-- JSY et TIC absents
 - incoherence capteur
 - perte MASTER
 - risque double MASTER
 - erreur configuration
-- arret d'urgence manuel
+- arret manuel urgence
 
-En `CRITICAL` :
+En `CRITICAL`, SSR1, SSR2 et RobotDyn doivent etre coupes.
 
-- SSR1 est coupe.
-- SSR2 est coupe.
-- RobotDyn est coupe.
-- Les tests manuels sont refuses.
-- Une banniere rouge apparait dans l'interface Web.
+Modes Safety disponibles dans les parametres :
 
-Certaines securites sur absence de capteurs peuvent etre configurees dans la page Parametres. Cela permet d'adapter le comportement si le chauffe-eau ou le chauffage dispose deja de protections materielles independantes. Cette option doit etre utilisee avec prudence.
+- `strict`
+- `warning_only`
+- `missing_sensors_off`
+- `off`
 
-## Mode simulation
+Le mode `off` est reserve aux tests sans charge 230 V.
 
-Le mode simulation est global et stocke dans `system.json`.
+## Simulation
 
-Comportement :
+Le mode simulation permet de tester le firmware sans capteurs physiques et sans activer les sorties 230 V.
 
-- Les capteurs peuvent etre lus normalement.
-- Les regles sont evaluees normalement.
-- Les commandes actionneurs sont calculees normalement.
-- Les GPIO SSR1, SSR2 et RobotDyn ne sont jamais actives.
-- L'interface affiche clairement `SIMULATION ACTIVE`.
-- Les logs indiquent les commandes qui auraient ete appliquees.
+Simule :
 
-API :
+- JSY-MK-194T
+- TIC Linky
+- DS18B20
+- commandes SSR1, SSR2, RobotDyn
 
-- `POST /api/simulation/start`
-- `POST /api/simulation/stop`
-- `POST /api/simulation/set-values`
+Modes :
 
-Valeurs simulables :
+- `manual`
+- `random`
+- `scenario`
 
-- `gridPowerW`
-- `injectionW`
-- `temperatureTop`
-- `temperatureMiddle`
-- `temperatureBottom`
-- `jsyAvailable`
-- `ticAvailable`
+Scenarios :
 
-Lors du passage de simulation vers reel, toutes les sorties sont forcees OFF pendant au moins 2 secondes.
+- `normal`
+- `production_low`
+- `injection_medium`
+- `injection_high`
+- `tank_almost_hot`
+- `tank_overheat`
+- `critical_sensor_lost`
+- `jsy_lost`
 
-## Cablage texte par defaut
+Securites simulation :
 
-Materiel :
+- aucune sortie 230 V reelle n'est activee en simulation
+- les commandes sont calculees et visibles dans l'interface
+- la simulation est forcee OFF au reboot
+- la simulation s'arrete automatiquement apres 5 minutes
+- le dashboard affiche le temps restant
+- en sortie de simulation, les sorties sont forcees OFF pendant au moins 2 secondes
+
+Sorties LED de simulation prevues :
+
+- SSR1 : GPIO18
+- SSR2 : GPIO19
+- RobotDyn : GPIO21
+
+## ESP-NOW
+
+Messages supportes :
+
+- `SENSOR_VALUE`
+- `ACTUATOR_COMMAND`
+- `HEARTBEAT`
+- `CONFIG_SYNC`
+- `STATUS`
+- `ERROR`
+
+Les messages incluent notamment :
+
+- `sequenceNumber`
+- `senderId`
+- `role`
+- `timestamp`
+- checksum
+- `masterId`
+- `epoch`
+- TTL pour les commandes actionneurs
+
+Un `NODE_ACTUATOR` doit refuser une commande si :
+
+- le MASTER n'est pas reconnu
+- l'epoch est trop ancien
+- le TTL est expire
+- le SafetyManager est en `CRITICAL`
+
+## Fichiers LittleFS
+
+Fichiers de configuration sur l'ESP :
+
+```text
+/config/device.json
+/config/system.json
+/config/sensors.json
+/config/actuators.json
+/config/rules.json
+```
+
+Interface Web LittleFS :
+
+```text
+/www/index.html
+/www/app.js
+/www/style.css
+```
+
+Important : les fichiers `config_examples/*.example.json` sont des exemples PC. Les vraies configurations sont creees et modifiees dans LittleFS sur l'ESP.
+
+## Installation Arduino IDE
+
+Materiel par defaut :
 
 - ESP32
 - JSY-MK-194T
 - TIC Linky
-- 3 sondes DS18B20
-- SSR1 sur GPIO26
-- SSR2 sur GPIO25
-- RobotDyn zero-cross GPIO27, control GPIO33
+- 3 DS18B20
+- SSR1 GPIO26
+- SSR2 GPIO25
+- RobotDyn GPIO27/GPIO33
 - LED etat GPIO2
 
-Table de cablage :
-
-```text
-ESP32 GPIO16  -> JSY-MK-194T TX
-ESP32 GPIO17  -> JSY-MK-194T RX
-ESP32 GND     -> JSY-MK-194T GND basse tension
-
-ESP32 GPIO32  -> Sortie TIC Linky via adaptation de niveau adaptee
-ESP32 GND     -> Reference basse tension TIC si necessaire selon interface
-
-ESP32 GPIO4   -> Bus OneWire DS18B20 DATA
-3V3           -> DS18B20 VCC
-GND           -> DS18B20 GND
-Resistance 4,7 kOhm entre 3V3 et DATA OneWire
-
-ESP32 GPIO26  -> Entree commande SSR1
-ESP32 GPIO25  -> Entree commande SSR2
-ESP32 GPIO27  -> Entree zero-cross RobotDyn
-ESP32 GPIO33  -> Entree gate/control RobotDyn
-ESP32 GPIO2   -> LED etat
-```
-
-Ne jamais melanger directement la basse tension ESP32 avec le secteur. Respecter l'isolation des modules et la documentation constructeur.
-
-## Installation Arduino IDE
-
-1. Installer Arduino IDE.
-2. Installer le support cartes ESP32 depuis le gestionnaire de cartes.
-3. Selectionner une carte ESP32 compatible, par exemple `ESP32 Dev Module`.
-4. Ouvrir `RouteurSolaireESP32.ino`.
-5. Installer les bibliotheques necessaires.
-6. Compiler.
-7. Televerser sur l'ESP32.
-8. Televerser les fichiers LittleFS si votre environnement le demande.
-
-## Dependances necessaires
-
-A installer depuis le gestionnaire de bibliotheques Arduino :
+Bibliotheques Arduino :
 
 - ArduinoJson
 - OneWire
 - DallasTemperature
+- LittleFS ESP32
+- WiFi ESP32
+- WebServer ESP32
+- ESP-NOW ESP32
 
-Fournies par le core ESP32 Arduino :
+Carte :
 
-- WiFi
-- WebServer
-- LittleFS
-- ESP-NOW
-- HardwareSerial
+```text
+ESP32 Dev Module
+```
+
+Partition conseillee : une partition avec LittleFS disponible.
 
 ## Compilation
 
-Dans Arduino IDE :
+Depuis Arduino IDE :
 
 1. Ouvrir `RouteurSolaireESP32.ino`.
 2. Choisir la carte ESP32.
-3. Choisir le port serie.
-4. Cliquer sur `Verifier`.
+3. Choisir le port COM.
+4. Compiler.
 
-Le projet contient aussi un script local :
+Script fourni :
 
 ```text
 Compiler_RouteurSolaireESP32.bat
 ```
 
-Ce fichier a la racine est un raccourci. Le script reel est dans :
+## Televersement firmware
 
-```text
-tools/Compiler_RouteurSolaireESP32.bat
-```
+Depuis Arduino IDE :
 
-## Televersement
+1. Selectionner le port COM.
+2. Cliquer Televerser.
 
-Dans Arduino IDE :
+Le firmware seul ne met pas a jour l'interface Web LittleFS.
 
-1. Brancher l'ESP32 en USB.
-2. Selectionner le bon port.
-3. Cliquer sur `Televerser`.
-4. Ouvrir le moniteur serie a 115200 bauds.
+## Televersement LittleFS
 
-Au boot, les sorties sont forcees OFF avant l'initialisation complete.
+Quand `data/www/app.js`, `data/www/style.css` ou `data/www/index.html` change, il faut televerser LittleFS.
 
-Pour televerser uniquement l'interface Web LittleFS :
+Script fourni pour COM3 :
 
 ```text
 Televerser_LittleFS_COM3.bat
 ```
 
-Ce raccourci appelle `tools/Televerser_LittleFS_COM3.bat`, cree l'image LittleFS depuis `data/`, l'envoie sur `COM3`, puis demande le redemarrage automatique de l'ESP32.
+Apres televersement, ouvrir :
+
+```text
+http://192.168.4.1/app
+```
+
+ou l'IP donnee par le WiFi maison.
 
 ## Premiere configuration
 
-Au premier demarrage, le firmware tente le WiFi maison par defaut :
+1. Flasher le firmware.
+2. Televerser LittleFS.
+3. Demarrer l'ESP32.
+4. Se connecter au WiFi maison ou a l'AP fallback.
+5. Ouvrir `/app`.
+6. Aller dans Parametres.
+7. Regler :
+   - nom module
+   - role
+   - WiFi
+   - source puissance reseau JSY/TIC/AUTO
+   - Safety
+   - simulation
+8. Aller dans Capteurs.
+9. Scanner DS18B20.
+10. Associer les adresses aux sondes.
+11. Configurer JSY et TIC.
+12. Aller dans Actionneurs.
+13. Verifier SSR1, SSR2, RobotDyn.
+14. Aller dans Logique.
+15. Verifier les regles.
+16. Sauvegarder.
+17. Redemarrer.
 
-```text
-SSID : WIFI_SSID_A_CONFIGURER
-Mot de passe : WIFI_PASSWORD_A_CONFIGURER
-```
+## Procedure de test recommandee
 
-Si la connexion echoue apres 20 secondes, l'ESP32 demarre en point d'acces :
+Sans 230 V :
 
-```text
-SSID : AP_SSID_A_CONFIGURER
-Mot de passe : AP_PASSWORD_A_CONFIGURER
-IP : 192.168.4.1
-```
+1. Boot ESP32.
+2. Verifier le port serie 115200.
+3. Verifier WiFi/AP.
+4. Ouvrir `/app`.
+5. Activer simulation.
+6. Tester `gridPowerW = -800`.
+7. Verifier injection/surplus.
+8. Verifier commande SSR calculee.
+9. Verifier arret automatique simulation apres 5 minutes.
+10. Verifier simulation OFF apres reboot.
 
-Procedure :
+Avec capteurs :
 
-1. Se connecter au WiFi `AP_SSID_A_CONFIGURER` si le WiFi maison n'est pas disponible.
-2. Ouvrir `http://192.168.4.1`.
-3. Aller dans `Installation`.
-4. Renseigner le nom du module.
-5. Choisir le role.
-6. Configurer le WiFi maison.
-7. Activer ou non ESP-NOW.
-8. Scanner les DS18B20.
-9. Sauvegarder.
-10. Redemarrer l'ESP32.
+1. Scanner DS18B20.
+2. Lire JSY.
+3. Lire TIC.
+4. Verifier source reseau.
+5. Verifier Safety.
 
-## Procedure de test
+Avec sorties :
 
-Faire les tests progressivement.
+1. Tester LED de simulation.
+2. Tester SSR sans charge 230 V.
+3. Tester SSR avec charge resistive adaptee.
+4. Tester RobotDyn en dernier.
 
-1. Tester sans aucune charge 230 V raccordee.
-2. Verifier dans le moniteur serie que LittleFS, WiFi, WebUI et capteurs demarrent.
-3. Ouvrir le Dashboard.
-4. Activer le mode simulation.
-5. Injecter des valeurs de simulation.
-6. Verifier que les regles calculent une commande.
-7. Verifier que les GPIO restent OFF en simulation.
-8. Scanner les DS18B20.
-9. Associer les adresses aux sondes generiques.
-10. Tester SSR1/SSR2 avec une charge de test adaptee.
-11. Tester RobotDyn uniquement avec protections et charge resistive adaptee.
-12. Desactiver la simulation.
-13. Verifier que les sorties restent OFF pendant la temporisation de securite.
+## Diagnostic
 
-## Procedure de diagnostic
+Page Diagnostic & Simulation :
 
-La page `Diagnostic` affiche :
-
-- etat general securite
-- raison du dernier defaut
+- securite
+- raison dernier defaut
 - uptime
 - heap libre
-- etat LittleFS
-- etat WiFi
-- etat ESP-NOW
-- etat redondance
-- role actif
-- masterId actif
-- epoch
-- dernier heartbeat recu
-- etat JSY
-- etat TIC
-- etat DS18B20
-- etat actionneurs
-- derniers evenements systeme
+- LittleFS
+- WiFi
+- ESP-NOW
+- redondance
+- JSY
+- TIC
+- DS18B20
+- actionneurs
+- evenements systeme
 
-Actions disponibles :
-
-- filtrer les evenements par niveau
-- exporter les logs JSON
-- effacer les logs recents
-- redemarrer l'ESP32 avec confirmation
-
-Codes evenements suivis :
+Evenements typiques :
 
 - `BOOT`
 - `CONFIG_LOADED`
-- `CONFIG_ERROR`
 - `WIFI_CONNECTED`
 - `WIFI_FAIL_AP_MODE`
-- `JSY_OK`
 - `JSY_TIMEOUT`
 - `TIC_TIMEOUT`
 - `DS18B20_MISSING`
 - `SAFETY_TRIGGERED`
-- `SAFETY_CLEARED`
-- `MASTER_HEARTBEAT`
+- `SIMULATION_TIMEOUT`
 - `MASTER_TAKEOVER`
 - `SPLIT_BRAIN_DETECTED`
-- `ACTUATOR_COMMAND`
 - `ACTUATOR_FORCED_OFF`
 - `CONFIG_CHANGED`
 
-## Procedure en cas de defaut
+## En cas de defaut
 
-1. Ne pas rearmer mecaniquement une charge sans comprendre la cause.
-2. Lire la banniere rouge ou orange dans l'interface Web.
-3. Aller dans `Diagnostic`.
-4. Lire `safetyLevel` et `safetyReason`.
-5. Verifier les evenements recents.
-6. Verifier les sondes DS18B20 critiques.
-7. Verifier que le JSY-MK-194T repond.
-8. Verifier la TIC Linky si elle est utilisee.
-9. Verifier la redondance MASTER/BACKUP.
-10. Corriger le cablage ou la configuration.
-11. Redemarrer si necessaire.
-12. Tester en mode simulation avant de repasser en reel.
+1. Ne pas forcer une sortie 230 V.
+2. Lire la bannierre rouge/orange.
+3. Aller dans Diagnostic & Simulation.
+4. Verifier les evenements.
+5. Verifier JSY/TIC/DS18B20.
+6. Verifier la configuration Safety.
+7. Corriger la cause.
+8. Redemarrer si necessaire.
 
-Defauts typiques :
+Si l'interface `/app` ne charge pas :
 
-- DS18B20 absent ou adresse non associee.
-- JSY non alimente, RX/TX inverses ou mauvaise adresse Modbus.
-- TIC sans adaptation de niveau correcte.
-- WiFi maison indisponible, passage en AP fallback.
-- Split brain MASTER/BACKUP.
-- Sortie verrouillee par arret d'urgence manuel.
+1. Tester `/lite`.
+2. Tester `/api/status-lite`.
+3. Tester `/fs`.
+4. Televerser LittleFS a nouveau.
+5. Ouvrir le moniteur serie.
 
-## LED d'etat GPIO2
+## Cablage texte
 
-La LED d'etat utilise GPIO2.
+```text
+ESP32 GPIO2   -> LED etat
 
-Indications prevues :
+JSY-MK-194T:
+  RX ESP32 GPIO16 <- TX JSY
+  TX ESP32 GPIO17 -> RX JSY
+  GND commun
 
-- clignotement rapide : WiFi en cours.
-- fixe : WiFi connecte.
-- clignotement lent : point d'acces fallback.
-- double flash : securite active.
+TIC Linky:
+  RX ESP32 GPIO32 <- interface TIC adaptee
+  GND commun selon interface
 
-Selon la carte ESP32, la LED bleue integree peut etre absente, inversee, ou raccordee a un autre GPIO. Dans ce cas, l'absence d'allumage n'indique pas forcement un defaut firmware.
+DS18B20:
+  DATA GPIO4
+  Pull-up 4.7 kOhm vers 3.3 V
+  VCC 3.3 V
+  GND
 
-## Notes importantes
+SSR1:
+  commande GPIO26
 
-- Le routeur solaire doit continuer a fonctionner meme sans WiFi.
-- L'interface Web est disponible en WiFi maison et en AP fallback.
-- Les mots de passe WiFi ne doivent pas etre affiches en clair dans les pages de configuration.
-- Les tests manuels sont limites et bloques en securite critique.
-- Les actionneurs critiques ne doivent pas etre pilotes par deux maitres simultanement.
-- Le projet est prevu pour evoluer, notamment vers MQTT ou d'autres capteurs/actionneurs.
+SSR2:
+  commande GPIO25
 
+RobotDyn Triac:
+  zero-cross GPIO27
+  gate/control GPIO33
 
-=======
-# Prj_esp32_2026
->>>>>>> 3fe6f6b8667710f13408673936e32385a65d7ccd
+LED simulation:
+  SSR1 GPIO18
+  SSR2 GPIO19
+  Triac GPIO21
+```
+
+Respecter strictement la separation basse tension / secteur.
+
+## Etat actuel
+
+Dernieres compilations realisees avec succes. Le firmware occupe environ 90% de l'espace programme d'un ESP32 avec partition standard 1.3 Mo application.
+
+Points restant a tester sur materiel reel :
+
+- JSY deux pinces
+- TIC historique/standard
+- DS18B20 avec adresses reelles
+- SSR reels
+- RobotDyn reel
+- ESP-NOW multi-modules
+- redondance MASTER/BACKUP
+- comportement Safety sur defaut reel
