@@ -1,0 +1,10 @@
+Si Arduino IDE reste bloque ou compile encore une ancienne version :
+
+1. Fermer Arduino IDE completement.
+2. Rouvrir uniquement :
+   C:\ARDUINO\V2_PCB\RouteurSolaireESP32\RouteurSolaireESP32.ino
+3. Verifier que les includes commencent par src/ :
+   #include "src/web/web_ui.h"
+4. Si l'IDE reste bloque, utiliser Compiler_RouteurSolaireESP32.bat.
+
+La compilation testee localement avec arduino-cli et la carte esp32:esp32:esp32 passe.

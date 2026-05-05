@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Preview Dashboard RouteurSolaireESP32</title>
+<style>
+:root{--bg:#111827;--menu:#050505;--card:#1F2937;--text:#F9FAFB;--muted:#9CA3AF;--ok:#22C55E;--info:#2196F3;--warn:#FF9800;--bad:#F44336;--sun:#FFC107}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,Segoe UI,sans-serif}
+nav{position:fixed;left:0;top:0;bottom:0;width:220px;background:var(--menu);padding:18px 12px;display:flex;flex-direction:column;gap:8px}
+nav h1{font-size:17px;margin:0 0 14px}button{background:#263244;color:var(--text);border:1px solid #374151;border-radius:8px;padding:10px 12px;text-align:left}
+button.active{border-color:var(--info)}main{margin-left:220px;padding:20px}.ok{color:var(--ok)}.bad{color:var(--bad)}.warn{color:var(--warn)}.sun{color:var(--sun)}
+.dash{display:grid;gap:14px}.hero{display:grid;grid-template-columns:1.4fr .8fr .8fr;gap:14px}.panel{background:linear-gradient(180deg,#243044,#1F2937);border:1px solid #374151;border-radius:8px;padding:16px;box-shadow:0 12px 28px #0005}.panel h3{margin:0 0 12px;font-size:15px;color:var(--muted);font-weight:600}.big{font-size:32px;font-weight:750;line-height:1}.sub{color:var(--muted);font-size:13px;margin-top:8px}.statusline{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:9px 0;font-size:13px}.statusline b{font-size:13px}.pill{display:inline-flex;align-items:center;gap:7px;border:1px solid #45556f;border-radius:999px;padding:5px 9px;font-size:12px;color:var(--text);background:#111827}.dot{width:9px;height:9px;border-radius:50%;background:var(--muted);box-shadow:0 0 14px currentColor}.dot.ok{background:var(--ok)}.dot.bad{background:var(--bad)}.dot.warn{background:var(--warn)}.dot.info{background:var(--info)}.bar{height:9px;background:#111827;border-radius:999px;overflow:hidden;border:1px solid #374151}.fill{height:100%;width:0;background:var(--info);border-radius:999px}.fill.ok{background:var(--ok)}.fill.warn{background:var(--warn)}.fill.bad{background:var(--bad)}.fill.sun{background:var(--sun)}.mini{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:14px}.metric{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center;margin:10px 0;font-size:13px}.metric b{font-size:15px}.spark{height:48px;border-radius:8px;background:linear-gradient(90deg,#132033,#182235);position:relative;overflow:hidden}.spark:after{content:"";position:absolute;inset:24px -20px auto -20px;height:2px;background:linear-gradient(90deg,transparent,var(--sun),var(--ok),transparent);box-shadow:20px -10px 0 #2196F388,80px 8px 0 #22C55E99,150px -5px 0 #FFC10799}
+@media(max-width:900px){.hero{grid-template-columns:1fr}}@media(max-width:760px){nav{position:static;width:auto;display:grid;grid-template-columns:repeat(2,1fr)}main{margin-left:0}.big{font-size:32px}}
+</style>
+</head>
+<body>
+<nav>
+<h1>RouteurSolaireESP32</h1>
+<button class="active">Dashboard</button><button>Capteurs</button><button>Actionneurs</button><button>Logique</button><button>Diagnostic</button><button>Parametres</button><button>Installation</button>
+</nav>
+<main>
+<h2>Dashboard</h2>
+<div id="app"></div>
+</main>
+<script>
+const status={role:'MASTER',networkMode:'STATION',wifiSsid:'WIFI_SSID_A_CONFIGURER',localIp:'192.168.1.42',rssi:-54,wifiConnected:true,espNowReady:true,isActiveMaster:true,masterAlive:true,safetyTripped:false,safetyReason:'',uptime:1842,heapFree:279392,gridPowerW:-860,injectionW:860,consumptionW:0,productionW:3250,tankTopC:52.4,tankMiddleC:48.8,tankBottomC:41.2,ssr1PowerPct:58,ssr2PowerPct:0,robotDynPowerPct:0,systemMode:'AUTO'};
+function fmt(v){return typeof v==='number'?Math.round(v*10)/10:v}
+function pct(v,max){return Math.max(0,Math.min(100,(Number(v)||0)/max*100))}
+function pill(label,ok,warn){let c=ok?'ok':(warn?'warn':'bad');return `<span class="pill"><i class="dot ${c}"></i>${label}</span>`}
+function meter(label,value,unit,max,cls='info'){let p=pct(value,max);return `<div class="metric"><span>${label}</span><b>${fmt(value)} ${unit}</b></div><div class="bar"><div class="fill ${cls}" style="width:${p}%"></div></div>`}
+function panel(title,body){return `<section class="panel"><h3>${title}</h3>${body}</section>`}
+function renderDashboard(){
+let safe=!status.safetyTripped, wifi=!!status.wifiConnected, ap=status.networkMode==='AP_FALLBACK';
+let tempMax=Math.max(Number(status.tankTopC)||0,Number(status.tankMiddleC)||0,Number(status.tankBottomC)||0);
+let actionPower=(Number(status.ssr1PowerPct)||0)+(Number(status.ssr2PowerPct)||0)+(Number(status.robotDynPowerPct)||0);
+return `<div class="dash">
+<div class="hero">
+${panel('Energie solaire',`<div class="big sun">${fmt(status.injectionW)} W</div><div class="sub">Surplus disponible - reseau ${fmt(status.gridPowerW)} W</div><div class="spark"></div><div class="statusline">${pill(status.systemMode||'AUTO',true)}${pill(safe?'Securite OK':'Securite active',safe,!safe)}</div>`)}
+${panel('ESP32',`<div class="statusline"><span>Role</span><b>${status.role}</b></div><div class="statusline"><span>Uptime</span><b>${fmt(status.uptime)} s</b></div>${meter('Heap libre',status.heapFree,'o',327680,'ok')}`)}
+${panel('Reseau',`<div class="statusline"><span>Mode</span><b>${status.networkMode}</b></div><div class="statusline"><span>SSID</span><b>${status.wifiSsid||'-'}</b></div><div class="statusline"><span>IP</span><b>${status.localIp}</b></div><div class="statusline">${pill(wifi?'WiFi connecte':(ap?'AP fallback':'WiFi attente'),wifi,ap)}${pill(status.espNowReady?'ESP-NOW pret':'ESP-NOW off',status.espNowReady,false)}</div>`)}
+</div>
+<div class="mini">
+${panel('Capteurs ballon',`${meter('Haut',status.tankTopC,'C',80,tempMax>=70?'bad':'ok')}${meter('Milieu',status.tankMiddleC,'C',80,tempMax>=70?'bad':'ok')}${meter('Bas',status.tankBottomC,'C',80,tempMax>=70?'bad':'ok')}`)}
+${panel('Actionneurs puissance',`${meter('SSR1 chauffe-eau',status.ssr1PowerPct,'%',100,'sun')}${meter('SSR2 auxiliaire',status.ssr2PowerPct,'%',100,'info')}${meter('RobotDyn triac',status.robotDynPowerPct,'%',100,'warn')}<div class="statusline">${pill(actionPower>0?'Puissance active':'Sorties au repos',actionPower>0,false)}</div>`)}
+${panel('Flux maison',`${meter('Injection',status.injectionW,'W',3000,'ok')}${meter('Consommation',status.consumptionW,'W',3000,'warn')}${meter('Production',status.productionW,'W',5000,'sun')}`)}
+${panel('Redondance',`<div class="statusline"><span>Master actif</span><b>${status.isActiveMaster?'Oui':'Non'}</b></div><div class="statusline"><span>Heartbeat</span><b>${status.masterAlive?'OK':'Absent'}</b></div><div class="statusline">${pill(status.masterAlive||status.isActiveMaster?'Redondance OK':'Backup en attente',status.masterAlive||status.isActiveMaster,true)}</div>`)}
+</div></div>`}
+document.getElementById('app').innerHTML=renderDashboard();
+</script>
+</body>
+</html>

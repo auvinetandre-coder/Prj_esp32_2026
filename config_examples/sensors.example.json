@@ -1,0 +1,81 @@
+{
+  "version": 2,
+  "oneWireBus": {
+    "gpio": 4,
+    "enabled": true,
+    "scanOnBoot": true,
+    "readIntervalMs": 2000
+  },
+  "sensors": [
+    {
+      "id": "jsy_grid",
+      "name": "JSY reseau",
+      "type": "JSY-MK-194T",
+      "source": "local",
+      "serial": "Serial2",
+      "rx": 16,
+      "tx": 17,
+      "role": "mesure reseau principal",
+      "enabled": true,
+      "channels": [
+        {
+          "id": "clamp1",
+          "name": "Pince 1",
+          "role": "grid",
+          "measures": [
+            "currentA1",
+            "activePowerW1"
+          ]
+        },
+        {
+          "id": "clamp2",
+          "name": "Pince 2",
+          "role": "production",
+          "measures": [
+            "currentA2",
+            "activePowerW2"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "tic_linky",
+      "name": "TIC Linky",
+      "type": "TIC Linky",
+      "source": "local",
+      "serial": "Serial1",
+      "rx": 32,
+      "role": "compteur officiel / puissance reseau",
+      "enabled": true
+    }
+  ],
+  "ds18b20": [
+    {
+      "id": "sonde1",
+      "name": "Sonde 1",
+      "role": "ballon_haut",
+      "address": "",
+      "enabled": true,
+      "critical": true,
+      "unit": "C"
+    },
+    {
+      "id": "sonde2",
+      "name": "Sonde 2",
+      "role": "ballon_milieu",
+      "address": "",
+      "enabled": true,
+      "critical": false,
+      "unit": "C"
+    },
+    {
+      "id": "sonde3",
+      "name": "Sonde 3",
+      "role": "ballon_bas",
+      "address": "",
+      "enabled": true,
+      "critical": false,
+      "unit": "C"
+    }
+  ]
+}

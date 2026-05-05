@@ -1,0 +1,69 @@
+{
+  "version": 2,
+  "rules": [
+    {
+      "id": "solar_water_heater_routing",
+      "name": "Routage solaire chauffe-eau SSR1",
+      "enabled": true,
+      "priority": 10,
+      "logic": "AND",
+      "conditions": [
+        {
+          "id": "cond_injection",
+          "source": "JSY-MK-194T",
+          "measure": "injectionW",
+          "type": "number",
+          "operator": ">",
+          "value": 200,
+          "unit": "W"
+        },
+        {
+          "id": "cond_safety_ok",
+          "source": "Securite",
+          "measure": "safetyLevel",
+          "type": "enum",
+          "operator": "==",
+          "value": "OK"
+        }
+      ],
+      "actions": [
+        {
+          "actuatorId": "ssr1_water_heater",
+          "command": "setPowerFromSurplus",
+          "maxHeaterPowerW": 1500
+        }
+      ]
+    },
+    {
+      "id": "tank_temperature_safety",
+      "name": "Securite temperature ballon",
+      "enabled": true,
+      "priority": 100,
+      "logic": "OR",
+      "conditions": [
+        {
+          "source": "DS18B20_TOP",
+          "measure": "temperatureC",
+          "type": "number",
+          "operator": ">=",
+          "value": 70,
+          "unit": "C"
+        }
+      ],
+      "actions": [
+        {
+          "actuatorId": "ssr1_water_heater",
+          "command": "stop"
+        },
+        {
+          "actuatorId": "ssr2_aux",
+          "command": "stop"
+        },
+        {
+          "actuatorId": "robotdyn_triac",
+          "command": "stop"
+        }
+      ]
+    }
+  ]
+}

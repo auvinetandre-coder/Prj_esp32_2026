@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RouteurSolaireESP32</title>
+  <link rel="stylesheet" href="/www/style.css">
+</head>
+<body>
+  <nav>
+    <strong class="brand">RouteurSolaireESP32</strong>
+    <button data-page="dashboard">Dashboard</button>
+    <button data-page="sensors">Capteurs</button>
+    <button data-page="actuators">Actionneurs</button>
+    <button data-page="logic">Logique</button>
+    <button data-page="diagnostic">Diagnostic & Simulation</button>
+    <button data-page="settings">Parametres</button>
+    <a href="/">Secours</a>
+  </nav>
+  <main id="app">
+    <h1>Chargement...</h1>
+  </main>
+  <script>
+    window.addEventListener('error', function (event) {
+      var app = document.getElementById('app');
+      if (app) {
+        app.innerHTML = '<h1>Erreur WebUI</h1><div class="banner">' + String(event.message || 'Erreur JavaScript') + '</div><p><a href="/lite">Interface Lite</a> <a href="/api/status-lite">Tester API</a> <a href="/fs">Voir LittleFS</a></p>';
+      }
+    });
+  </script>
+  <script src="/www/app.js?v=22"></script>
+  <script>
+    setTimeout(function () {
+      var app = document.getElementById('app');
+      if (app && (app.textContent.indexOf('Chargement') >= 0 || app.textContent.indexOf('Initialisation') >= 0)) {
+        app.innerHTML = '<h1>Application non chargee</h1><div class="banner">Le fichier app.js ne se lance pas ou API sans reponse.</div><p><a href="/lite">Ouvrir interface Lite embarquee</a> <a href="/api/status-lite">Tester API status-lite</a> <a href="/fs">Voir LittleFS</a></p>';
+      }
+    }, 5000);
+  </script>
+</body>
+</html>

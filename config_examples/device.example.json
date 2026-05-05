@@ -1,0 +1,9 @@
+{
+  "version": 2,
+  "deviceId": "",
+  "deviceName": "Routeur solaire ESP32",
+  "name": "Routeur solaire ESP32",
+  "role": "MASTER",
+  "isConfigured": false,
+  "firmwareVersion": "0.2.0"
+}

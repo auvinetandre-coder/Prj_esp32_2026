@@ -1,0 +1,43 @@
+{
+  "version": 2,
+  "wifiSsid": "WIFI_SSID_A_CONFIGURER",
+  "wifiPassword": "WIFI_PASSWORD_A_CONFIGURER",
+  "fallbackApSsid": "AP_SSID_A_CONFIGURER",
+  "fallbackApPassword": "AP_PASSWORD_A_CONFIGURER",
+  "fallbackIp": "192.168.4.1",
+  "heartbeatIntervalMs": 300,
+  "takeoverTimeoutMs": 1000,
+  "simulationMode": false,
+  "wifi": {
+    "ssid": "WIFI_SSID_A_CONFIGURER",
+    "password": "WIFI_PASSWORD_A_CONFIGURER",
+    "keepFallbackApAlwaysOn": true
+  },
+  "simulation": {
+    "enabled": false,
+    "mode": "manual",
+    "scenario": "normal",
+    "randomUpdateIntervalMs": 2000
+  },
+  "safety": {
+    "enabled": true,
+    "blockOnMissingDs18b20": true,
+    "blockOnMissingTopSensor": true,
+    "blockOnMissingJsy": true,
+    "blockOnMissingJsyAndTic": true,
+    "warningOnlyOnMissingSensors": false
+  },
+  "router": {
+    "gridPowerSource": "JSY",
+    "minInjectionStartW": 200,
+    "stopBelowInjectionW": 80,
+    "hysteresisW": 50,
+    "tankMaxC": 65,
+    "tempSafetyMaxC": 70,
+    "ssrCycleMs": 1000,
+    "commandTimeoutMs": 5000,
+    "pidKp": 0.2,
+    "pidKi": 0.01,
+    "pidKd": 0
+  }
+}
