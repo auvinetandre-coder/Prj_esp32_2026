@@ -901,11 +901,18 @@ async function scanDs() {
     $("scan").innerHTML = '<div class="warnBox">Aucune sonde detectee sur le bus OneWire GPIO4.</div><pre>' + esc(JSON.stringify(addresses, null, 2)) + '</pre>';
     return;
   }
+  var targets = (cache.sensors.ds18b20 || []).map(function (sensor, index) {
+    return {
+      id: sensor.id || ("sonde" + (index + 1)),
+      label: sensor.id || ("sonde" + (index + 1))
+    };
+  });
+  if (!targets.length) targets = [{id:"sonde1", label:"sonde1"}, {id:"sonde2", label:"sonde2"}, {id:"sonde3", label:"sonde3"}];
   $("scan").innerHTML = '<div class="scanList"><h3>Sondes detectees</h3>' + list.map(function (address) {
     return '<div class="scanItem"><code>' + esc(address) + '</code><span>' +
-      '<button onclick="assignDsAddress(\'sonde1\', \'' + esc(address) + '\')">sonde1</button>' +
-      '<button onclick="assignDsAddress(\'sonde2\', \'' + esc(address) + '\')">sonde2</button>' +
-      '<button onclick="assignDsAddress(\'sonde3\', \'' + esc(address) + '\')">sonde3</button>' +
+      targets.map(function (target) {
+        return '<button onclick="assignDsAddress(\'' + esc(target.id) + '\', \'' + esc(address) + '\')">' + esc(target.label) + '</button>';
+      }).join("") +
       '<button onclick="fillCurrentDsAddress(\'' + esc(address) + '\')">remplir le formulaire</button>' +
     '</span></div>';
   }).join("") + '</div>';
@@ -919,16 +926,21 @@ function fillCurrentDsAddress(address) {
 
 async function assignDsAddress(sensorId, address) {
   if (!confirm("Affecter cette adresse a " + sensorId + " ?")) return;
-  var response = await fetch("/api/ds18b20/assign", {
-    method:"POST",
-    headers:{"Content-Type":"application/x-www-form-urlencoded"},
-    body:new URLSearchParams({sensorId:sensorId, address:address})
+  cache.sensors.ds18b20 = cache.sensors.ds18b20 || [];
+  var found = false;
+  cache.sensors.ds18b20.forEach(function (sensor) {
+    if (sensor.address === address) sensor.address = "";
+    if (sensor.id === sensorId) {
+      sensor.address = address;
+      found = true;
+    }
   });
-  if (!response.ok) return alert("Affectation refusee");
-  cache.sensors = await api("/api/sensors");
+  if (!found) return alert("Sonde cible introuvable dans sensors.json: " + sensorId);
+  var response = await postJson("/api/sensors", cache.sensors);
+  if (!response.ok) return alert("Affectation refusee: " + await response.text());
   clearDirty("sensors");
   drawSensorsPage();
-  $("scan").innerHTML = '<div class="pendingBox">Adresse affectee a ' + esc(sensorId) + '. Redemarre si la lecture ne se deplace pas immediatement.</div>';
+  if ($("scan")) $("scan").innerHTML = '<div class="pendingBox">Adresse affectee a ' + esc(sensorId) + '. Redemarre si la lecture ne se deplace pas immediatement.</div>';
 }
 
 async function actuatorsPage() {
