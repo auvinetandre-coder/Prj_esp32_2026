@@ -480,6 +480,43 @@ main {
   color: #fed7aa;
 }
 
+.scanList {
+  margin-top: 12px;
+  padding: 10px;
+  border: 1px solid #374151;
+  border-radius: 8px;
+  background: #0b1220;
+}
+
+.scanList h3 {
+  margin: 0 0 8px;
+  font-size: 14px;
+}
+
+.scanItem {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 8px 0;
+  border-top: 1px solid #1f2937;
+}
+
+.scanItem:first-of-type {
+  border-top: 0;
+}
+
+.scanItem code {
+  color: #ffc107;
+}
+
+.scanItem span {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
 .helpBox {
   margin: 0 0 14px;
   background: #0b1220;

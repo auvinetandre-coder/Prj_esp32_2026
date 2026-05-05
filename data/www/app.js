@@ -69,6 +69,7 @@ function fmt(value) {
   return typeof value === "number" ? Math.round(value * 10) / 10 : value;
 }
 
+var roles = ["ballon_haut", "ballon_milieu", "ballon_bas", "depart_eau_chaude", "retour_eau_froide", "ambiance", "autre"];
 var sensorTypes = ["JSY-MK-194T", "TIC Linky", "DS18B20", "Analog", "Digital", "Virtual"];
 var sensorRolesByType = {
   "JSY-MK-194T": ["mesure_reseau_principal", "mesure_production", "mesure_charge", "diagnostic", "custom"],
@@ -99,7 +100,6 @@ var actuatorModeHelp = {
   MANUAL_SAFE: "Mode manuel limite par les securites. Les protections temperature et arret critique restent prioritaires."
 };
 var jsyClampRoles = ["grid", "production", "load", "custom"];
-var roles = ["ballon_haut", "ballon_milieu", "ballon_bas", "depart_eau_chaude", "retour_eau_froide", "ambiance", "autre"];
 var ruleSources = [
   {id:"JSY-MK-194T", label:"JSY-MK-194T", measures:[["gridPowerW","number","W"],["injectionW","number","W"],["consumptionW","number","W"],["surplusW","number","W"],["voltageV","number","V"],["currentA","number","A"],["activePowerW","number","W"],["activePowerW1","number","W"],["activePowerW2","number","W"],["powerFactor","number",""],["frequencyHz","number","Hz"],["available","boolean",""]]},
   {id:"TIC Linky", label:"TIC Linky", measures:[["gridPowerW","number","W"],["apparentPowerVA","number","VA"],["currentA","number","A"],["tariff","text",""],["available","boolean",""],["lastValidReadAgeMs","number","ms"]]},
@@ -895,7 +895,40 @@ function pinText(item) {
 }
 
 async function scanDs() {
-  $("scan").textContent = JSON.stringify(await api("/api/ds18b20"), null, 2);
+  var addresses = await api("/api/ds18b20");
+  var list = Array.isArray(addresses) ? addresses : [];
+  if (!list.length) {
+    $("scan").innerHTML = '<div class="warnBox">Aucune sonde detectee sur le bus OneWire GPIO4.</div><pre>' + esc(JSON.stringify(addresses, null, 2)) + '</pre>';
+    return;
+  }
+  $("scan").innerHTML = '<div class="scanList"><h3>Sondes detectees</h3>' + list.map(function (address) {
+    return '<div class="scanItem"><code>' + esc(address) + '</code><span>' +
+      '<button onclick="assignDsAddress(\'sonde1\', \'' + esc(address) + '\')">sonde1</button>' +
+      '<button onclick="assignDsAddress(\'sonde2\', \'' + esc(address) + '\')">sonde2</button>' +
+      '<button onclick="assignDsAddress(\'sonde3\', \'' + esc(address) + '\')">sonde3</button>' +
+      '<button onclick="fillCurrentDsAddress(\'' + esc(address) + '\')">remplir le formulaire</button>' +
+    '</span></div>';
+  }).join("") + '</div>';
+}
+
+function fillCurrentDsAddress(address) {
+  if (!$("sensorAddress")) return alert("Ouvre d'abord Modifier sur sonde1, sonde2 ou sonde3.");
+  $("sensorAddress").value = address;
+  markDirty("sensors");
+}
+
+async function assignDsAddress(sensorId, address) {
+  if (!confirm("Affecter cette adresse a " + sensorId + " ?")) return;
+  var response = await fetch("/api/ds18b20/assign", {
+    method:"POST",
+    headers:{"Content-Type":"application/x-www-form-urlencoded"},
+    body:new URLSearchParams({sensorId:sensorId, address:address})
+  });
+  if (!response.ok) return alert("Affectation refusee");
+  cache.sensors = await api("/api/sensors");
+  clearDirty("sensors");
+  drawSensorsPage();
+  $("scan").innerHTML = '<div class="pendingBox">Adresse affectee a ' + esc(sensorId) + '. Redemarre si la lecture ne se deplace pas immediatement.</div>';
 }
 
 async function actuatorsPage() {
