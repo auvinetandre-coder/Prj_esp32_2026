@@ -1,4 +1,5 @@
-# RouteurSolaireESP32
+
+﻿# RouteurSolaireESP32
 
 Firmware Arduino IDE pour routeur solaire photovoltaique local, modulaire, distribue et redondant sur ESP32.
 
@@ -660,3 +661,6 @@ Selon la carte ESP32, la LED bleue integree peut etre absente, inversee, ou racc
 - Le projet est prevu pour evoluer, notamment vers MQTT ou d'autres capteurs/actionneurs.
 
 
+=======
+# Prj_esp32_2026
+>>>>>>> 3fe6f6b8667710f13408673936e32385a65d7ccd
