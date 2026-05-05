@@ -926,18 +926,13 @@ function fillCurrentDsAddress(address) {
 
 async function assignDsAddress(sensorId, address) {
   if (!confirm("Affecter cette adresse a " + sensorId + " ?")) return;
-  cache.sensors.ds18b20 = cache.sensors.ds18b20 || [];
-  var found = false;
-  cache.sensors.ds18b20.forEach(function (sensor) {
-    if (sensor.address === address) sensor.address = "";
-    if (sensor.id === sensorId) {
-      sensor.address = address;
-      found = true;
-    }
+  var response = await fetch("/api/ds18b20/assign", {
+    method:"POST",
+    headers:{"Content-Type":"application/x-www-form-urlencoded"},
+    body:new URLSearchParams({sensorId:sensorId, address:address})
   });
-  if (!found) return alert("Sonde cible introuvable dans sensors.json: " + sensorId);
-  var response = await postJson("/api/sensors", cache.sensors);
   if (!response.ok) return alert("Affectation refusee: " + await response.text());
+  cache.sensors = await api("/api/sensors");
   clearDirty("sensors");
   drawSensorsPage();
   if ($("scan")) $("scan").innerHTML = '<div class="pendingBox">Adresse affectee a ' + esc(sensorId) + '. Redemarre si la lecture ne se deplace pas immediatement.</div>';

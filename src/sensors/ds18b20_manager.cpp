@@ -160,14 +160,36 @@ String DS18B20Manager::detectedAddressesJson() {
 
 bool DS18B20Manager::assignAddress(const String &sensorId, const String &address) {
   JsonArray arr = config.sensorsDoc()["ds18b20"].as<JsonArray>();
+  int8_t targetIndex = -1;
+  if (sensorId == "sonde1") targetIndex = 0;
+  else if (sensorId == "sonde2") targetIndex = 1;
+  else if (sensorId == "sonde3") targetIndex = 2;
+
+  uint8_t index = 0;
   for (JsonObject sensor : arr) {
-    if (sensor["id"].as<String>() == sensorId) {
-      sensor["address"] = address;
-      loadConfig();
-      return config.saveSensorsConfig();
+    String id = sensor["id"] | "";
+    if (id == sensorId || (targetIndex >= 0 && index == static_cast<uint8_t>(targetIndex))) {
+      targetIndex = index;
+      break;
+    }
+    index++;
+  }
+
+  if (targetIndex < 0 || targetIndex >= static_cast<int8_t>(arr.size())) {
+    return false;
+  }
+
+  // Une adresse OneWire ne doit appartenir qu'a une seule sonde logique.
+  for (JsonObject sensor : arr) {
+    if (address.length() && sensor["address"].as<String>() == address) {
+      sensor["address"] = "";
     }
   }
-  return false;
+
+  JsonObject target = arr[targetIndex];
+  target["address"] = address;
+  loadConfig();
+  return config.saveSensorsConfig();
 }
 
 void DS18B20Manager::loadConfig() {
