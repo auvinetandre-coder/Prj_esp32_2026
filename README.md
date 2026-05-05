@@ -133,18 +133,18 @@ En cas de double MASTER ou split brain, le SafetyManager doit passer en etat cri
 
 ## WiFi
 
-WiFi maison par defaut :
+WiFi maison :
 
 ```text
-SSID: WIFI_SSID_A_CONFIGURER
-Mot de passe: WIFI_PASSWORD_A_CONFIGURER
+SSID: a renseigner dans l'interface Web
+Mot de passe: a renseigner dans l'interface Web
 ```
 
 Point d'acces fallback :
 
 ```text
-SSID: AP_SSID_A_CONFIGURER
-Mot de passe: AP_PASSWORD_A_CONFIGURER
+SSID: configurable dans system.json ou l'interface Web
+Mot de passe: configurable dans system.json ou l'interface Web
 IP: 192.168.4.1
 ```
 
