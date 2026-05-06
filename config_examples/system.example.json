@@ -1,17 +1,18 @@
 {
   "version": 2,
-  "wifiSsid": "WIFI_SSID_A_CONFIGURER",
-  "wifiPassword": "WIFI_PASSWORD_A_CONFIGURER",
-  "fallbackApSsid": "AP_SSID_A_CONFIGURER",
-  "fallbackApPassword": "AP_PASSWORD_A_CONFIGURER",
+  "wifiSsid": "",
+  "wifiPassword": "",
+  "fallbackApSsid": "RouteurSolaire_Config",
+  "fallbackApPassword": "routeur1234",
   "fallbackIp": "192.168.4.1",
   "heartbeatIntervalMs": 300,
   "takeoverTimeoutMs": 1000,
   "simulationMode": false,
   "wifi": {
-    "ssid": "WIFI_SSID_A_CONFIGURER",
-    "password": "WIFI_PASSWORD_A_CONFIGURER",
-    "keepFallbackApAlwaysOn": true
+    "ssid": "",
+    "password": "",
+    "keepFallbackApAlwaysOn": true,
+    "connectTimeoutMs": 8000
   },
   "simulation": {
     "enabled": false,

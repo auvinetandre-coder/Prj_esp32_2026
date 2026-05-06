@@ -10,7 +10,7 @@ void RuntimeState::begin(ConfigManager &config) {
   isActiveMaster = role == ROLE_MASTER;
   masterAlive = role == ROLE_MASTER;
   activeMasterId = isActiveMaster ? deviceId : "";
-  simulationMode = config.system()["simulationMode"] | false;
+  simulationMode = config.system()["simulation"]["enabled"] | config.system()["simulationMode"] | false;
   simulationType = config.system()["simulation"]["mode"] | "manual";
   simulationScenario = config.system()["simulation"]["scenario"] | "normal";
   gridPowerSource = config.system()["router"]["gridPowerSource"] | "JSY";

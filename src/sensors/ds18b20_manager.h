@@ -40,6 +40,7 @@ public:
   void printSensorsStatus();
   String detectedAddressesJson();
   bool assignAddress(const String &sensorId, const String &address);
+  void reloadConfig();
 
 private:
   static const uint8_t MAX_DS18B20 = 3;

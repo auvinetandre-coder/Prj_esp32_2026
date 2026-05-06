@@ -7,6 +7,14 @@ var historySampleIntervalMs = 5000;
 var historyMaxPoints = 360;
 var dashboardMetricKeys = loadDashboardList("dashboardMetrics", ["gridPowerW", "injectionW", "surplusW", "ssr1PowerPct"]);
 var dashboardChartKeys = loadDashboardList("dashboardCharts", ["injectionW", "ssr1PowerPct", "tankTopC"]);
+var dashboardGraphDefaults = {
+  network: ["gridPowerW", "injectionW", "consumptionW", "surplusW"],
+  outputs: ["ssr1PowerPct", "ssr2PowerPct", "robotDynPowerPct"],
+  temps: ["tankTopC", "tankMiddleC", "tankBottomC"]
+};
+var dashboardGraphNetwork = loadDashboardList("dashboardGraphNetwork", dashboardGraphDefaults.network);
+var dashboardGraphOutputs = loadDashboardList("dashboardGraphOutputs", dashboardGraphDefaults.outputs);
+var dashboardGraphTemps = loadDashboardList("dashboardGraphTemps", dashboardGraphDefaults.temps);
 var dirtyPages = {};
 var state = {
   ok: false,
@@ -43,6 +51,7 @@ var state = {
   currentA1: 0,
   currentA2: 0,
   injectionW: 0,
+  consumptionW: 0,
   surplusW: 0,
   tankTopC: null,
   tankMiddleC: null,
@@ -103,9 +112,9 @@ var jsyClampRoles = ["grid", "production", "load", "custom"];
 var ruleSources = [
   {id:"JSY-MK-194T", label:"JSY-MK-194T", measures:[["gridPowerW","number","W"],["injectionW","number","W"],["consumptionW","number","W"],["surplusW","number","W"],["voltageV","number","V"],["currentA","number","A"],["activePowerW","number","W"],["activePowerW1","number","W"],["activePowerW2","number","W"],["powerFactor","number",""],["frequencyHz","number","Hz"],["available","boolean",""]]},
   {id:"TIC Linky", label:"TIC Linky", measures:[["gridPowerW","number","W"],["apparentPowerVA","number","VA"],["currentA","number","A"],["tariff","text",""],["available","boolean",""],["lastValidReadAgeMs","number","ms"]]},
-  {id:"DS18B20_TOP", label:"sonde1", measures:[["temperatureC","number","C"],["available","boolean",""],["lastValidReadAgeMs","number","ms"]]},
-  {id:"DS18B20_MIDDLE", label:"sonde2", measures:[["temperatureC","number","C"],["available","boolean",""],["lastValidReadAgeMs","number","ms"]]},
-  {id:"DS18B20_BOTTOM", label:"sonde3", measures:[["temperatureC","number","C"],["available","boolean",""],["lastValidReadAgeMs","number","ms"]]},
+  {id:"sonde1", label:"sonde1", measures:[["temperatureC","number","C"],["available","boolean",""],["lastValidReadAgeMs","number","ms"]]},
+  {id:"sonde2", label:"sonde2", measures:[["temperatureC","number","C"],["available","boolean",""],["lastValidReadAgeMs","number","ms"]]},
+  {id:"sonde3", label:"sonde3", measures:[["temperatureC","number","C"],["available","boolean",""],["lastValidReadAgeMs","number","ms"]]},
   {id:"Systeme", label:"Systeme", measures:[["simulationMode","boolean",""],["wifiStatus","enum","",["CONNECTED","AP_FALLBACK","DISCONNECTED"]],["uptimeMs","number","ms"],["freeHeap","number","B"],["role","enum","",["MASTER","BACKUP","NODE_SENSOR","NODE_ACTUATOR","NODE_MIXED"]]]},
   {id:"Securite", label:"Securite", measures:[["safetyLevel","enum","",["OK","WARNING","DEGRADED","CRITICAL"]],["safetyReason","text",""],["isCritical","boolean",""]]},
   {id:"Redondance", label:"Redondance", measures:[["activeRole","enum","",["MASTER","BACKUP","NODE_SENSOR","NODE_ACTUATOR","NODE_MIXED"]],["isActiveMaster","boolean",""],["activeMasterId","text",""],["epoch","number",""],["lastHeartbeatAgeMs","number","ms"]]}
@@ -318,6 +327,24 @@ function bytesHuman(value) {
   return value + " o";
 }
 
+function uptimeHuman(ms) {
+  ms = Number(ms) || 0;
+  var total = Math.floor(ms / 1000);
+  var days = Math.floor(total / 86400);
+  var hours = Math.floor((total % 86400) / 3600);
+  var minutes = Math.floor((total % 3600) / 60);
+  var seconds = total % 60;
+  return (days ? days + " j " : "") + hours + " h " + minutes + " min " + seconds + " s";
+}
+
+function stateClass(value) {
+  var v = String(value || "").toUpperCase();
+  if (v === "OK" || v === "EXCELLENT" || v === "BON") return "ok";
+  if (v === "ATTENTION" || v === "MOYEN" || v === "WARNING" || v === "DEGRADED") return "warn";
+  if (v === "ERREUR" || v === "CRITICAL" || v === "FAIBLE") return "bad";
+  return "muted";
+}
+
 function valueMissing(value) {
   return value == null || value === "" || (typeof value === "number" && !isFinite(value));
 }
@@ -328,8 +355,16 @@ function sensorBadge(available, enabled) {
 }
 
 function dsAvailable(index, temp) {
+  if (!dsConfigured(index)) return false;
   if (Array.isArray(state.ds18b20Available)) return state.ds18b20Available[index] === true;
   return !valueMissing(temp);
+}
+
+function dsConfigured(index) {
+  var ds = cache.sensors && Array.isArray(cache.sensors.ds18b20) ? cache.sensors.ds18b20 : null;
+  if (ds) return index < ds.length;
+  if (Array.isArray(state.ds18b20)) return index < state.ds18b20.length;
+  return true;
 }
 
 function dsValue(index, temp) {
@@ -368,24 +403,37 @@ function refreshControls() {
 }
 
 function dashboardSeries() {
-  return [
-    {key:"gridPowerW", label:"Puissance reseau", unit:"W", cls:Number(state.gridPowerW) < 0 ? "solar" : "consume", value:state.gridPowerW},
-    {key:"injectionW", label:"Injection", unit:"W", cls:"solar", value:state.injectionW, min:0},
-    {key:"surplusW", label:"Surplus", unit:"W", cls:"sun", value:state.surplusW, min:0},
+  var list = [
+    {key:"gridPowerW", label:"Puissance reseau", unit:"W", cls:"gridCurve", value:state.gridPowerW},
+    {key:"injectionW", label:"Injection", unit:"W", cls:"injectionCurve", value:state.injectionW, min:0},
+    {key:"consumptionW", label:"Consommation", unit:"W", cls:"consumptionCurve", value:state.consumptionW, min:0},
+    {key:"surplusW", label:"Surplus", unit:"W", cls:"surplusCurve", value:state.surplusW, min:0},
     {key:"ssr1PowerPct", label:"SSR1", unit:"%", cls:"heat", value:state.ssr1PowerPct, min:0, max:100},
     {key:"ssr2PowerPct", label:"SSR2", unit:"%", cls:"info", value:state.ssr2PowerPct, min:0, max:100},
     {key:"robotDynPowerPct", label:"RobotDyn", unit:"%", cls:"warn", value:state.robotDynPowerPct, min:0, max:100},
-    {key:"tankTopC", label:"Sonde 1", unit:"C", cls:tempClass(state.tankTopC), value:dsAvailable(0, state.tankTopC) ? state.tankTopC : null, min:0, max:80},
-    {key:"tankMiddleC", label:"Sonde 2", unit:"C", cls:tempClass(state.tankMiddleC), value:dsAvailable(1, state.tankMiddleC) ? state.tankMiddleC : null, min:0, max:80},
-    {key:"tankBottomC", label:"Sonde 3", unit:"C", cls:tempClass(state.tankBottomC), value:dsAvailable(2, state.tankBottomC) ? state.tankBottomC : null, min:0, max:80},
+    {key:"tankTopC", label:"Sonde 1", unit:"C", cls:"tempCurve1", value:dsAvailable(0, state.tankTopC) ? state.tankTopC : null, min:0, max:80},
+    {key:"tankMiddleC", label:"Sonde 2", unit:"C", cls:"tempCurve2", value:dsAvailable(1, state.tankMiddleC) ? state.tankMiddleC : null, min:0, max:80},
+    {key:"tankBottomC", label:"Sonde 3", unit:"C", cls:"tempCurve3", value:dsAvailable(2, state.tankBottomC) ? state.tankBottomC : null, min:0, max:80},
     {key:"heapFree", label:"Heap libre", unit:"o", cls:"ok", value:state.heapFree, min:0}
   ];
+  return list.filter(function (item) {
+    if (item.key === "tankTopC") return dsConfigured(0);
+    if (item.key === "tankMiddleC") return dsConfigured(1);
+    if (item.key === "tankBottomC") return dsConfigured(2);
+    return true;
+  });
 }
 
 function seriesByKey(key) {
   var list = dashboardSeries();
   for (var i = 0; i < list.length; i++) if (list[i].key === key) return list[i];
   return list[0];
+}
+
+function seriesByKeyOrNull(key) {
+  var list = dashboardSeries();
+  for (var i = 0; i < list.length; i++) if (list[i].key === key) return list[i];
+  return null;
 }
 
 function seriesOptions(selected) {
@@ -395,32 +443,57 @@ function seriesOptions(selected) {
 }
 
 function dashboardCustomizeBox() {
-  var metricControls = [0,1,2,3].map(function (i) {
-    return '<label>Bloc ' + (i + 1) + '<select id="metric' + i + '">' + seriesOptions(dashboardMetricKeys[i]) + '</select></label>';
-  }).join("");
-  var chartControls = [0,1,2].map(function (i) {
-    return '<label>Courbe ' + (i + 1) + '<select id="chart' + i + '">' + seriesOptions(dashboardChartKeys[i]) + '</select></label>';
-  }).join("");
   return '<details class="panel dashCustom"><summary>Personnaliser les blocs et courbes</summary>' +
-    '<div class="customSection"><h2>Blocs valeur</h2><div class="customGrid">' + metricControls + '</div></div>' +
-    '<div class="customSection"><h2>Courbes</h2><div class="customGrid">' + chartControls + '</div></div>' +
-    '<p class="customActions"><button onclick="saveDashboardDisplay()">Appliquer</button> <button onclick="resetDashboardDisplay()">Par defaut</button></p></details>';
+    '<div class="customSection"><h2>Courbes reseau</h2><p>Choisis les mesures affichees dans le graphe energie.</p><div class="curveGrid">' + graphCheckboxes("network", dashboardGraphDefaults.network, dashboardGraphNetwork) + '</div></div>' +
+    '<div class="customSection"><h2>Courbes actionneurs</h2><p>Choisis les sorties visibles dans le graphe de routage.</p><div class="curveGrid">' + graphCheckboxes("outputs", dashboardGraphDefaults.outputs, dashboardGraphOutputs) + '</div></div>' +
+    '<div class="customSection"><h2>Courbes temperatures</h2><p>Les sondes non configurees sont masquees automatiquement.</p><div class="curveGrid">' + graphCheckboxes("temps", dashboardGraphDefaults.temps, dashboardGraphTemps) + '</div></div>' +
+    '<p class="customActions"><button onclick="saveDashboardGraphs()">Appliquer</button> <button onclick="resetDashboardGraphs()">Par defaut</button></p></details>';
+}
+
+function graphCheckboxes(group, keys, selected) {
+  return keys.map(function (key) {
+    var meta = seriesByKeyOrNull(key);
+    if (!meta) return "";
+    var id = "graph_" + group + "_" + key;
+    return '<label class="curveToggle" for="' + esc(id) + '">' +
+      '<input id="' + esc(id) + '" type="checkbox" data-graph-group="' + esc(group) + '" value="' + esc(key) + '" ' + (selected.indexOf(key) >= 0 ? "checked" : "") + '>' +
+      '<span class="curveDot ' + esc(meta.cls || "") + '"></span><span>' + esc(meta.label) + '</span></label>';
+  }).join("");
+}
+
+function checkedGraphKeys(group) {
+  var nodes = document.querySelectorAll('input[data-graph-group="' + group + '"]');
+  return Array.prototype.map.call(nodes, function (node) {
+    return node.checked ? node.value : "";
+  }).filter(Boolean);
+}
+
+function saveDashboardGraphs() {
+  dashboardGraphNetwork = checkedGraphKeys("network");
+  dashboardGraphOutputs = checkedGraphKeys("outputs");
+  dashboardGraphTemps = checkedGraphKeys("temps");
+  localStorage.setItem("dashboardGraphNetwork", JSON.stringify(dashboardGraphNetwork));
+  localStorage.setItem("dashboardGraphOutputs", JSON.stringify(dashboardGraphOutputs));
+  localStorage.setItem("dashboardGraphTemps", JSON.stringify(dashboardGraphTemps));
+  render();
+}
+
+function resetDashboardGraphs() {
+  dashboardGraphNetwork = dashboardGraphDefaults.network.slice();
+  dashboardGraphOutputs = dashboardGraphDefaults.outputs.slice();
+  dashboardGraphTemps = dashboardGraphDefaults.temps.slice();
+  localStorage.setItem("dashboardGraphNetwork", JSON.stringify(dashboardGraphNetwork));
+  localStorage.setItem("dashboardGraphOutputs", JSON.stringify(dashboardGraphOutputs));
+  localStorage.setItem("dashboardGraphTemps", JSON.stringify(dashboardGraphTemps));
+  render();
 }
 
 function saveDashboardDisplay() {
-  dashboardMetricKeys = [0,1,2,3].map(function (i) { return $("metric" + i).value; });
-  dashboardChartKeys = [0,1,2].map(function (i) { return $("chart" + i).value; });
-  localStorage.setItem("dashboardMetrics", JSON.stringify(dashboardMetricKeys));
-  localStorage.setItem("dashboardCharts", JSON.stringify(dashboardChartKeys));
-  render();
+  saveDashboardGraphs();
 }
 
 function resetDashboardDisplay() {
-  dashboardMetricKeys = ["gridPowerW", "injectionW", "surplusW", "ssr1PowerPct"];
-  dashboardChartKeys = ["injectionW", "ssr1PowerPct", "tankTopC"];
-  localStorage.setItem("dashboardMetrics", JSON.stringify(dashboardMetricKeys));
-  localStorage.setItem("dashboardCharts", JSON.stringify(dashboardChartKeys));
-  render();
+  resetDashboardGraphs();
 }
 
 function setDashboardRefresh(value) {
@@ -452,6 +525,57 @@ function chartAxis(min, max, unit) {
   return '<div class="chartScale"><span>' + esc(scaleLabel(max, unit)) + '</span><span>' + esc(scaleLabel(middle, unit)) + '</span><span>' + esc(scaleLabel(min, unit)) + '</span></div>';
 }
 
+function chartStepForUnit(unit) {
+  if (unit === "W") return 50;
+  if (unit === "C" || unit === "°C") return 5;
+  if (unit === "%") return 10;
+  return 0;
+}
+
+function chartGrid(min, max, w, h, unit) {
+  var step = chartStepForUnit(unit);
+  var lines = "";
+  if (step > 0 && isFinite(min) && isFinite(max) && max > min) {
+    var first = Math.ceil(min / step) * step;
+    var count = 0;
+    for (var value = first; value <= max + step * 0.001 && count < 140; value += step, count++) {
+      var y = Math.round(h - ((value - min) * h / (max - min)));
+      var cls = Math.abs(value) < step * 0.001 ? "zeroLine" : "tickLine";
+      lines += '<line class="' + cls + '" x1="0" y1="' + y + '" x2="' + w + '" y2="' + y + '"></line>';
+    }
+    return lines;
+  }
+  lines += '<line x1="0" y1="0" x2="' + w + '" y2="0"></line>';
+  lines += '<line x1="0" y1="' + Math.round(h / 2) + '" x2="' + w + '" y2="' + Math.round(h / 2) + '"></line>';
+  lines += '<line x1="0" y1="' + h + '" x2="' + w + '" y2="' + h + '"></line>';
+  if (min < 0 && max > 0) {
+    var zeroY = Math.round(h - ((0 - min) * h / (max - min)));
+    lines += '<line class="zeroLine" x1="0" y1="' + zeroY + '" x2="' + w + '" y2="' + zeroY + '"></line>';
+  }
+  return lines;
+}
+
+function smoothPath(coords) {
+  if (!coords.length) return "";
+  if (coords.length === 1) return "M" + coords[0].x + " " + coords[0].y;
+  var d = "M" + coords[0].x + " " + coords[0].y;
+  for (var i = 1; i < coords.length; i++) {
+    var prev = coords[i - 1];
+    var cur = coords[i];
+    var midX = Math.round((prev.x + cur.x) / 2);
+    d += " C " + midX + " " + prev.y + ", " + midX + " " + cur.y + ", " + cur.x + " " + cur.y;
+  }
+  return d;
+}
+
+function areaPath(coords, h) {
+  if (coords.length < 2) return "";
+  var line = smoothPath(coords);
+  var first = coords[0];
+  var last = coords[coords.length - 1];
+  return line + " L " + last.x + " " + h + " L " + first.x + " " + h + " Z";
+}
+
 function sparkline(key, cls, minFixed, maxFixed, unit) {
   if (dashHistory.length < 2) return '<div class="sparkline muted">historique en cours...</div>';
   var values = dashHistory.map(function (p) { return p[key]; }).filter(function (v) { return v != null && isFinite(v); });
@@ -460,15 +584,14 @@ function sparkline(key, cls, minFixed, maxFixed, unit) {
   var max = maxFixed != null ? maxFixed : Math.max.apply(null, values);
   if (max === min) max = min + 1;
   var w = 180, h = 52;
-  var zeroY = min < 0 && max > 0 ? Math.round(h - ((0 - min) * h / (max - min))) : -1;
-  var grid = '<line x1="0" y1="0" x2="' + w + '" y2="0"></line><line x1="0" y1="' + Math.round(h / 2) + '" x2="' + w + '" y2="' + Math.round(h / 2) + '"></line><line x1="0" y1="' + h + '" x2="' + w + '" y2="' + h + '"></line>';
-  if (zeroY >= 0) grid += '<line class="zeroLine" x1="0" y1="' + zeroY + '" x2="' + w + '" y2="' + zeroY + '"></line>';
-  var points = values.map(function (v, i) {
+  var grid = chartGrid(min, max, w, h, unit);
+  var coords = values.map(function (v, i) {
     var x = values.length === 1 ? 0 : (i * w / (values.length - 1));
     var y = h - ((v - min) * h / (max - min));
-    return Math.round(x) + "," + Math.round(y);
-  }).join(" ");
-  return '<div class="chartWithScale" data-chart-key="' + esc(key) + '" data-chart-unit="' + esc(unit || "") + '">' + chartAxis(min, max, unit) + '<svg class="sparkline ' + esc(cls || "") + '" viewBox="0 0 ' + w + ' ' + h + '" preserveAspectRatio="none"><g class="grid">' + grid + '</g><polyline points="' + points + '"></polyline></svg></div>';
+    return {x:Math.round(x), y:Math.round(y)};
+  });
+  var last = coords[coords.length - 1];
+  return '<div class="chartWithScale" data-chart-key="' + esc(key) + '" data-chart-unit="' + esc(unit || "") + '">' + chartAxis(min, max, unit) + '<svg class="sparkline ' + esc(cls || "") + '" viewBox="0 0 ' + w + ' ' + h + '" preserveAspectRatio="none"><g class="grid">' + grid + '</g><path class="chartFill" d="' + areaPath(coords, h) + '"></path><path class="chartLine" d="' + smoothPath(coords) + '"></path><circle class="lastPoint" cx="' + last.x + '" cy="' + last.y + '" r="2"></circle></svg></div>';
 }
 
 function multiSparkline(series, unit) {
@@ -486,22 +609,22 @@ function multiSparkline(series, unit) {
   if (min > 0) min = 0;
   if (max === min) max = min + 1;
   var w = 320, h = 96;
-  var zeroY = min < 0 && max > 0 ? Math.round(h - ((0 - min) * h / (max - min))) : -1;
-  var grid = '<line x1="0" y1="0" x2="' + w + '" y2="0"></line><line x1="0" y1="' + Math.round(h / 2) + '" x2="' + w + '" y2="' + Math.round(h / 2) + '"></line><line x1="0" y1="' + h + '" x2="' + w + '" y2="' + h + '"></line>';
-  if (zeroY >= 0) grid += '<line class="zeroLine" x1="0" y1="' + zeroY + '" x2="' + w + '" y2="' + zeroY + '"></line>';
+  var grid = chartGrid(min, max, w, h, unit);
   var lines = series.map(function (s) {
     var values = dashHistory.map(function (p) { return p[s.key]; }).filter(function (v) { return v != null && isFinite(v); });
     if (values.length < 2) return "";
-    var points = values.map(function (v, i) {
+    var coords = values.map(function (v, i) {
       var x = values.length === 1 ? 0 : (i * w / (values.length - 1));
       var y = h - ((v - min) * h / (max - min));
-      return Math.round(x) + "," + Math.round(y);
-    }).join(" ");
-    return '<polyline class="' + esc(s.cls) + '" points="' + points + '"></polyline>';
+      return {x:Math.round(x), y:Math.round(y)};
+    });
+    var last = coords[coords.length - 1];
+    return '<path class="chartLine ' + esc(s.cls) + '" d="' + smoothPath(coords) + '"></path><circle class="lastPoint ' + esc(s.cls) + '" cx="' + last.x + '" cy="' + last.y + '" r="2"></circle>';
   }).join("");
   var keys = series.map(function (s) { return s.key; }).join(",");
   var labels = series.map(function (s) { return s.label; }).join(",");
-  return '<div class="chartWithScale energyWithScale" data-chart-series="' + esc(keys) + '" data-chart-labels="' + esc(labels) + '" data-chart-unit="' + esc(unit || "") + '">' + chartAxis(min, max, unit) + '<svg class="sparkline energySpark" viewBox="0 0 ' + w + ' ' + h + '" preserveAspectRatio="none"><g class="grid">' + grid + '</g>' + lines + '</svg></div>';
+  var classes = series.map(function (s) { return s.cls || ""; }).join(",");
+  return '<div class="chartWithScale energyWithScale" data-chart-series="' + esc(keys) + '" data-chart-labels="' + esc(labels) + '" data-chart-classes="' + esc(classes) + '" data-chart-unit="' + esc(unit || "") + '">' + chartAxis(min, max, unit) + '<svg class="sparkline energySpark" viewBox="0 0 ' + w + ' ' + h + '" preserveAspectRatio="none"><g class="grid">' + grid + '</g>' + lines + '</svg></div>';
 }
 
 function energyGraphCard() {
@@ -534,6 +657,94 @@ function chartCard(label, key, unit, cls, minFixed, maxFixed) {
   return '<div class="chartCard"><div><span>' + esc(label) + '</span><b class="' + esc(cls || "") + '">' + esc(fmt(last)) + ' ' + esc(unit || "") + '</b></div>' + sparkline(key, cls, minFixed, maxFixed, unit) + '<small>30 min - 1 point / 5 s</small></div>';
 }
 
+function dashboardTitle(text) {
+  return '<div class="dashSectionTitle"><h2>' + esc(text) + '</h2></div>';
+}
+
+function dashboardCard(icon, label, value, unit, cls, detail) {
+  return '<div class="yasCard ' + esc(cls || "") + '"><span class="roundIcon">' + esc(icon || "i") + '</span><div><b>' + esc(label) + '</b><strong>' + esc(fmt(value)) + (unit ? ' <em>' + esc(unit) + '</em>' : '') + '</strong>' + (detail ? '<small>' + esc(detail) + '</small>' : '') + '</div></div>';
+}
+
+function dashboardControl(icon, label, value, cls, detail) {
+  return '<div class="controlCard ' + esc(cls || "") + '"><span class="roundIcon">' + esc(icon || "o") + '</span><div><b>' + esc(label) + '</b><strong>' + esc(value) + '</strong>' + (detail ? '<small>' + esc(detail) + '</small>' : '') + '</div></div>';
+}
+
+function dashboardBlock(title, subtitle, body, cls) {
+  return '<section class="dashBlockPanel ' + esc(cls || "") + '"><div class="dashBlockHead"><div><h2>' + esc(title) + '</h2>' + (subtitle ? '<span>' + esc(subtitle) + '</span>' : '') + '</div></div>' + body + '</section>';
+}
+
+function blockMetric(label, value, unit, cls, detail) {
+  return '<div class="blockMetric ' + esc(cls || "") + '"><span>' + esc(label) + '</span><b>' + esc(fmt(value)) + (unit ? ' <em>' + esc(unit) + '</em>' : '') + '</b>' + (detail ? '<small>' + esc(detail) + '</small>' : '') + '</div>';
+}
+
+function blockState(label, value, cls) {
+  return '<div class="blockState"><span>' + esc(label) + '</span><b class="' + esc(cls || "") + '">' + esc(value) + '</b></div>';
+}
+
+function statusMini(label, value) {
+  var cls = stateClass(value);
+  return '<div class="statusMini"><span>' + esc(label) + '</span><b class="' + esc(cls) + '">' + esc(value || "N/A") + '</b></div>';
+}
+
+function statusBadge(label, value, cls, detail) {
+  return '<div class="statusBadge ' + esc(cls || "") + '"><span>' + esc(label) + '</span><b>' + esc(value) + '</b>' + (detail ? '<small>' + esc(detail) + '</small>' : '') + '</div>';
+}
+
+function wideChartCard(label, key, unit, cls, minFixed, maxFixed) {
+  var last = dashHistory.length ? dashHistory[dashHistory.length - 1][key] : null;
+  return '<section class="wideChart"><div class="wideChartHead"><b>' + esc(label) + '</b><span class="' + esc(cls || "") + '">' + esc(fmt(last)) + ' ' + esc(unit || "") + '</span></div>' + sparkline(key, cls, minFixed, maxFixed, unit) + '<small>30 min - 1 point / 5 s</small></section>';
+}
+
+function wideMultiChartCard(label, series, unit) {
+  return '<section class="wideChart"><div class="wideChartHead"><b>' + esc(label) + '</b><span>' + series.map(function (s) { return esc(s.label); }).join(" / ") + '</span></div>' + multiSparkline(series, unit) + '<small>30 min - 1 point / 5 s</small></section>';
+}
+
+function selectedGraphSeries(keys) {
+  return keys.map(function (key) {
+    var meta = seriesByKeyOrNull(key);
+    return meta ? {key:meta.key, label:meta.label, cls:meta.cls, unit:meta.unit, min:meta.min, max:meta.max} : null;
+  }).filter(Boolean);
+}
+
+function graphCardFromSeries(title, keys, unit) {
+  var series = selectedGraphSeries(keys);
+  if (!series.length) return "";
+  if (series.length === 1) {
+    var s = series[0];
+    return wideChartCard(title, s.key, s.unit || unit, s.cls, s.min, s.max);
+  }
+  return wideMultiChartCard(title, series, unit);
+}
+
+function dashboardGraphsHtml() {
+  var html = "";
+  html += graphCardFromSeries("Reseau / Injection / Consommation (W)", dashboardGraphNetwork, "W");
+  html += graphCardFromSeries("Routage actionneurs (%)", dashboardGraphOutputs, "%");
+  html += graphCardFromSeries("Temperatures DS18B20 (C)", dashboardGraphTemps, "C");
+  return html || '<section class="wideChart"><div class="wideChartHead"><b>Graphiques</b><span>aucune courbe active</span></div><div class="sparkline muted">active au moins une courbe dans la personnalisation</div></section>';
+}
+
+function configuredDsCards() {
+  var labels = ["Sonde 1", "Sonde 2", "Sonde 3"];
+  var temps = [state.tankTopC, state.tankMiddleC, state.tankBottomC];
+  return [0, 1, 2].map(function (index) {
+    if (!dsConfigured(index)) return "";
+    var live = dsAvailable(index, temps[index]);
+    return dashboardCard("T", labels[index], live ? temps[index] : "absent", live ? "C" : "", live ? tempClass(temps[index]) : "bad", live ? "DS18B20 OK" : "non lu");
+  }).join("");
+}
+
+function configuredDsMetrics() {
+  var labels = ["Sonde 1", "Sonde 2", "Sonde 3"];
+  var temps = [state.tankTopC, state.tankMiddleC, state.tankBottomC];
+  var html = [0, 1, 2].map(function (index) {
+    if (!dsConfigured(index)) return "";
+    var live = dsAvailable(index, temps[index]);
+    return blockMetric(labels[index], live ? temps[index] : "absent", live ? "C" : "", live ? tempClass(temps[index]) : "bad", live ? "DS18B20 OK" : "non lu");
+  }).join("");
+  return html || blockMetric("DS18B20", "aucune", "", "muted", "pas de sonde configuree");
+}
+
 function ensureChartTooltip() {
   var tip = $("chartTooltip");
   if (!tip) {
@@ -559,6 +770,39 @@ function historyTimeLabel(point) {
   return d.toLocaleTimeString([], {hour:"2-digit", minute:"2-digit", second:"2-digit"});
 }
 
+function tooltipLine(label, value, unit, cls) {
+  return '<span class="tipLine"><i class="' + esc(cls || "muted") + '"></i><em>' + esc(label) + '</em><strong>' + esc(fmt(value)) + ' ' + esc(unit || "") + '</strong></span>';
+}
+
+function ensureSvgLine(svg, className) {
+  var line = svg.querySelector("line." + className);
+  if (line) return line;
+  line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+  line.setAttribute("class", className + " chartHoverGuide");
+  svg.appendChild(line);
+  return line;
+}
+
+function updateChartGuide(event, svg, index) {
+  var rect = svg.getBoundingClientRect();
+  if (!rect.width || !rect.height || !dashHistory.length) return;
+  var viewBox = (svg.getAttribute("viewBox") || "0 0 320 96").split(/\s+/).map(Number);
+  var w = viewBox[2] || 320;
+  var h = viewBox[3] || 96;
+  var x = dashHistory.length <= 1 ? 0 : Math.max(0, Math.min(w, index * w / (dashHistory.length - 1)));
+  var y = Math.max(0, Math.min(h, (event.clientY - rect.top) * h / rect.height));
+  var vertical = ensureSvgLine(svg, "chartHoverX");
+  var horizontal = ensureSvgLine(svg, "chartHoverY");
+  vertical.setAttribute("x1", x);
+  vertical.setAttribute("x2", x);
+  vertical.setAttribute("y1", 0);
+  vertical.setAttribute("y2", h);
+  horizontal.setAttribute("x1", 0);
+  horizontal.setAttribute("x2", w);
+  horizontal.setAttribute("y1", y);
+  horizontal.setAttribute("y2", y);
+}
+
 function showChartTooltip(event) {
   var box = event.target.closest ? event.target.closest(".chartWithScale") : null;
   if (!box || !dashHistory.length) {
@@ -570,19 +814,21 @@ function showChartTooltip(event) {
   var index = historyIndexFromMouse(event, svg);
   var point = dashHistory[index];
   if (!point) return;
+  updateChartGuide(event, svg, index);
   var unit = box.getAttribute("data-chart-unit") || "";
   var html = '<b>' + esc(historyTimeLabel(point)) + '</b>';
   var series = box.getAttribute("data-chart-series");
   if (series) {
     var keys = series.split(",");
     var labels = (box.getAttribute("data-chart-labels") || series).split(",");
+    var classes = (box.getAttribute("data-chart-classes") || "").split(",");
     html += keys.map(function (key, i) {
-      return '<span>' + esc(labels[i] || key) + ' : ' + esc(fmt(point[key])) + ' ' + esc(unit) + '</span>';
+      return tooltipLine(labels[i] || key, point[key], unit, classes[i] || "");
     }).join("");
   } else {
     var key = box.getAttribute("data-chart-key");
     var meta = seriesByKey(key);
-    html += '<span>' + esc(meta.label) + ' : ' + esc(fmt(point[key])) + ' ' + esc(unit || meta.unit || "") + '</span>';
+    html += tooltipLine(meta.label, point[key], unit || meta.unit || "", meta.cls);
   }
   var tip = ensureChartTooltip();
   tip.innerHTML = html;
@@ -594,6 +840,18 @@ function showChartTooltip(event) {
 function hideChartTooltip() {
   var tip = $("chartTooltip");
   if (tip) tip.classList.remove("visible");
+  document.querySelectorAll(".chartHoverGuide").forEach(function (line) {
+    line.remove();
+  });
+}
+
+function updateNavStatus() {
+  var box = $("navStatus");
+  if (!box) return;
+  var cls = state.safetyTripped ? "bad" : (state.simulationMode ? "warn" : (state.wifiConnected || state.networkMode ? "ok" : "muted"));
+  var label = state.safetyTripped ? "Safety CRITICAL" : (state.simulationMode ? "Simulation" : (state.wifiConnected ? "Connected" : (state.networkMode || "Local")));
+  box.className = "navStatus " + cls;
+  box.innerHTML = "<i></i><span>" + esc(label) + "</span>";
 }
 
 async function loadStatus() {
@@ -603,6 +861,7 @@ async function loadStatus() {
 async function refresh() {
   try {
     await loadStatus();
+    if ((page === "dashboard" || page === "diagnostic") && !cache.sensors) cache.sensors = await api("/api/sensors");
     recordDashboardHistory();
     render();
   } catch (error) {
@@ -618,6 +877,7 @@ function recordDashboardHistory() {
     t: now,
     gridPowerW: Number(state.gridPowerW) || 0,
     injectionW: Number(state.injectionW) || 0,
+    consumptionW: Number(state.consumptionW) || 0,
     surplusW: Number(state.surplusW) || 0,
     ssr1PowerPct: Number(state.ssr1PowerPct) || 0,
     ssr2PowerPct: Number(state.ssr2PowerPct) || 0,
@@ -636,61 +896,53 @@ function dashboard() {
   var ssid = state.wifiSsid || "non renseigne";
   var ip = state.stationIp || state.localIp || "-";
   var moduleName = state.moduleName || "Routeur solaire";
-  return banner() + helpBox("dashboard") + refreshControls() + dashboardCustomizeBox() +
-    '<section class="dashHero">' +
-      '<div><p class="eyebrow">Routeur solaire local</p><h1>' + esc(moduleName) + '</h1><div class="heroPills">' +
-        pill("Role", state.role || "-", "info") +
-        pill("WiFi", state.wifiConnected ? "connecte" : "AP local", wifiCls) +
-        pill("Securite", state.safetyLevel || "OK", safetyCls) +
-        pill("Simulation", state.simulationMode ? "active" : "off", state.simulationMode ? "warn" : "muted") +
-      '</div></div>' +
-      '<div class="heroNet">' +
-        miniState("SSID", ssid, "") +
-        miniState("IP box", ip, "info") +
-        miniState("IP AP", state.apIp || "-", "info") +
-        miniState("RSSI", state.rssi == null ? "-" : state.rssi + " dBm", wifiCls) +
-      '</div>' +
-    '</section>' +
-    energyGraphCard() +
-    '<section class="energyPanel">' +
-      dashboardMetricKeys.filter(function (key) { return ["gridPowerW","injectionW","surplusW"].indexOf(key) < 0; }).map(metricCardFor).join("") +
-    '</section>' +
-    '<section class="chartPanel">' +
-      dashboardChartKeys.map(chartCardFor).join("") +
-    '</section>' +
-    '<section class="dashBlocks">' +
-      '<div class="dashBlock"><h2>Etat ESP</h2>' +
-        miniState("Module", moduleName, "info") +
-        miniState("Role", state.role || "-", "info") +
-        miniState("Firmware", state.firmwareVersion || "-", "ok") +
-        miniState("Puce", (state.chipModel || "ESP32") + " rev " + fmt(state.chipRevision), "info") +
-        miniState("CPU", fmt(state.cpuMhz) + " MHz", "info") +
-        miniState("Core", "Arduino " + (state.arduinoCore || "-"), "muted") +
-        miniState("IDF", state.idfVersion || "-", "muted") +
-        miniState("Flash", bytesHuman(state.flashBytes), "info") +
-        miniState("LittleFS", bytesHuman(state.littleFsUsed) + " / " + bytesHuman(state.littleFsTotal), "info") +
-        miniState("MAC", state.deviceId || "-", "muted") +
-        miniState("Mode reseau", state.networkMode || "-", "info") +
-        miniState("Heap libre", state.heapFree ? Math.round(state.heapFree / 1024) + " Ko" : "-", "ok") +
-        miniState("API", state.ok ? "OK" : "Erreur", state.ok ? "ok" : "bad") +
-      '</div>' +
-      '<div class="dashBlock"><h2>Capteurs</h2>' +
-        miniState("JSY-MK-194T", state.jsyOnline ? "OK" : "Absent", state.jsyOnline ? "ok" : "bad") +
-        miniState("TIC Linky", state.ticAvailable ? "OK" : "Absent", state.ticAvailable ? "ok" : "warn") +
-        miniState("Sonde 1", dsAvailable(0, state.tankTopC) ? fmt(state.tankTopC) + " C" : "Absent / non lu", dsAvailable(0, state.tankTopC) ? tempClass(state.tankTopC) : "bad") +
-        miniState("Sonde 2", dsAvailable(1, state.tankMiddleC) ? fmt(state.tankMiddleC) + " C" : "Absent / non lu", dsAvailable(1, state.tankMiddleC) ? tempClass(state.tankMiddleC) : "bad") +
-        miniState("Sonde 3", dsAvailable(2, state.tankBottomC) ? fmt(state.tankBottomC) + " C" : "Absent / non lu", dsAvailable(2, state.tankBottomC) ? tempClass(state.tankBottomC) : "bad") +
-      '</div>' +
-      '<div class="dashBlock"><h2>Actionneurs</h2>' +
-        actuatorBar("SSR1", state.ssr1PowerPct) +
-        actuatorBar("SSR2", state.ssr2PowerPct) +
-        actuatorBar("RobotDyn", state.robotDynPowerPct) +
-      '</div>' +
-      '<div class="dashBlock"><h2>ESP-NOW / Secu</h2>' +
-        miniState("ESP-NOW", state.espNowStatus || "local", "info") +
-        miniState("Raison", state.safetyReason || "aucune", safetyCls) +
-        miniState("Type simulation", state.simulationType || "off", state.simulationMode ? "warn" : "muted") +
-      '</div>' +
+
+  var overviewBlock = dashboardBlock("Etat general", "module " + (state.role || "-"),
+    '<div class="blockStates">' +
+      blockState("Safety", state.safetyLevel || "OK", safetyCls) +
+      blockState("WiFi", state.wifiConnected ? "connecte" : "AP local", wifiCls) +
+      blockState("Simulation", state.simulationMode ? "active" : "off", state.simulationMode ? "warn" : "muted") +
+      blockState("IP", ip, "info") +
+    '</div>' +
+    '<div class="blockNote">' + esc(state.safetyReason || "Aucun defaut logiciel actif.") + '</div>', safetyCls);
+
+  var energyBlock = dashboardBlock("Energie reseau", "source " + (state.gridPowerSource || "JSY"),
+    '<div class="blockMetricGrid">' +
+      blockMetric("Puissance reseau", state.gridPowerW, "W", Number(state.gridPowerW) < 0 ? "solar" : "consume", Number(state.gridPowerW) < 0 ? "injection" : "consommation") +
+      blockMetric("Injection", state.injectionW, "W", "solar", "export reseau") +
+      blockMetric("Surplus", state.surplusW, "W", "sun", "disponible routeur") +
+      blockMetric("Tension", state.gridVoltageV, "V", "info", "") +
+      blockMetric("Courant", state.gridCurrentA, "A", "sun", "") +
+      blockMetric("Frequence", state.gridFrequencyHz, "Hz", "muted", "") +
+    '</div>', "energy");
+
+  var routingBlock = dashboardBlock("Routage", "commandes actionneurs",
+    '<div class="blockMetricGrid three">' +
+      blockMetric("SSR1", state.ssr1PowerPct, "%", Number(state.ssr1PowerPct) > 0 ? "ok" : "muted", "chauffe-eau") +
+      blockMetric("SSR2", state.ssr2PowerPct, "%", Number(state.ssr2PowerPct) > 0 ? "ok" : "muted", "auxiliaire") +
+      blockMetric("RobotDyn", state.robotDynPowerPct, "%", Number(state.robotDynPowerPct) > 0 ? "warn" : "muted", "triac") +
+    '</div>', "routing");
+
+  var sensorBlock = dashboardBlock("Capteurs", "etat des mesures",
+    '<div class="blockMetricGrid">' +
+      blockMetric("JSY-MK-194T", state.jsyOnline ? "OK" : "absent", "", state.jsyOnline ? "ok" : "bad", "P1 " + fmt(state.activePowerW1) + " W / P2 " + fmt(state.activePowerW2) + " W") +
+      blockMetric("TIC Linky", state.ticAvailable ? "OK" : "absent", "", state.ticAvailable ? "ok" : "warn", state.ticStatus || "diagnostic") +
+      configuredDsMetrics() +
+    '</div>', "sensors");
+
+  return banner() +
+    '<header class="yasTopbar"><div><span>Dashboard</span><h1>' + esc(moduleName) + '</h1></div><div class="statusBadges">' +
+      statusBadge("Role", state.role || "-", "info", "firmware commun") +
+      statusBadge("WiFi", state.wifiConnected ? "connecte" : "AP local", wifiCls, ssid) +
+      statusBadge("Safety", state.safetyLevel || "OK", safetyCls, state.safetyReason || "aucun defaut") +
+      statusBadge("Simulation", state.simulationMode ? "active" : "off", state.simulationMode ? "warn" : "muted", state.simulationMode ? simRemainingText() : "reel") +
+    '</div></header>' +
+    '<section class="updateStrip"><div>Routeur solaire local - ' + esc(state.gridPowerSource || "JSY") + ' comme source reseau</div><button onclick="refresh()">Actualiser</button></section>' +
+    helpBox("dashboard") + refreshControls() + dashboardCustomizeBox() +
+    '<section class="dashBlockGrid">' + overviewBlock + energyBlock + routingBlock + sensorBlock + '</section>' +
+    dashboardTitle("Graphiques") +
+    '<section class="wideCharts">' +
+      dashboardGraphsHtml() +
     '</section>';
 }
 
@@ -1385,15 +1637,57 @@ function field(id, label, value) {
   return '<label>' + esc(label) + '<input id="' + id + '" type="number" step="0.1" value="' + esc(value) + '"></label>';
 }
 
-async function simEnable() { await fetch("/api/simulation/enable", {method:"POST"}); await refresh(); }
-async function simDisable() { await fetch("/api/simulation/disable", {method:"POST"}); await refresh(); }
-async function simRandom() { await fetch("/api/simulation/randomize", {method:"POST"}); await refresh(); }
+async function simEnable() {
+  var mode = $("simMode") ? $("simMode").value : "manual";
+  var response = await fetch("/api/simulation/enable", {method:"POST"});
+  if (!response.ok) return alert("Activation simulation refusee: " + await response.text());
+  if (mode === "random") {
+    response = await fetch("/api/simulation/randomize", {method:"POST"});
+    if (!response.ok) return alert("Simulation aleatoire refusee: " + await response.text());
+  } else if (mode === "scenario") {
+    var scenario = $("simScenario") ? $("simScenario").value : "normal";
+    response = await fetch("/api/simulation/scenario", {method:"POST", headers:{"Content-Type":"application/x-www-form-urlencoded"}, body:new URLSearchParams({scenario:scenario})});
+    if (!response.ok) return alert("Scenario simulation refuse: " + await response.text());
+  } else {
+    response = await fetch("/api/simulation/mode", {method:"POST", headers:{"Content-Type":"application/x-www-form-urlencoded"}, body:new URLSearchParams({mode:"manual"})});
+    if (!response.ok) return alert("Mode simulation refuse: " + await response.text());
+    await simValues(false);
+    return;
+  }
+  await refresh();
+}
+async function simDisable() {
+  if (!confirm("Desactiver la simulation et revenir au reel ? Les sorties seront forcees OFF.")) return;
+  await fetch("/api/simulation/disable", {method:"POST"});
+  await refresh();
+}
+async function simRandom() {
+  await fetch("/api/simulation/randomize", {method:"POST"});
+  await refresh();
+}
 async function simScenario(name) {
   await fetch("/api/simulation/scenario", {method:"POST", headers:{"Content-Type":"application/x-www-form-urlencoded"}, body:new URLSearchParams({scenario:name})});
   await refresh();
 }
 
-async function simValues() {
+async function simModeApply() {
+  var mode = $("simMode") ? $("simMode").value : "manual";
+  await fetch("/api/simulation/mode", {method:"POST", headers:{"Content-Type":"application/x-www-form-urlencoded"}, body:new URLSearchParams({mode:mode})});
+  await refresh();
+}
+
+async function simScenarioApply() {
+  var scenario = $("simScenario") ? $("simScenario").value : "normal";
+  await simScenario(scenario);
+}
+
+async function simValues(enableFirst) {
+  if (enableFirst !== false) {
+    var enableResponse = await fetch("/api/simulation/enable", {method:"POST"});
+    if (!enableResponse.ok) return alert("Activation simulation refusee: " + await enableResponse.text());
+  }
+  var modeResponse = await fetch("/api/simulation/mode", {method:"POST", headers:{"Content-Type":"application/x-www-form-urlencoded"}, body:new URLSearchParams({mode:"manual"})});
+  if (!modeResponse.ok) return alert("Mode simulation refuse: " + await modeResponse.text());
   var body = {
     jsy: {available:true, gridPowerW:Number($("grid").value), voltageV:Number($("voltage").value), currentA:Number($("current").value), activePowerW1:Number($("jsyP1").value), activePowerW2:Number($("jsyP2").value), currentA1:Number($("jsyC1").value), currentA2:Number($("jsyC2").value), powerFactor:0.96, frequencyHz:50},
     tic: {available:true, apparentPowerVA:900, currentA:Number($("current").value), tariff:"BASE"},
@@ -1403,7 +1697,8 @@ async function simValues() {
       {id:"sonde3", available:true, temperatureC:Number($("t3").value)}
     ]
   };
-  await postJson("/api/simulation/values", body);
+  var response = await postJson("/api/simulation/values", body);
+  if (!response.ok) return alert("Simulation refusee: " + await response.text());
   await refresh();
 }
 
@@ -1415,7 +1710,6 @@ async function settingsPage() {
   var w = s.wifi || {};
   var r = s.router || {};
   var safe = s.safety || {};
-  var sim = s.simulation || {};
   $("app").innerHTML = banner() + '<h1>Parametres</h1>' + helpBox("settings") + '<div class="settingsGrid">' +
     '<section class="panel"><h2>Module</h2><div class="form">' +
       textField("devName", "Nom module", d.name || d.deviceName || "") +
@@ -1441,10 +1735,6 @@ async function settingsPage() {
       field("pidKi", "PID Ki", r.pidKi || 0.01) +
       field("pidKd", "PID Kd", r.pidKd || 0) +
     '</div><p class="muted">JSY = mesure rapide via pince. TIC = Linky si la trame donne une puissance exploitable. AUTO = TIC si disponible, sinon JSY.</p></section>' +
-    '<section class="panel"><h2>Simulation</h2><div class="form">' +
-      '<label>Simulation<select id="simulationEnabled">' + options(["false", "true"], String((sim.enabled || s.simulationMode) ? true : false)) + '</select></label>' +
-      '<label>Mode simulation<select id="simulationModeSelect">' + options(["manual", "random", "scenario"], sim.mode || "manual") + '</select></label>' +
-    '</div><p class="muted">La simulation est temporaire: elle se coupe au bout de 5 minutes et ne redemarre jamais automatiquement apres un reboot.</p></section>' +
     '</div><p><button onclick="saveSettings()">Sauvegarder</button> <button onclick="restartEsp()">Redemarrer ESP32</button> <button onclick="jsonEditor(\'system\')">JSON system</button> <button onclick="jsonEditor(\'device\')">JSON module</button></p>';
 }
 
@@ -1505,19 +1795,15 @@ async function saveSettings() {
   s.router.tempSafetyMaxC = Number($("tankSafety").value);
   s.router.tankSafetyC = s.router.tempSafetyMaxC;
   applySafetyModeConfig(s.safety, $("safetyMode").value);
-  s.simulation.enabled = $("simulationEnabled").value === "true";
-  s.simulation.mode = $("simulationModeSelect").value;
-  s.simulationMode = s.simulation.enabled;
   var rd = await postJson("/api/device", d);
   if (!rd.ok) return alert("Sauvegarde module refusee: " + await rd.text());
   var response = await postJson("/api/system", s);
   if (!response.ok) return alert("Sauvegarde systeme refusee: " + await response.text());
-  if (s.simulation.enabled) {
-    await fetch("/api/simulation/enable", {method:"POST"});
-    await fetch("/api/simulation/mode", {method:"POST", headers:{"Content-Type":"application/x-www-form-urlencoded"}, body:new URLSearchParams({mode:s.simulation.mode})});
-  } else {
-    await fetch("/api/simulation/disable", {method:"POST"});
-  }
+  cache.device = d;
+  cache.system = s;
+  state.moduleName = d.deviceName || d.name || state.moduleName;
+  state.role = d.role || state.role;
+  state.gridPowerSource = s.router.gridPowerSource || state.gridPowerSource;
   alert("Parametres sauvegardes");
   await refresh();
 }
@@ -1530,6 +1816,11 @@ async function restartEsp() {
 
 function diagnosticPage() {
   var events = state.events || [];
+  var dsStates = [
+    dsConfigured(0) ? miniState("Sonde 1", dsAvailable(0, state.tankTopC) ? fmt(state.tankTopC) + " C" : "Absent / non lu", dsAvailable(0, state.tankTopC) ? tempClass(state.tankTopC) : "bad") : "",
+    dsConfigured(1) ? miniState("Sonde 2", dsAvailable(1, state.tankMiddleC) ? fmt(state.tankMiddleC) + " C" : "Absent / non lu", dsAvailable(1, state.tankMiddleC) ? tempClass(state.tankMiddleC) : "bad") : "",
+    dsConfigured(2) ? miniState("Sonde 3", dsAvailable(2, state.tankBottomC) ? fmt(state.tankBottomC) + " C" : "Absent / non lu", dsAvailable(2, state.tankBottomC) ? tempClass(state.tankBottomC) : "bad") : ""
+  ].join("") || miniState("DS18B20", "Aucune sonde configuree", "muted");
   $("app").innerHTML = banner() + '<h1>Diagnostic & Simulation</h1>' + helpBox("diagnostic") + '<div class="settingsGrid">' +
     '<section class="panel"><h2>Diagnostic systeme</h2>' +
       miniState("Securite", state.safetyLevel || "-", state.safetyTripped ? "bad" : "ok") +
@@ -1542,9 +1833,7 @@ function diagnosticPage() {
     '<section class="panel"><h2>Capteurs</h2>' +
       miniState("JSY-MK-194T", state.jsyOnline ? "OK" : "Absent", state.jsyOnline ? "ok" : "bad") +
       miniState("TIC Linky", state.ticAvailable ? "OK" : "Absent", state.ticAvailable ? "ok" : "warn") +
-      miniState("Sonde 1", dsAvailable(0, state.tankTopC) ? fmt(state.tankTopC) + " C" : "Absent / non lu", dsAvailable(0, state.tankTopC) ? tempClass(state.tankTopC) : "bad") +
-      miniState("Sonde 2", dsAvailable(1, state.tankMiddleC) ? fmt(state.tankMiddleC) + " C" : "Absent / non lu", dsAvailable(1, state.tankMiddleC) ? tempClass(state.tankMiddleC) : "bad") +
-      miniState("Sonde 3", dsAvailable(2, state.tankBottomC) ? fmt(state.tankBottomC) + " C" : "Absent / non lu", dsAvailable(2, state.tankBottomC) ? tempClass(state.tankBottomC) : "bad") +
+      dsStates +
     '</section>' +
     '<section class="panel"><h2>Simulation</h2>' + simulationControlsHtml() + '</section>' +
     '<section class="panel"><h2>Sorties calculees</h2>' +
@@ -1559,8 +1848,133 @@ function diagnosticPage() {
     }).join("") + '</table>';
 }
 
+function gpioRowsFromConfig() {
+  var rows = [];
+  function push(owner, field, gpio, detail) {
+    if (gpio == null || gpio === "" || Number(gpio) < 0) return;
+    rows.push({gpio:Number(gpio), owner:owner, field:field, detail:detail || ""});
+  }
+  var sensors = (cache.sensors && cache.sensors.sensors) || [];
+  sensors.forEach(function (s) {
+    var name = s.name || s.id || "capteur";
+    push(name, "GPIO", s.gpio, s.type || "");
+    push(name, "RX", s.rx, s.type || "");
+    push(name, "TX", s.tx, s.type || "");
+  });
+  var bus = (cache.sensors && cache.sensors.oneWireBus) || {};
+  if ((cache.sensors && cache.sensors.ds18b20 || []).length || bus.gpio != null) push("Bus OneWire", "GPIO", bus.gpio == null ? 4 : bus.gpio, "DS18B20");
+  var actuators = (cache.actuators && cache.actuators.actuators) || [];
+  actuators.forEach(function (a) {
+    var name = a.name || a.id || "actionneur";
+    push(name, "GPIO", a.gpio, a.type || "");
+    push(name, "Zero-cross", a.zeroCross, a.type || "");
+    push(name, "Control", a.control, a.type || "");
+    push(name, "GPIO zero-cross", a.gpioZeroCross, a.type || "");
+    push(name, "GPIO control", a.gpioControl, a.type || "");
+  });
+  rows.sort(function (a, b) { return a.gpio - b.gpio || a.owner.localeCompare(b.owner); });
+  return rows;
+}
+
+async function systemPage() {
+  var sys = await api("/api/system-info");
+  if (!cache.sensors) cache.sensors = await api("/api/sensors");
+  if (!cache.actuators) cache.actuators = await api("/api/actuators");
+  var gpioRows = gpioRowsFromConfig();
+  var storage = sys.storage || {};
+  var services = sys.services || {};
+  var solar = sys.solarRouter || {};
+  $("app").innerHTML = banner() + '<h1>Systeme</h1><div class="toolbar"><button onclick="refresh()">Actualiser</button><button class="danger" onclick="restartSystemPage()">Redemarrer ESP32</button><a href="/api/system-info">JSON systeme</a></div><div class="settingsGrid">' +
+    dashboardBlock("Resume appareil", "identite du module",
+      '<div class="blockMetricGrid">' +
+        blockMetric("Nom", sys.deviceName || "N/A", "", "info", sys.role || "N/A") +
+        blockMetric("Firmware", sys.firmwareVersion || "N/A", "", "muted", "") +
+        blockMetric("Compilation", sys.buildDate || "N/A", "", "muted", "") +
+        blockMetric("Uptime", uptimeHuman(sys.uptime), "", "ok", "") +
+        blockMetric("MAC WiFi", sys.mac || "N/A", "", "muted", "") +
+        blockMetric("IP active", sys.ip || "N/A", "", "info", "") +
+      '</div>', "identity") +
+    dashboardBlock("Reseau WiFi", "connectivite locale",
+      '<div class="blockMetricGrid">' +
+        blockMetric("SSID", sys.ssid || "N/A", "", sys.ssid && sys.ssid !== "N/A" ? "ok" : "muted", "") +
+        blockMetric("RSSI", sys.rssi == null ? "N/A" : sys.rssi, sys.rssi == null ? "" : "dBm", stateClass(sys.wifiQuality), sys.wifiQuality || "N/A") +
+        blockMetric("Qualite WiFi", sys.wifiQuality || "N/A", "", stateClass(sys.wifiQuality), "") +
+        blockMetric("Mode", sys.networkMode || "N/A", "", "info", "") +
+        blockMetric("IP station", sys.stationIp || "N/A", "", "info", "") +
+        blockMetric("IP AP", sys.apIp || "N/A", "", "info", "") +
+      '</div>', "network") +
+    dashboardBlock("Memoire / CPU", "ressources ESP32",
+      '<div class="blockMetricGrid">' +
+        blockMetric("RAM libre", bytesHuman(sys.freeHeap), "", "ok", "") +
+        blockMetric("RAM mini observee", bytesHuman(sys.minFreeHeap), "", "warn", "") +
+        blockMetric("CPU", sys.cpuFreqMHz == null ? "N/A" : sys.cpuFreqMHz, sys.cpuFreqMHz == null ? "" : "MHz", "info", "") +
+      '</div>', "memory") +
+    dashboardBlock("Redemarrage / stabilite", "diagnostic boot",
+      '<div class="blockMetricGrid">' +
+        blockMetric("Cause reset", sys.resetReason || "N/A", "", stateClass(sys.resetReason === "Power on" ? "OK" : "Attention"), "") +
+        blockMetric("Uptime ms", sys.uptime || "N/A", "", "muted", "") +
+        blockMetric("Safety", sys.safetyLevel || "N/A", "", stateClass(sys.safetyLevel), sys.safetyReason || "N/A") +
+      '</div>', "stability") +
+    dashboardBlock("Stockage", "LittleFS",
+      '<div class="blockMetricGrid">' +
+        blockMetric("Type", storage.type || "N/A", "", "info", "") +
+        blockMetric("Etat", storage.status || "N/A", "", stateClass(storage.status), "") +
+        blockMetric("Utilise", bytesHuman(storage.used), "", "info", "") +
+        blockMetric("Total", bytesHuman(storage.total), "", "ok", "") +
+      '</div><p class="muted"><a href="/fs">Voir les fichiers LittleFS</a></p>', "storage") +
+    dashboardBlock("Services", "etat general",
+      '<div class="statusMiniGrid">' +
+        statusMini("WiFi", services.wifi) +
+        statusMini("NTP", services.ntp) +
+        statusMini("MQTT", services.mqtt) +
+        statusMini("Capteurs", services.sensors) +
+        statusMini("ESP-NOW", services.espnow) +
+        statusMini("Safety", services.safety) +
+      '</div>', "services") +
+    dashboardBlock("Routeur solaire", "mesures principales",
+      '<div class="blockMetricGrid">' +
+        blockMetric("Mode", solar.mode || "N/A", "", "info", solar.gridPowerSource || "") +
+        blockMetric("Puissance", solar.power == null ? "N/A" : solar.power, solar.power == null ? "" : "W", Number(solar.power) < 0 ? "solar" : "consume", "") +
+        blockMetric("Sortie", solar.outputPercent == null ? "N/A" : solar.outputPercent, solar.outputPercent == null ? "" : "%", Number(solar.outputPercent) > 0 ? "ok" : "muted", "SSR / triac") +
+        blockMetric("Temperature", solar.temperature == null ? "N/A" : solar.temperature, typeof solar.temperature === "number" ? "C" : "", typeof solar.temperature === "number" ? tempClass(solar.temperature) : "muted", "") +
+        blockMetric("Derniere mesure", solar.lastMeasureAge == null ? "N/A" : solar.lastMeasureAge, typeof solar.lastMeasureAge === "number" ? "s" : "", "info", "") +
+        blockMetric("SSR1 / SSR2 / Triac", fmt(solar.ssr1Percent) + " / " + fmt(solar.ssr2Percent) + " / " + fmt(solar.robotDynPercent), "%", "muted", "") +
+      '</div>', "solar") +
+    dashboardBlock("Actions systeme", "commandes locales",
+      '<p><button class="danger" onclick="restartSystemPage()">Redemarrer ESP32</button></p><p class="muted">Le redemarrage demande une confirmation dans le navigateur. Aucun mot de passe WiFi n est affiche sur cette page.</p>', "actions") +
+    '</div><h2>GPIO utilises</h2><table><tr><th>GPIO</th><th>Usage</th><th>Champ</th><th>Detail</th></tr>' +
+      (gpioRows.length ? gpioRows.map(function (row) {
+        return '<tr><td>GPIO' + esc(row.gpio) + '</td><td>' + esc(row.owner) + '</td><td>' + esc(row.field) + '</td><td>' + esc(row.detail) + '</td></tr>';
+      }).join("") : '<tr><td colspan="4">Aucun GPIO configure.</td></tr>') +
+    '</table>';
+}
+
+async function restartSystemPage() {
+  if (!confirm("Redemarrer ESP32 maintenant ?")) return;
+  await fetch("/api/restart", {method:"POST"});
+  $("app").innerHTML = '<h1>Redemarrage...</h1><div class="panel">Attends quelques secondes puis recharge /app.</div>';
+}
+
 function simulationControlsHtml() {
-  return '<div class="form">' +
+  var scenarios = [
+    ["normal", "Retour normal"],
+    ["production_low", "Production faible"],
+    ["injection_medium", "Injection moyenne"],
+    ["injection_high", "Forte injection"],
+    ["tank_almost_hot", "Ballon presque chaud"],
+    ["tank_overheat", "Surchauffe ballon"],
+    ["critical_sensor_lost", "Perte capteur critique"],
+    ["jsy_lost", "Perte JSY"]
+  ];
+  return '<div class="blockStates">' +
+      blockState("Etat", state.simulationMode ? "active" : "inactive", state.simulationMode ? "warn" : "muted") +
+      blockState("Temps restant", state.simulationMode ? simRemainingText() : "-", state.simulationMode ? "warn" : "muted") +
+      blockState("Mode", state.simulationType || "manual", "info") +
+      blockState("Scenario", state.simulationScenario || "normal", "info") +
+    '</div>' +
+    '<div class="form simForm">' +
+    '<label>Mode<select id="simMode">' + options(["manual", "random", "scenario"], state.simulationType || "manual") + '</select></label>' +
+    '<label>Scenario<select id="simScenario">' + scenarios.map(function (item) { return '<option value="' + esc(item[0]) + '" ' + ((state.simulationScenario || "normal") === item[0] ? "selected" : "") + '>' + esc(item[1]) + '</option>'; }).join("") + '</select></label>' +
     field("grid", "gridPowerW", state.gridPowerW || -800) +
     field("voltage", "Tension V", 231) +
     field("current", "Courant A", 4) +
@@ -1571,10 +1985,16 @@ function simulationControlsHtml() {
     field("t1", "Sonde 1 C", state.tankTopC || 45) +
     field("t2", "Sonde 2 C", state.tankMiddleC || 42) +
     field("t3", "Sonde 3 C", state.tankBottomC || 38) +
-    '</div><div class="toolbar"><button onclick="simEnable()">Activer</button><button onclick="simValues()">Appliquer manuel</button><button onclick="simRandom()">Aleatoire</button><button onclick="simScenario(\'tank_overheat\')">Surchauffe</button><button onclick="simScenario(\'jsy_lost\')">Perte JSY</button><button onclick="simDisable()">Desactiver</button></div>' +
-    miniState("Etat", state.simulationMode ? "active" : "inactive", state.simulationMode ? "warn" : "muted") +
-    miniState("Temps restant", state.simulationMode ? simRemainingText() : "-", state.simulationMode ? "warn" : "muted") +
-    miniState("Mode", state.simulationType || "manual", "info");
+    '</div><div class="toolbar">' +
+      '<button onclick="simEnable()">Activer</button>' +
+      '<button onclick="simModeApply()">Appliquer mode</button>' +
+      '<button onclick="simScenarioApply()">Appliquer scenario</button>' +
+      '<button onclick="simValues()">Appliquer manuel</button>' +
+      '<button onclick="simRandom()">Aleatoire</button>' +
+      '<button onclick="simScenario(\'tank_overheat\')">Surchauffe</button>' +
+      '<button onclick="simScenario(\'jsy_lost\')">Perte JSY</button>' +
+      '<button class="danger" onclick="simDisable()">Desactiver</button>' +
+    '</div><p class="muted">La simulation se coupe automatiquement apres 5 minutes et ne reste pas active apres reboot. Les sorties 230 V restent OFF.</p>';
 }
 
 async function clearLogs() {
@@ -1594,11 +2014,13 @@ async function saveJson(name) {
 }
 
 async function render() {
+  updateNavStatus();
   if (page === "sensors") return sensorsPage();
   if (page === "actuators") return actuatorsPage();
   if (page === "logic") return logicPage();
   if (page === "settings") return settingsPage();
   if (page === "diagnostic") return diagnosticPage();
+  if (page === "system") return systemPage();
   $("app").innerHTML = dashboard();
   refreshLabelPatch();
 }
@@ -1631,7 +2053,7 @@ function scheduleDashboardRefresh() {
   dashboardRefreshTimer = null;
   if (dashboardRefreshMs > 0) {
     dashboardRefreshTimer = setInterval(function () {
-      if (page === "dashboard") refresh();
+      if (page === "dashboard" || page === "system") refresh();
     }, dashboardRefreshMs);
   }
   refreshLabelPatch();

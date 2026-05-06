@@ -170,7 +170,9 @@ void EspNowManager::handleReceive(const uint8_t *mac, const uint8_t *data, int l
 
   if (msg.messageType == MSG_ACTUATOR_COMMAND) {
     if (!acceptActuatorCommand(msg, peer)) return;
-    state.addLog(String("ESP-NOW commande actionneur acceptee: ") + msg.actuatorId + " " + String(msg.commandPercent, 1) + "%");
+    String command = strlen(msg.command) ? String(msg.command) : "setPower";
+    bool executed = actuatorHandler && actuatorHandler(actuatorHandlerContext, msg.actuatorId, command, msg.commandPercent, msg.mode);
+    state.addLog(String("ESP-NOW commande actionneur ") + (executed ? "executee: " : "refusee localement: ") + msg.actuatorId + " " + String(msg.commandPercent, 1) + "%");
     return;
   }
 
@@ -191,6 +193,11 @@ void EspNowManager::handleReceive(const uint8_t *mac, const uint8_t *data, int l
 
 void EspNowManager::handleSendStatus(const uint8_t *mac, esp_now_send_status_t status) {
   if (status != ESP_NOW_SEND_SUCCESS) state.addLog("ESP-NOW send failed: " + macToString(mac));
+}
+
+void EspNowManager::setActuatorCommandHandler(ActuatorCommandHandler handler, void *context) {
+  actuatorHandler = handler;
+  actuatorHandlerContext = context;
 }
 
 String EspNowManager::peersJson() {

@@ -21,6 +21,15 @@ static const RuleEngine::MeasureDef RULE_MEASURES[] = {
   {"TIC Linky", "tariff", RuleEngine::MEASURE_TEXT, "", ""},
   {"TIC Linky", "available", RuleEngine::MEASURE_BOOL, "", ""},
   {"TIC Linky", "lastValidReadAgeMs", RuleEngine::MEASURE_NUMBER, "ms", ""},
+  {"sonde1", "temperatureC", RuleEngine::MEASURE_NUMBER, "C", ""},
+  {"sonde1", "available", RuleEngine::MEASURE_BOOL, "", ""},
+  {"sonde1", "lastValidReadAgeMs", RuleEngine::MEASURE_NUMBER, "ms", ""},
+  {"sonde2", "temperatureC", RuleEngine::MEASURE_NUMBER, "C", ""},
+  {"sonde2", "available", RuleEngine::MEASURE_BOOL, "", ""},
+  {"sonde2", "lastValidReadAgeMs", RuleEngine::MEASURE_NUMBER, "ms", ""},
+  {"sonde3", "temperatureC", RuleEngine::MEASURE_NUMBER, "C", ""},
+  {"sonde3", "available", RuleEngine::MEASURE_BOOL, "", ""},
+  {"sonde3", "lastValidReadAgeMs", RuleEngine::MEASURE_NUMBER, "ms", ""},
   {"DS18B20_TOP", "temperatureC", RuleEngine::MEASURE_NUMBER, "C", ""},
   {"DS18B20_TOP", "available", RuleEngine::MEASURE_BOOL, "", ""},
   {"DS18B20_TOP", "lastValidReadAgeMs", RuleEngine::MEASURE_NUMBER, "ms", ""},
@@ -316,7 +325,8 @@ bool RuleEngine::validateCondition(JsonObject condition, JsonArray errors, const
 
 float RuleEngine::numericMeasureValue(const String &source, const String &measure) {
   if (source == "JSY-MK-194T") {
-    if (measure == "gridPowerW" || measure == "activePowerW" || measure == "activePowerW1") return state.activePowerW1;
+    if (measure == "gridPowerW") return state.gridPowerW;
+    if (measure == "activePowerW" || measure == "activePowerW1") return state.activePowerW1;
     if (measure == "activePowerW2") return state.activePowerW2;
     if (measure == "injectionW") return state.injectionW;
     if (measure == "consumptionW") return state.consumptionW;
@@ -333,6 +343,12 @@ float RuleEngine::numericMeasureValue(const String &source, const String &measur
     if (measure == "currentA") return state.ticCurrentA;
     if (measure == "available") return state.ticAvailable ? 1 : 0;
     if (measure == "lastValidReadAgeMs") return state.lastTicReadMs ? millis() - state.lastTicReadMs : 4294967295.0f;
+  }
+  if (source == "sonde1" || source == "sonde2" || source == "sonde3") {
+    uint8_t index = source == "sonde2" ? 1 : (source == "sonde3" ? 2 : 0);
+    if (measure == "temperatureC") return state.ds18b20Temps[index];
+    if (measure == "available") return state.ds18b20Available[index] ? 1 : 0;
+    if (measure == "lastValidReadAgeMs") return state.ds18b20LastReadMs[index] ? millis() - state.ds18b20LastReadMs[index] : 4294967295.0f;
   }
   if (source == "DS18B20_TOP") {
     if (measure == "temperatureC") return state.tankTopC;

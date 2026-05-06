@@ -13,26 +13,28 @@ void SimulationManager::begin() {
   root["simulation"]["enabled"] = false;
   root["simulationMode"] = false;
   config.saveSystem();
-  state.simulationMode = enabled();
+  runtimeEnabled = false;
+  enabledAtMs = 0;
+  expiresAtMs = 0;
+  state.simulationMode = false;
   state.simulationType = simulationConfig()["mode"] | "manual";
   state.simulationScenario = simulationConfig()["scenario"] | "normal";
   state.simulationRemainingMs = 0;
 }
 
 void SimulationManager::loop(uint32_t now) {
-  state.simulationMode = enabled();
+  state.simulationMode = runtimeEnabled;
   state.simulationType = simulationConfig()["mode"] | "manual";
   state.simulationScenario = simulationConfig()["scenario"] | "normal";
   if (!state.simulationMode) return;
 
-  if (enabledAtMs == 0) enabledAtMs = now;
-  uint32_t elapsed = now - enabledAtMs;
-  if (elapsed >= SIMULATION_TIMEOUT_MS) {
+  if (enabledAtMs == 0 || expiresAtMs == 0) markEnabled();
+  if ((int32_t)(now - expiresAtMs) >= 0) {
     disable();
     state.logEvent("WARNING", "SIMULATION_TIMEOUT", "Simulation arretee automatiquement apres 5 minutes", "SimulationManager");
     return;
   }
-  state.simulationRemainingMs = SIMULATION_TIMEOUT_MS - elapsed;
+  state.simulationRemainingMs = expiresAtMs - now;
 
   String mode = state.simulationType;
   if ((mode == "random" || mode == "scenario") && now - lastUpdateMs >= updateIntervalMs()) {
@@ -43,16 +45,15 @@ void SimulationManager::loop(uint32_t now) {
 }
 
 bool SimulationManager::enabled() {
-  JsonObject sim = simulationConfig();
-  return (sim["enabled"] | false) || (config.system()["simulationMode"] | false);
+  return runtimeEnabled;
 }
 
 void SimulationManager::enable() {
   JsonObject sim = simulationConfig();
-  sim["enabled"] = true;
-  config.systemDoc()["simulationMode"] = true;
+  // La simulation est volontairement runtime: jamais persistante apres reboot.
+  sim["enabled"] = false;
+  config.systemDoc()["simulationMode"] = false;
   markEnabled();
-  saveConfig();
   state.logEvent("WARNING", "CONFIG_CHANGED", "Mode simulation active", "SimulationManager");
 }
 
@@ -60,8 +61,9 @@ void SimulationManager::disable() {
   JsonObject sim = simulationConfig();
   sim["enabled"] = false;
   config.systemDoc()["simulationMode"] = false;
-  saveConfig();
+  runtimeEnabled = false;
   enabledAtMs = 0;
+  expiresAtMs = 0;
   state.simulationMode = false;
   state.simulationRemainingMs = 0;
   state.logEvent("WARNING", "ACTUATOR_FORCED_OFF", "Mode simulation desactive", "SimulationManager");
@@ -73,12 +75,13 @@ void SimulationManager::setMode(const String &mode) {
   if (m != "off" && m != "manual" && m != "random" && m != "scenario") m = "manual";
   JsonObject sim = simulationConfig();
   sim["mode"] = m;
-  if (m == "off") sim["enabled"] = false;
-  else sim["enabled"] = true;
-  config.systemDoc()["simulationMode"] = sim["enabled"];
-  if (sim["enabled"]) markEnabled();
+  sim["enabled"] = false;
+  config.systemDoc()["simulationMode"] = false;
+  if (m != "off") markEnabled();
   else {
+    runtimeEnabled = false;
     enabledAtMs = 0;
+    expiresAtMs = 0;
     state.simulationRemainingMs = 0;
   }
   saveConfig();
@@ -89,8 +92,8 @@ void SimulationManager::setScenario(const String &scenario) {
   JsonObject sim = simulationConfig();
   sim["scenario"] = scenario.length() ? scenario : "normal";
   sim["mode"] = "scenario";
-  sim["enabled"] = true;
-  config.systemDoc()["simulationMode"] = true;
+  sim["enabled"] = false;
+  config.systemDoc()["simulationMode"] = false;
   markEnabled();
   saveConfig();
   applyScenario(sim["scenario"].as<String>());
@@ -237,7 +240,13 @@ uint32_t SimulationManager::updateIntervalMs() {
 }
 
 void SimulationManager::markEnabled() {
-  if (!state.simulationMode || enabledAtMs == 0) enabledAtMs = millis();
+  // A chaque activation explicite, on redemarre le chronometre des 5 minutes.
+  // Sinon une ancienne valeur enabledAtMs peut provoquer un timeout immediat.
+  uint32_t now = millis();
+  runtimeEnabled = true;
+  enabledAtMs = now;
+  expiresAtMs = now + SIMULATION_TIMEOUT_MS;
+  lastUpdateMs = 0;
   state.simulationMode = true;
   state.simulationRemainingMs = SIMULATION_TIMEOUT_MS;
 }

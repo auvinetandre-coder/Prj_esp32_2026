@@ -55,6 +55,14 @@ void DS18B20Manager::updateReadings() {
 }
 
 void DS18B20Manager::updateReadings(uint32_t now) {
+  bool anyAddressConfigured = false;
+  for (uint8_t i = 0; i < sensorCount; i++) {
+    if (sensors[i].address.length()) {
+      anyAddressConfigured = true;
+      break;
+    }
+  }
+
   for (uint8_t i = 0; i < sensorCount; i++) {
     DS18B20Sensor &s = sensors[i];
     if (!s.enabled) {
@@ -65,7 +73,10 @@ void DS18B20Manager::updateReadings(uint32_t now) {
     float value = NAN;
     if (s.address.length() && stringToAddress(s.address, address)) {
       value = dallas.getTempC(address);
-    } else if (i < dallas.getDeviceCount()) {
+    } else if (!anyAddressConfigured && i < dallas.getDeviceCount()) {
+      // Mode decouverte: sans adresse configuree, on affiche les sondes par index
+      // pour aider l'utilisateur. Des qu'une adresse est assignee, seul le
+      // mapping explicite sensors.json est utilise.
       value = dallas.getTempCByIndex(i);
     }
 
@@ -159,7 +170,41 @@ String DS18B20Manager::detectedAddressesJson() {
 }
 
 bool DS18B20Manager::assignAddress(const String &sensorId, const String &address) {
-  JsonArray arr = config.sensorsDoc()["ds18b20"].as<JsonArray>();
+  String cleanAddress = address;
+  cleanAddress.trim();
+  cleanAddress.replace(":", "");
+  cleanAddress.replace("-", "");
+  cleanAddress.replace(" ", "");
+  cleanAddress.toUpperCase();
+  DeviceAddress parsedAddress;
+  if (cleanAddress.length() != 16 || !stringToAddress(cleanAddress, parsedAddress)) {
+    config.setLastError("Adresse OneWire invalide: " + address);
+    Serial.println(F("DS18B20 affectation refusee: adresse OneWire invalide."));
+    return false;
+  }
+
+  JsonArray arr = config.sensorsDoc()["ds18b20"].is<JsonArray>()
+                    ? config.sensorsDoc()["ds18b20"].as<JsonArray>()
+                    : config.sensorsDoc()["ds18b20"].to<JsonArray>();
+  const char *defaultIds[] = {"sonde1", "sonde2", "sonde3"};
+  const char *defaultNames[] = {"Sonde 1", "Sonde 2", "Sonde 3"};
+  const char *defaultRoles[] = {"ballon_haut", "ballon_milieu", "ballon_bas"};
+  while (arr.size() < MAX_DS18B20) {
+    uint8_t i = arr.size();
+    JsonObject sensor = arr.add<JsonObject>();
+    sensor["id"] = defaultIds[i];
+    sensor["name"] = defaultNames[i];
+    sensor["role"] = defaultRoles[i];
+    sensor["address"] = "";
+    sensor["enabled"] = true;
+    sensor["critical"] = i == 0;
+    sensor["unit"] = "C";
+    sensor["temperatureC"] = nullptr;
+    sensor["available"] = false;
+    sensor["lastReadMs"] = 0;
+    sensor["errorCount"] = 0;
+  }
+
   int8_t targetIndex = -1;
   if (sensorId == "sonde1") targetIndex = 0;
   else if (sensorId == "sonde2") targetIndex = 1;
@@ -176,20 +221,35 @@ bool DS18B20Manager::assignAddress(const String &sensorId, const String &address
   }
 
   if (targetIndex < 0 || targetIndex >= static_cast<int8_t>(arr.size())) {
+    config.setLastError("Sonde DS18B20 inconnue: " + sensorId);
+    Serial.print(F("DS18B20 affectation refusee: sonde inconnue "));
+    Serial.println(sensorId);
     return false;
   }
 
   // Une adresse OneWire ne doit appartenir qu'a une seule sonde logique.
   for (JsonObject sensor : arr) {
-    if (address.length() && sensor["address"].as<String>() == address) {
+    String existing = sensor["address"] | "";
+    existing.replace(":", "");
+    existing.replace("-", "");
+    existing.replace(" ", "");
+    existing.toUpperCase();
+    if (existing == cleanAddress) {
       sensor["address"] = "";
     }
   }
 
   JsonObject target = arr[targetIndex];
-  target["address"] = address;
+  target["address"] = cleanAddress;
   loadConfig();
-  return config.saveSensorsConfig();
+  if (!config.saveSensorsConfig()) return false;
+  config.setLastError("");
+  return true;
+}
+
+void DS18B20Manager::reloadConfig() {
+  loadConfig();
+  publishRuntimeState();
 }
 
 void DS18B20Manager::loadConfig() {

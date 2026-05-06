@@ -4,18 +4,21 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>RouteurSolaireESP32</title>
-  <link rel="stylesheet" href="/www/style.css">
+  <link rel="stylesheet" href="/www/style.css?v=33">
 </head>
 <body>
   <nav>
-    <strong class="brand">RouteurSolaireESP32</strong>
+    <strong class="brand"><span>Routeur</span>Solaire<small>ESP32 local router</small></strong>
     <button data-page="dashboard">Dashboard</button>
     <button data-page="sensors">Capteurs</button>
     <button data-page="actuators">Actionneurs</button>
     <button data-page="logic">Logique</button>
     <button data-page="diagnostic">Diagnostic & Simulation</button>
+    <button data-page="system">Systeme</button>
     <button data-page="settings">Parametres</button>
     <a href="/">Secours</a>
+    <div class="navSpacer"></div>
+    <div class="navStatus" id="navStatus"><i></i><span>Connexion...</span></div>
   </nav>
   <main id="app">
     <h1>Chargement...</h1>
@@ -28,7 +31,7 @@
       }
     });
   </script>
-  <script src="/www/app.js?v=22"></script>
+  <script src="/www/app.js?v=33"></script>
   <script>
     setTimeout(function () {
       var app = document.getElementById('app');

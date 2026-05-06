@@ -41,6 +41,8 @@ struct EspNowMessage {
 
 class EspNowManager {
 public:
+  typedef bool (*ActuatorCommandHandler)(void *context, const String &actuatorId, const String &command, float value, const String &mode);
+
   EspNowManager(ConfigManager &config, RuntimeState &state) : config(config), state(state) {}
   bool begin();
   bool initEspNow();
@@ -58,6 +60,7 @@ public:
   void onSent(const uint8_t *mac, esp_now_send_status_t status);
   void handleReceive(const uint8_t *mac, const uint8_t *data, int len);
   void handleSendStatus(const uint8_t *mac, esp_now_send_status_t status);
+  void setActuatorCommandHandler(ActuatorCommandHandler handler, void *context);
   String peersJson();
   void printPeers();
 
@@ -67,6 +70,8 @@ private:
   uint32_t sequenceCounter = 0;
   uint32_t lastRxLogMs = 0;
   uint32_t lastTxLogMs = 0;
+  ActuatorCommandHandler actuatorHandler = nullptr;
+  void *actuatorHandlerContext = nullptr;
 
   bool parseMac(const String &mac, uint8_t out[6]);
   String macToString(const uint8_t *mac);

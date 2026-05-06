@@ -17,6 +17,7 @@ public:
   String detectedDs18b20Json();
   String ds18b20StatusJson();
   bool assignDs18b20(const String &sensorId, const String &address);
+  void reloadConfiguration();
 
 private:
   ConfigManager &config;

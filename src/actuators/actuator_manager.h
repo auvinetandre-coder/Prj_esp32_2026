@@ -85,6 +85,7 @@ private:
   bool modeIsRobotDynPhase(const String &mode);
   void publishPower(const String &id, float percent);
   void setupSimulationOutputs();
+  static bool handleEspNowActuatorCommand(void *context, const String &actuatorId, const String &command, float value, const String &mode);
   void updateSimulationOutput(const String &id, float percent, uint32_t now);
   void allSimulationOutputsOff();
   void setupRobotDyn(JsonObject actuator);

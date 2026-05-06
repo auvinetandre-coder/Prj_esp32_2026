@@ -77,3 +77,9 @@ String SensorManager::ds18b20StatusJson() {
 bool SensorManager::assignDs18b20(const String &sensorId, const String &address) {
   return ds18b20.assignAddress(sensorId, address);
 }
+
+void SensorManager::reloadConfiguration() {
+  ds18b20.reloadConfig();
+  applyGridPowerSource();
+  state.addLog("Configuration capteurs rechargee");
+}

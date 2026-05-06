@@ -4,10 +4,10 @@ ActuatorManager *ActuatorManager::instance = nullptr;
 
 void ActuatorManager::begin() {
   instance = this;
+  espnow.setActuatorCommandHandler(&ActuatorManager::handleEspNowActuatorCommand, this);
   commandTimeoutMs = config.system()["router"]["commandTimeoutMs"] | 5000;
-  simulationMode = config.system()["simulationMode"] | false;
+  simulationMode = state.simulationMode;
   previousSimulationMode = simulationMode;
-  state.simulationMode = simulationMode;
   setupSimulationOutputs();
 
   for (JsonObject actuator : config.actuators()) {
@@ -33,8 +33,7 @@ void ActuatorManager::begin() {
 
 void ActuatorManager::loop(uint32_t now) {
   commandTimeoutMs = config.system()["router"]["commandTimeoutMs"] | commandTimeoutMs;
-  simulationMode = (config.system()["simulation"]["enabled"] | false) || (config.system()["simulationMode"] | false);
-  state.simulationMode = simulationMode;
+  simulationMode = state.simulationMode;
 
   if (previousSimulationMode && !simulationMode) {
     allOff();
@@ -186,6 +185,25 @@ void ActuatorManager::setPowerWatts(const String &actuatorId, float watts) {
   float maxPowerW = actuator["maxPowerW"] | 1000.0f;
   if (maxPowerW <= 0) maxPowerW = 1000.0f;
   setCommandPercent(actuatorId, constrain((watts / maxPowerW) * 100.0f, 0.0f, 100.0f));
+}
+
+bool ActuatorManager::handleEspNowActuatorCommand(void *context, const String &actuatorId, const String &cmd, float value, const String &mode) {
+  ActuatorManager *self = static_cast<ActuatorManager *>(context);
+  if (!self) return false;
+  JsonObject actuator;
+  if (!self->findActuator(actuatorId, actuator)) return false;
+  if (actuator["source"].as<String>() == "espnow") return false;
+
+  String normalizedMode = mode;
+  normalizedMode.trim();
+  if (normalizedMode.length()) {
+    String current = actuator["mode"] | "";
+    String normalized = self->normalizeMode(normalizedMode, actuator["type"] | "");
+    if (normalized.length() && normalized != "OFF" && normalized != current) {
+      actuator["mode"] = normalized;
+    }
+  }
+  return self->command(actuatorId, cmd.length() ? cmd : "setPower", value);
 }
 
 void ActuatorManager::setMode(const String &id, const String &mode) {

@@ -1,6 +1,32 @@
 #include "web_ui.h"
 #include <LittleFS.h>
+#include <WiFi.h>
 #include <esp_arduino_version.h>
+#include <esp_system.h>
+
+static const char *wifiQualityLabel(int rssi) {
+  if (rssi == 0) return "N/A";
+  if (rssi >= -55) return "Excellent";
+  if (rssi >= -67) return "Bon";
+  if (rssi >= -75) return "Moyen";
+  return "Faible";
+}
+
+static const char *resetReasonLabel(esp_reset_reason_t reason) {
+  switch (reason) {
+    case ESP_RST_POWERON: return "Power on";
+    case ESP_RST_EXT: return "Reset externe";
+    case ESP_RST_SW: return "Reset logiciel";
+    case ESP_RST_PANIC: return "Panic / crash";
+    case ESP_RST_INT_WDT: return "Watchdog interruption";
+    case ESP_RST_TASK_WDT: return "Watchdog tache";
+    case ESP_RST_WDT: return "Watchdog";
+    case ESP_RST_DEEPSLEEP: return "Sortie deep sleep";
+    case ESP_RST_BROWNOUT: return "Brownout";
+    case ESP_RST_SDIO: return "SDIO";
+    default: return "N/A";
+  }
+}
 
 void WebUi::begin() {
   routes();
@@ -22,7 +48,9 @@ void WebUi::routes() {
     if (!streamLittleFsFile("/www/app.js", "application/javascript; charset=utf-8")) server.send(404, "text/plain", "app.js absent");
   });
   server.on("/www/style.css", HTTP_GET, [this]() {
-    if (!streamLittleFsFile("/www/style.css", "text/css; charset=utf-8")) server.send(404, "text/plain", "style.css absent");
+    if (!streamLittleFsFile("/www/style.css", "text/css; charset=utf-8")) {
+      server.send(200, "text/css; charset=utf-8", fallbackStyleCss());
+    }
   });
   server.on("/full", HTTP_GET, [this]() {
     server.send(200, "text/html; charset=utf-8", F("<!DOCTYPE html><html lang=\"fr\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>Interface complete</title><style>body{background:#111827;color:#F9FAFB;font-family:system-ui;padding:18px}a{color:#93C5FD}</style></head><body><h1>Interface complete desactivee</h1><p>La page complete embarquee etait trop lourde pour rester fiable. Utilise <a href=\"/lite\">/lite</a> ou televerse la WebUI LittleFS puis ouvre <a href=\"/app\">/app</a>.</p></body></html>"));
@@ -35,15 +63,34 @@ void WebUi::routes() {
   server.on("/fs", HTTP_GET, [this]() { server.send(200, "text/html; charset=utf-8", fsPage()); });
   server.on("/api/status", HTTP_GET, [this]() {
     DynamicJsonDocument doc(6144);
-    state.toJson(doc.to<JsonObject>(), false);
+    JsonObject out = doc.to<JsonObject>();
+    state.toJson(out, false);
+    JsonObject device = config.device();
+    JsonObject system = config.system();
+    out["moduleName"] = device["deviceName"] | device["name"] | state.moduleName.c_str();
+    out["role"] = device["role"] | RuntimeState::roleToString(state.role);
+    out["firmwareVersion"] = device["firmwareVersion"] | "unknown";
+    out["simulationMode"] = state.simulationMode;
+    out["simulationType"] = system["simulation"]["mode"] | state.simulationType.c_str();
+    out["gridPowerSource"] = system["router"]["gridPowerSource"] | state.gridPowerSource.c_str();
     sendJson(doc);
   });
   server.on("/api/status-lite", HTTP_GET, [this]() { sendStatusLite(); });
   server.on("/api/diagnostic", HTTP_GET, [this]() {
     DynamicJsonDocument doc(8192);
-    state.toJson(doc.to<JsonObject>(), true);
+    JsonObject out = doc.to<JsonObject>();
+    state.toJson(out, true);
+    JsonObject device = config.device();
+    JsonObject system = config.system();
+    out["moduleName"] = device["deviceName"] | device["name"] | state.moduleName.c_str();
+    out["role"] = device["role"] | RuntimeState::roleToString(state.role);
+    out["firmwareVersion"] = device["firmwareVersion"] | "unknown";
+    out["simulationMode"] = state.simulationMode;
+    out["simulationType"] = system["simulation"]["mode"] | state.simulationType.c_str();
+    out["gridPowerSource"] = system["router"]["gridPowerSource"] | state.gridPowerSource.c_str();
     sendJson(doc);
   });
+  server.on("/api/system-info", HTTP_GET, [this]() { sendSystemInfo(); });
   server.on("/api/device", HTTP_GET, [this]() { sendConfig("device"); });
   server.on("/api/system", HTTP_GET, [this]() { sendConfig("system"); });
   server.on("/api/sensors", HTTP_GET, [this]() { sendConfig("sensors"); });
@@ -184,8 +231,48 @@ void WebUi::routes() {
   server.on("/api/ds18b20", HTTP_GET, [this]() { server.send(200, "application/json", sensors.detectedDs18b20Json()); });
   server.on("/api/ds18b20/status", HTTP_GET, [this]() { server.send(200, "application/json", sensors.ds18b20StatusJson()); });
   server.on("/api/ds18b20/assign", HTTP_POST, [this]() {
-    bool ok = sensors.assignDs18b20(server.arg("sensorId"), server.arg("address"));
-    server.send(ok ? 200 : 400, "application/json", ok ? "{\"ok\":true}" : "{\"ok\":false}");
+    String sensorId = server.arg("sensorId");
+    String address = server.arg("address");
+    String plain = server.arg("plain");
+
+    // Certains navigateurs/environnements ESP32 ne remplissent pas toujours
+    // server.arg() comme attendu. On accepte donc aussi JSON et corps formulaire.
+    if ((sensorId.length() == 0 || address.length() == 0) && plain.length()) {
+      DynamicJsonDocument doc(256);
+      if (!deserializeJson(doc, plain)) {
+        sensorId = doc["sensorId"] | sensorId;
+        address = doc["address"] | address;
+      } else {
+        int sPos = plain.indexOf("sensorId=");
+        int aPos = plain.indexOf("address=");
+        if (sPos >= 0) {
+          int end = plain.indexOf('&', sPos);
+          sensorId = plain.substring(sPos + 9, end >= 0 ? end : plain.length());
+        }
+        if (aPos >= 0) {
+          int end = plain.indexOf('&', aPos);
+          address = plain.substring(aPos + 8, end >= 0 ? end : plain.length());
+        }
+      }
+    }
+
+    sensorId.trim();
+    address.trim();
+    if (!sensorId.length() || !address.length()) {
+      server.send(400, "application/json", "{\"ok\":false,\"error\":\"sensorId ou address manquant\"}");
+      return;
+    }
+    bool ok = sensors.assignDs18b20(sensorId, address);
+    if (ok) {
+      server.send(200, "application/json", "{\"ok\":true}");
+    } else {
+      String error = config.lastError();
+      if (!error.length()) error = "sonde inconnue, adresse invalide ou sauvegarde LittleFS impossible";
+      DynamicJsonDocument out(384);
+      out["ok"] = false;
+      out["error"] = error;
+      sendJson(out);
+    }
   });
   server.on("/api/wifi/test", HTTP_POST, [this]() {
     bool ok = wifi.testConnection(server.arg("ssid"), server.arg("password"));
@@ -212,62 +299,170 @@ void WebUi::sendJson(DynamicJsonDocument &doc) {
 }
 
 void WebUi::sendStatusLite() {
-  String out;
-  out.reserve(1450);
-  out += F("{\"ok\":true");
-  out += F(",\"moduleName\":\""); out += state.moduleName; out += F("\"");
-  out += F(",\"deviceId\":\""); out += state.deviceId; out += F("\"");
-  out += F(",\"role\":\""); out += RuntimeState::roleToString(state.role); out += F("\"");
-  out += F(",\"firmwareVersion\":\""); out += (config.device()["firmwareVersion"] | "unknown"); out += F("\"");
-  out += F(",\"arduinoCore\":\""); out += String(ESP_ARDUINO_VERSION_MAJOR) + "." + String(ESP_ARDUINO_VERSION_MINOR) + "." + String(ESP_ARDUINO_VERSION_PATCH); out += F("\"");
-  out += F(",\"idfVersion\":\""); out += ESP.getSdkVersion(); out += F("\"");
-  out += F(",\"chipModel\":\""); out += ESP.getChipModel(); out += F("\"");
-  out += F(",\"chipRevision\":"); out += String(ESP.getChipRevision());
-  out += F(",\"cpuMhz\":"); out += String(ESP.getCpuFreqMHz());
-  out += F(",\"flashBytes\":"); out += String(ESP.getFlashChipSize());
-  out += F(",\"littleFsTotal\":"); out += String(LittleFS.totalBytes());
-  out += F(",\"littleFsUsed\":"); out += String(LittleFS.usedBytes());
-  out += F(",\"networkMode\":\""); out += state.networkMode; out += F("\"");
-  out += F(",\"localIp\":\""); out += state.localIp; out += F("\"");
-  out += F(",\"stationIp\":\""); out += state.stationIp; out += F("\"");
-  out += F(",\"apIp\":\""); out += state.apIp; out += F("\"");
-  out += F(",\"wifiConnected\":"); out += state.wifiConnected ? F("true") : F("false");
-  out += F(",\"wifiSsid\":\""); out += state.wifiSsid; out += F("\"");
-  out += F(",\"rssi\":"); out += String(state.rssi);
-  out += F(",\"safetyTripped\":"); out += state.safetyTripped ? F("true") : F("false");
-  out += F(",\"safetyLevel\":\""); out += state.safetyLevel; out += F("\"");
-  out += F(",\"safetyReason\":\""); out += state.safetyReason; out += F("\"");
-  out += F(",\"simulationMode\":"); out += state.simulationMode ? F("true") : F("false");
-  out += F(",\"simulationType\":\""); out += state.simulationType; out += F("\"");
-  out += F(",\"simulationRemainingMs\":"); out += String(state.simulationRemainingMs);
-  out += F(",\"jsyOnline\":"); out += state.jsyOnline ? F("true") : F("false");
-  out += F(",\"ticAvailable\":"); out += state.ticAvailable ? F("true") : F("false");
-  out += F(",\"ds18b20CriticalMissing\":"); out += state.ds18b20CriticalMissing ? F("true") : F("false");
-  out += F(",\"ds18b20Available\":[");
-  for (uint8_t i = 0; i < 3; i++) {
-    if (i) out += F(",");
-    out += state.ds18b20Available[i] ? F("true") : F("false");
+  DynamicJsonDocument doc(4096);
+  JsonObject out = doc.to<JsonObject>();
+  auto setNumber = [&out](const char *key, float value) {
+    if (isnan(value) || isinf(value)) out[key] = nullptr;
+    else out[key] = value;
+  };
+
+  out["ok"] = true;
+  JsonObject device = config.device();
+  JsonObject system = config.system();
+  out["moduleName"] = device["deviceName"] | device["name"] | state.moduleName.c_str();
+  out["deviceId"] = state.deviceId;
+  out["role"] = device["role"] | RuntimeState::roleToString(state.role);
+  out["firmwareVersion"] = device["firmwareVersion"] | "unknown";
+  out["arduinoCore"] = String(ESP_ARDUINO_VERSION_MAJOR) + "." + String(ESP_ARDUINO_VERSION_MINOR) + "." + String(ESP_ARDUINO_VERSION_PATCH);
+  out["idfVersion"] = ESP.getSdkVersion();
+  out["chipModel"] = ESP.getChipModel();
+  out["chipRevision"] = ESP.getChipRevision();
+  out["cpuMhz"] = ESP.getCpuFreqMHz();
+  out["flashBytes"] = ESP.getFlashChipSize();
+  out["littleFsTotal"] = LittleFS.totalBytes();
+  out["littleFsUsed"] = LittleFS.usedBytes();
+  out["networkMode"] = state.networkMode;
+  out["localIp"] = state.localIp;
+  out["stationIp"] = state.stationIp;
+  out["apIp"] = state.apIp;
+  out["wifiConnected"] = state.wifiConnected;
+  out["wifiSsid"] = state.wifiSsid;
+  out["rssi"] = state.rssi;
+  out["safetyTripped"] = state.safetyTripped;
+  out["safetyLevel"] = state.safetyLevel;
+  out["safetyReason"] = state.safetyReason;
+  out["simulationMode"] = state.simulationMode;
+  out["simulationType"] = system["simulation"]["mode"] | state.simulationType.c_str();
+  out["simulationRemainingMs"] = state.simulationRemainingMs;
+  out["jsyOnline"] = state.jsyOnline;
+  out["ticAvailable"] = state.ticAvailable;
+  out["ds18b20CriticalMissing"] = state.ds18b20CriticalMissing;
+  JsonArray dsAvailable = out["ds18b20Available"].to<JsonArray>();
+  for (uint8_t i = 0; i < 3; i++) dsAvailable.add(state.ds18b20Available[i]);
+  JsonArray ds = out["ds18b20"].to<JsonArray>();
+  uint8_t dsIndex = 0;
+  for (JsonObject cfg : config.sensorsDoc()["ds18b20"].as<JsonArray>()) {
+    if (dsIndex >= 3) break;
+    JsonObject item = ds.add<JsonObject>();
+    String fallbackId = String("sonde") + String(dsIndex + 1);
+    String id = cfg["id"] | fallbackId.c_str();
+    item["id"] = id;
+    item["name"] = cfg["name"] | id.c_str();
+    item["role"] = cfg["role"] | "autre";
+    item["enabled"] = cfg["enabled"] | true;
+    item["critical"] = cfg["critical"] | false;
+    item["available"] = state.ds18b20Available[dsIndex];
+    if (isnan(state.ds18b20Temps[dsIndex]) || isinf(state.ds18b20Temps[dsIndex])) item["temperatureC"] = nullptr;
+    else item["temperatureC"] = state.ds18b20Temps[dsIndex];
+    item["lastReadMs"] = state.ds18b20LastReadMs[dsIndex];
+    item["errorCount"] = state.ds18b20ErrorCount[dsIndex];
+    dsIndex++;
   }
-  out += F("]");
-  out += F(",\"gridPowerW\":"); appendJsonNumber(out, state.gridPowerW);
-  out += F(",\"gridPowerSource\":\""); out += state.gridPowerSource; out += F("\"");
-  out += F(",\"jsyGridPowerW\":"); appendJsonNumber(out, state.jsyGridPowerW);
-  out += F(",\"ticGridPowerW\":"); appendJsonNumber(out, state.ticGridPowerW);
-  out += F(",\"activePowerW1\":"); appendJsonNumber(out, state.activePowerW1);
-  out += F(",\"activePowerW2\":"); appendJsonNumber(out, state.activePowerW2);
-  out += F(",\"currentA1\":"); appendJsonNumber(out, state.currentA1);
-  out += F(",\"currentA2\":"); appendJsonNumber(out, state.currentA2);
-  out += F(",\"injectionW\":"); appendJsonNumber(out, state.injectionW);
-  out += F(",\"surplusW\":"); appendJsonNumber(out, state.surplusW);
-  out += F(",\"tankTopC\":"); appendJsonNumber(out, state.tankTopC);
-  out += F(",\"tankMiddleC\":"); appendJsonNumber(out, state.tankMiddleC);
-  out += F(",\"tankBottomC\":"); appendJsonNumber(out, state.tankBottomC);
-  out += F(",\"ssr1PowerPct\":"); appendJsonNumber(out, state.ssr1PowerPct);
-  out += F(",\"ssr2PowerPct\":"); appendJsonNumber(out, state.ssr2PowerPct);
-  out += F(",\"robotDynPowerPct\":"); appendJsonNumber(out, state.robotDynPowerPct);
-  out += F(",\"heapFree\":"); out += String(ESP.getFreeHeap());
-  out += F("}");
-  server.send(200, "application/json", out);
+  setNumber("gridPowerW", state.gridPowerW);
+  out["gridPowerSource"] = system["router"]["gridPowerSource"] | state.gridPowerSource.c_str();
+  setNumber("jsyGridPowerW", state.jsyGridPowerW);
+  setNumber("ticGridPowerW", state.ticGridPowerW);
+  setNumber("activePowerW1", state.activePowerW1);
+  setNumber("activePowerW2", state.activePowerW2);
+  setNumber("currentA1", state.currentA1);
+  setNumber("currentA2", state.currentA2);
+  setNumber("injectionW", state.injectionW);
+  setNumber("consumptionW", state.consumptionW);
+  setNumber("surplusW", state.surplusW);
+  setNumber("tankTopC", state.tankTopC);
+  setNumber("tankMiddleC", state.tankMiddleC);
+  setNumber("tankBottomC", state.tankBottomC);
+  setNumber("ssr1PowerPct", state.ssr1PowerPct);
+  setNumber("ssr2PowerPct", state.ssr2PowerPct);
+  setNumber("robotDynPowerPct", state.robotDynPowerPct);
+  out["heapFree"] = ESP.getFreeHeap();
+  sendJson(doc);
+}
+
+void WebUi::sendSystemInfo() {
+  DynamicJsonDocument doc(8192);
+  JsonObject out = doc.to<JsonObject>();
+  auto setNumber = [&out](const char *key, float value) {
+    if (isnan(value) || isinf(value)) out[key] = nullptr;
+    else out[key] = value;
+  };
+
+  JsonObject device = config.device();
+  JsonObject system = config.system();
+  JsonObject router = system["router"].as<JsonObject>();
+  const bool wifiOk = WiFi.status() == WL_CONNECTED;
+  const int rssi = wifiOk ? WiFi.RSSI() : 0;
+  const float outputPercent = max(max(state.ssr1PowerPct, state.ssr2PowerPct), state.robotDynPowerPct);
+  unsigned long lastMeasureMs = 0;
+  if (state.lastJsyReadMs > lastMeasureMs) lastMeasureMs = state.lastJsyReadMs;
+  if (state.lastTicReadMs > lastMeasureMs) lastMeasureMs = state.lastTicReadMs;
+  for (uint8_t i = 0; i < 3; i++) {
+    if (state.ds18b20LastReadMs[i] > lastMeasureMs) lastMeasureMs = state.ds18b20LastReadMs[i];
+  }
+  const unsigned long lastMeasureAge = lastMeasureMs ? (millis() - lastMeasureMs) / 1000UL : 4294967295UL;
+  float temperature = NAN;
+  for (uint8_t i = 0; i < 3; i++) {
+    if (state.ds18b20Available[i] && !isnan(state.ds18b20Temps[i]) && !isinf(state.ds18b20Temps[i])) {
+      temperature = state.ds18b20Temps[i];
+      break;
+    }
+  }
+
+  out["deviceName"] = device["deviceName"] | device["name"] | state.moduleName.c_str();
+  out["firmwareVersion"] = device["firmwareVersion"] | "N/A";
+  out["buildDate"] = String(__DATE__) + " " + String(__TIME__);
+  out["uptime"] = millis();
+  out["uptimeSeconds"] = millis() / 1000UL;
+  out["ip"] = wifiOk ? WiFi.localIP().toString() : (state.localIp.length() ? state.localIp : "N/A");
+  out["mac"] = WiFi.macAddress();
+  out["ssid"] = wifiOk ? WiFi.SSID() : (state.wifiSsid.length() ? state.wifiSsid : "N/A");
+  if (wifiOk) out["rssi"] = rssi;
+  else out["rssi"] = nullptr;
+  out["wifiQuality"] = wifiQualityLabel(rssi);
+  out["freeHeap"] = ESP.getFreeHeap();
+  out["minFreeHeap"] = ESP.getMinFreeHeap();
+  out["cpuFreqMHz"] = ESP.getCpuFreqMHz();
+  out["resetReason"] = resetReasonLabel(esp_reset_reason());
+  out["networkMode"] = state.networkMode.length() ? state.networkMode : "N/A";
+  out["stationIp"] = state.stationIp.length() ? state.stationIp : "N/A";
+  out["apIp"] = state.apIp.length() ? state.apIp : "N/A";
+  out["role"] = RuntimeState::roleToString(state.role);
+  out["safetyLevel"] = state.safetyLevel.length() ? state.safetyLevel : "N/A";
+  out["safetyReason"] = state.safetyReason.length() ? state.safetyReason : "N/A";
+  out["simulationMode"] = state.simulationMode;
+
+  JsonObject storage = out["storage"].to<JsonObject>();
+  storage["type"] = "LittleFS";
+  storage["total"] = LittleFS.totalBytes();
+  storage["used"] = LittleFS.usedBytes();
+  storage["status"] = state.littleFsOk || LittleFS.totalBytes() > 0 ? "OK" : "Erreur";
+
+  JsonObject services = out["services"].to<JsonObject>();
+  services["wifi"] = wifiOk ? "OK" : (state.networkMode == "AP" || state.networkMode == "AP_STA" ? "Attention" : "Erreur");
+  services["ntp"] = "N/A";
+  services["mqtt"] = "N/A";
+  bool anySensorOk = state.jsyOnline || state.ticAvailable;
+  for (uint8_t i = 0; i < 3; i++) anySensorOk = anySensorOk || state.ds18b20Available[i];
+  services["sensors"] = anySensorOk ? "OK" : "Attention";
+  services["espnow"] = state.espNowReady ? "OK" : "N/A";
+  services["safety"] = state.safetyTripped ? "Erreur" : "OK";
+
+  JsonObject solar = out["solarRouter"].to<JsonObject>();
+  solar["mode"] = router["mode"] | "Auto";
+  setNumber("power", state.gridPowerW);
+  solar["power"] = out["power"];
+  out.remove("power");
+  solar["outputPercent"] = outputPercent;
+  if (isnan(temperature) || isinf(temperature)) solar["temperature"] = "N/A";
+  else solar["temperature"] = temperature;
+  if (lastMeasureAge == 4294967295UL) solar["lastMeasureAge"] = "N/A";
+  else solar["lastMeasureAge"] = lastMeasureAge;
+  solar["ssr1Percent"] = state.ssr1PowerPct;
+  solar["ssr2Percent"] = state.ssr2PowerPct;
+  solar["robotDynPercent"] = state.robotDynPowerPct;
+  solar["gridPowerSource"] = router["gridPowerSource"] | state.gridPowerSource.c_str();
+
+  sendJson(doc);
 }
 
 void WebUi::appendJsonNumber(String &out, float value, uint8_t decimals) {
@@ -279,9 +474,32 @@ bool WebUi::streamLittleFsFile(const char *path, const char *contentType) {
   if (!LittleFS.exists(path)) return false;
   File file = LittleFS.open(path, "r");
   if (!file) return false;
+  if (file.size() == 0) {
+    file.close();
+    return false;
+  }
   server.streamFile(file, contentType);
   file.close();
   return true;
+}
+
+String WebUi::fallbackStyleCss() {
+  String css;
+  css.reserve(5200);
+  css += F("body{margin:0;background:#070708;color:#f9fafb;font-family:system-ui,Segoe UI,Arial,sans-serif}");
+  css += F("nav{position:fixed;left:0;top:0;bottom:0;width:260px;box-sizing:border-box;display:flex;flex-direction:column;gap:8px;padding:18px 14px;background:#161719;border-right:1px solid #26272b;z-index:10}");
+  css += F(".brand{display:block;margin:0 0 22px;color:#f6c74a;font-size:28px;font-weight:900;line-height:1.25}.brand span{color:#f9fafb}.brand small{display:block;margin-top:2px;color:#b88f31;font-size:10px;font-weight:800;text-transform:uppercase}");
+  css += F("nav button,nav a{width:100%;box-sizing:border-box;text-align:left;display:flex;align-items:center;gap:8px;border:0;background:transparent;color:#e5e7eb;font-size:14px;font-weight:650;min-height:36px;text-decoration:none;padding:9px 11px;border-radius:8px}nav button.active{background:#26272b;color:#fff}.navIcon{display:none}.navSpacer{flex:1}");
+  css += F(".navStatus{display:flex;align-items:center;gap:10px;min-height:40px;padding:0 12px;border:1px solid #26272b;border-radius:8px;background:#111214;color:#d1d5db;font-weight:700}.navStatus i{width:9px;height:9px;border-radius:999px;background:#9ca3af}.navStatus.ok i{background:#22c55e}.navStatus.warn i{background:#ff9800}.navStatus.bad i{background:#f44336}");
+  css += F("main{margin-left:260px;padding:0 18px 18px;min-height:100vh}button,a{color:#f9fafb;background:#1f2937;border:1px solid #374151;border-radius:8px;padding:9px 11px;text-decoration:none}button.danger{border-color:#f44336;background:#3b1111}h1,h2{margin-top:0}");
+  css += F(".yasTopbar{min-height:74px;display:flex;align-items:center;justify-content:space-between;gap:18px;padding:20px 4px 12px;border-bottom:1px solid #1f2024}.yasTopbar span{color:#9ca3af;font-size:13px;font-weight:800}.yasTopbar h1{margin:6px 0 0;font-size:32px;line-height:1.1}.topPills{display:flex;gap:8px;flex-wrap:wrap}.pill{background:#1b1c20;border:1px solid #2a2b30;border-radius:999px;padding:8px 10px;color:#d1d5db}.pill.ok{color:#22c55e}.pill.warn{color:#ff9800}.pill.bad{color:#f44336}.pill.info{color:#74c7f0}.pill.muted{color:#9ca3af}");
+  css += F(".updateStrip,.panel,.wideChart,.yasCard,.controlCard{background:#1b1c20;border:1px solid #2a2b30;border-radius:8px}.updateStrip{display:flex;justify-content:space-between;align-items:center;gap:16px;margin:16px 0 24px;padding:18px 20px}.dashSectionTitle{margin:26px 0 12px;padding-bottom:12px;border-bottom:1px solid #1f2024}.dashSectionTitle h2{font-size:20px}");
+  css += F(".controlsGrid,.yasCardGrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:14px}.yasCardGrid.gridTwo{grid-template-columns:repeat(auto-fit,minmax(300px,1fr))}.yasCard,.controlCard{min-height:68px;display:flex;align-items:center;gap:16px;padding:14px}.roundIcon{width:48px;height:48px;border-radius:999px;display:inline-flex;align-items:center;justify-content:center;background:rgba(255,193,7,.16);color:#ffc107;font-weight:900}.ok .roundIcon{background:rgba(34,197,94,.2);color:#22c55e}.info .roundIcon{background:rgba(33,150,243,.18);color:#74c7f0}.warn .roundIcon{background:rgba(255,152,0,.18);color:#ff9800}.bad .roundIcon{background:rgba(244,67,54,.18);color:#ff6b7a}.muted .roundIcon{background:rgba(156,163,175,.12);color:#9ca3af}");
+  css += F(".yasCard b,.controlCard b{display:block;color:#d1d5db;font-size:13px}.yasCard strong,.controlCard strong{display:block;margin-top:4px;font-size:18px}.yasCard small,.controlCard small{display:block;margin-top:3px;color:#9ca3af;font-size:12px}.solar strong,.solar{color:#22c55e}.consume strong,.consume{color:#ff9800}.sun strong,.sun{color:#ffc107}.heat strong,.heat{color:#f97316}.bad strong,.bad{color:#ff6b7a}.ok strong,.ok{color:#22c55e}");
+  css += F(".wideCharts{display:grid;gap:16px}.wideChart{padding:16px}.wideChartHead{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px}.wideChartHead b{font-size:14px}.wideChart small{display:block;margin-top:8px;color:#9ca3af}.chartWithScale{display:grid;grid-template-columns:72px 1fr;gap:10px;align-items:stretch}.chartScale{display:flex;flex-direction:column;justify-content:space-between;color:#7b808a;font-size:11px;text-align:right}.sparkline{width:100%;height:150px;background:#191a1e;border-radius:6px;overflow:hidden}.sparkline .grid line{stroke:#2a2b30;stroke-width:.6}.sparkline polyline{fill:none;stroke:#3b82f6;stroke-width:2}.sparkline .dots circle{fill:#3b82f6;stroke:#0b1220;stroke-width:.5}.zeroLine{stroke:#4b5563!important}");
+  css += F(".banner,.sim,.warnBox,.pendingBox{margin:10px 0;padding:12px;border-radius:8px;border:1px solid #7f1d1d;background:#3b1111;color:#fecaca}.sim{border-color:#92400e;background:#3a2608;color:#fde68a}.help,.muted,small{color:#9ca3af}.toolbar{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}.settingsGrid,.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:12px}.card,.miniState{background:#1f2937;border:1px solid #374151;border-radius:8px;padding:12px}table{width:100%;border-collapse:collapse;background:#1f2937}td,th{padding:8px;border-bottom:1px solid #374151;text-align:left}.badge{display:inline-block;border-radius:999px;padding:3px 8px;background:#374151}.badge.ok{background:#14532d;color:#bbf7d0}.badge.bad{background:#7f1d1d;color:#fecaca}.badge.warn{background:#78350f;color:#fde68a}.badge.muted{background:#374151;color:#d1d5db}");
+  css += F("@media(max-width:760px){nav{position:static;width:auto;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));padding:10px}.brand{grid-column:1/-1;margin-bottom:4px}main{margin-left:0;padding:12px}.yasTopbar{display:block}.controlsGrid,.yasCardGrid,.yasCardGrid.gridTwo{grid-template-columns:1fr}table{display:block;overflow-x:auto}}");
+  return css;
 }
 
 void WebUi::sendFsListJson() {
@@ -345,9 +563,17 @@ void WebUi::saveConfig(const char *name, const char *path) {
     }
   }
   if (strcmp(name, "sensors") == 0 || strcmp(name, "actuators") == 0) {
-    DynamicJsonDocument check(12288);
-    if (deserializeJson(check, server.arg("plain"))) {
-      server.send(400, "application/json", "{\"error\":\"JSON invalide\"}");
+    DynamicJsonDocument check(24576);
+    DeserializationError err = deserializeJson(check, server.arg("plain"));
+    if (err) {
+      DynamicJsonDocument out(384);
+      out["ok"] = false;
+      out["error"] = String("JSON invalide: ") + err.c_str();
+      sendJson(out);
+      return;
+    }
+    if (check.overflowed()) {
+      server.send(400, "application/json", "{\"ok\":false,\"error\":\"JSON trop volumineux pour validation\"}");
       return;
     }
     JsonArray arr = strcmp(name, "sensors") == 0 ? check["sensors"].as<JsonArray>() : check["actuators"].as<JsonArray>();
@@ -355,7 +581,7 @@ void WebUi::saveConfig(const char *name, const char *path) {
       int pins[] = {item["gpio"] | -1, item["rx"] | -1, item["tx"] | -1, item["zeroCross"] | -1, item["control"] | -1};
       for (uint8_t i = 0; i < 5; i++) {
         if (pins[i] != -1 && (pins[i] < 0 || pins[i] > 39)) {
-          server.send(400, "application/json", "{\"error\":\"GPIO invalide\"}");
+          server.send(400, "application/json", "{\"ok\":false,\"error\":\"GPIO invalide\"}");
           return;
         }
       }
@@ -363,7 +589,20 @@ void WebUi::saveConfig(const char *name, const char *path) {
   }
   bool ok = config.replaceFile(path, server.arg("plain"));
   if (ok && strcmp(name, "device") == 0) state.begin(config);
-  server.send(ok ? 200 : 400, "application/json", ok ? "{\"ok\":true}" : "{\"ok\":false}");
+  if (ok && strcmp(name, "system") == 0) {
+    state.simulationType = config.system()["simulation"]["mode"] | state.simulationType.c_str();
+    state.simulationScenario = config.system()["simulation"]["scenario"] | state.simulationScenario.c_str();
+    state.gridPowerSource = config.system()["router"]["gridPowerSource"] | state.gridPowerSource.c_str();
+  }
+  if (ok && strcmp(name, "sensors") == 0) sensors.reloadConfiguration();
+  if (ok) {
+    server.send(200, "application/json", "{\"ok\":true}");
+  } else {
+    DynamicJsonDocument out(512);
+    out["ok"] = false;
+    out["error"] = config.lastError().length() ? config.lastError() : "Sauvegarde refusee";
+    sendJson(out);
+  }
 }
 
 String WebUi::homePage() {
@@ -383,7 +622,7 @@ String WebUi::homePage() {
   html += state.stationIp;
   html += F("</p><p>IP AP: ");
   html += state.apIp;
-  html += F("</p><p class=\"warn\">Si tu es connecte au SSID AP_SSID_A_CONFIGURER, utilise http://192.168.4.1/</p></div>");
+  html += F("</p><p class=\"warn\">Si tu es connecte au point d'acces local RouteurSolaire_Config, utilise http://192.168.4.1/</p></div>");
   html += F("</body></html>");
   return html;
 }
@@ -416,7 +655,7 @@ async function simOff(){await fetch('/api/simulation/disable',{method:'POST'});a
 async function simRand(){await fetch('/api/simulation/randomize',{method:'POST'});await render()}
 async function simValues(){let body={jsy:{available:true,gridPowerW:Number(q('#g').value),voltageV:Number(q('#vlt').value),currentA:Number(q('#cur').value),powerFactor:.96,frequencyHz:50},tic:{available:true,apparentPowerVA:900,currentA:Number(q('#cur').value),tariff:'BASE'},ds18b20:[{id:'sonde1',available:true,temperatureC:Number(q('#t1').value)},{id:'sonde2',available:true,temperatureC:Number(q('#t2').value)},{id:'sonde3',available:true,temperatureC:Number(q('#t3').value)}]};await fetch('/api/simulation/values',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});await render()}
 function diag(){let ev=status.events||[];return dash()+'<h3>Evenements</h3><table><tr><th>ms</th><th>Niveau</th><th>Code</th><th>Message</th></tr>'+ev.map(function(e){return '<tr><td>'+e.timestampMs+'</td><td>'+esc(e.level)+'</td><td>'+esc(e.code)+'</td><td>'+esc(e.message)+'</td></tr>'}).join('')+'</table>'}
-function wifi(){return '<div class="grid">'+card('Mode',status.networkMode,'')+card('WiFi connecte',status.wifiConnected,'')+card('SSID',status.wifiSsid,'')+card('RSSI',status.rssi,'')+card('IP box',status.stationIp,'')+card('IP AP',status.apIp,'')+'</div><p>Si tu es connecte au SSID AP_SSID_A_CONFIGURER, ouvre http://192.168.4.1</p>'}
+function wifi(){return '<div class="grid">'+card('Mode',status.networkMode,'')+card('WiFi connecte',status.wifiConnected,'')+card('SSID',status.wifiSsid,'')+card('RSSI',status.rssi,'')+card('IP box',status.stationIp,'')+card('IP AP',status.apIp,'')+'</div><p>Si tu es connecte au point d\\'acces local RouteurSolaire_Config, ouvre http://192.168.4.1</p>'}
 setInterval(function(){if(current==='dash')render()},5000);render();
 </script></body></html>
 )HTML";
@@ -500,7 +739,7 @@ function applySensorForm(){let i=Number(q('#sensorIndex').value);let s=readSenso
 function toggleSensor(i){cache.sensors.sensors[i].enabled=cache.sensors.sensors[i].enabled===false;renderSensorsPage(false)}
 function copySensor(i){let s=JSON.parse(JSON.stringify(cache.sensors.sensors[i]));s.id=s.id+'_copy';s.name=s.name+' copie';cache.sensors.sensors.push(s);renderSensorsPage(false)}
 function deleteSensor(i){if(confirm('Supprimer ce capteur ?')){cache.sensors.sensors.splice(i,1);renderSensorsPage(false)}}
-async function saveSensorsUi(){await fetch('/api/sensors',{method:'POST',body:JSON.stringify(cache.sensors)});alert('Capteurs sauvegardes')}
+async function saveSensorsUi(){let r=await fetch('/api/sensors',{method:'POST',body:JSON.stringify(cache.sensors)});alert(r.ok?'Capteurs sauvegardes':'Sauvegarde refusee: '+await r.text())}
 function actuatorLive(a){if(a.id==='ssr1_water_heater')return `${fmt(status.ssr1PowerPct)} %`;if(a.id==='ssr2_aux')return `${fmt(status.ssr2PowerPct)} %`;if(a.id==='robotdyn_triac')return `${fmt(status.robotDynPowerPct)} %`;return a.enabled!==false?'pret':'off'}
 function actuatorPins(a){let p=[];if(a.gpio!==undefined)p.push('GPIO '+a.gpio);if(a.zeroCross!==undefined)p.push('ZC '+a.zeroCross);if(a.control!==undefined)p.push('CTRL '+a.control);if(a.mac)p.push(a.mac);return p.length?p.map(x=>`<span class="sensorBadge">${esc(x)}</span>`).join(' '):'<span class="small">-</span>'}
 function actuatorLocked(a){return status.safetyTripped&&a.critical}
@@ -523,15 +762,15 @@ const operators=['>','<','>=','<=','==','!='];
 const ruleSources=[
 {id:'JSY-MK-194T',label:'JSY-MK-194T',measures:[['gridPowerW','number','W'],['injectionW','number','W'],['consumptionW','number','W'],['surplusW','number','W'],['voltageV','number','V'],['currentA','number','A'],['activePowerW','number','W'],['activePowerW1','number','W'],['activePowerW2','number','W'],['powerFactor','number',''],['frequencyHz','number','Hz'],['available','boolean','']]},
 {id:'TIC Linky',label:'TIC Linky',measures:[['apparentPowerVA','number','VA'],['currentA','number','A'],['tariff','text',''],['available','boolean',''],['lastValidReadAgeMs','number','ms']]},
-{id:'DS18B20_TOP',label:'sonde1',measures:[['temperatureC','number','C'],['available','boolean',''],['lastValidReadAgeMs','number','ms']]},
-{id:'DS18B20_MIDDLE',label:'sonde2',measures:[['temperatureC','number','C'],['available','boolean',''],['lastValidReadAgeMs','number','ms']]},
-{id:'DS18B20_BOTTOM',label:'sonde3',measures:[['temperatureC','number','C'],['available','boolean',''],['lastValidReadAgeMs','number','ms']]},
+{id:'sonde1',label:'sonde1',measures:[['temperatureC','number','C'],['available','boolean',''],['lastValidReadAgeMs','number','ms']]},
+{id:'sonde2',label:'sonde2',measures:[['temperatureC','number','C'],['available','boolean',''],['lastValidReadAgeMs','number','ms']]},
+{id:'sonde3',label:'sonde3',measures:[['temperatureC','number','C'],['available','boolean',''],['lastValidReadAgeMs','number','ms']]},
 {id:'Systeme',label:'Systeme',measures:[['simulationMode','boolean',''],['wifiStatus','enum','', ['CONNECTED','AP_FALLBACK','DISCONNECTED']],['uptimeMs','number','ms'],['freeHeap','number','B'],['role','enum','',['MASTER','BACKUP','NODE_SENSOR','NODE_ACTUATOR','NODE_MIXED']]]},
 {id:'Securite',label:'Securite',measures:[['safetyLevel','enum','',['OK','WARNING','DEGRADED','CRITICAL']],['safetyReason','text',''],['isCritical','boolean','']]},
 {id:'Redondance',label:'Redondance',measures:[['activeRole','enum','',['MASTER','BACKUP','NODE_SENSOR','NODE_ACTUATOR','NODE_MIXED']],['isActiveMaster','boolean',''],['activeMasterId','text',''],['epoch','number',''],['lastHeartbeatAgeMs','number','ms']]}
 ];
 function sourceDef(id){return ruleSources.find(s=>s.id===id)||ruleSources[0]}
-function sourceLabel(s){let ds=cache.sensors?.ds18b20||[];if(s.id==='DS18B20_TOP')return `sonde1 - ${(ds[0]?.role)||'role non defini'}`;if(s.id==='DS18B20_MIDDLE')return `sonde2 - ${(ds[1]?.role)||'role non defini'}`;if(s.id==='DS18B20_BOTTOM')return `sonde3 - ${(ds[2]?.role)||'role non defini'}`;return s.label}
+function sourceLabel(s){let ds=cache.sensors?.ds18b20||[];if(s.id==='sonde1')return `sonde1 - ${(ds[0]?.role)||'role non defini'}`;if(s.id==='sonde2')return `sonde2 - ${(ds[1]?.role)||'role non defini'}`;if(s.id==='sonde3')return `sonde3 - ${(ds[2]?.role)||'role non defini'}`;return s.label}
 function measureDef(source,measure){let s=sourceDef(source);return s.measures.find(m=>m[0]===measure)||s.measures[0]}
 function opsForType(t){return t==='number'?['>','>=','<','<=','==','!=']:['==','!=']}
 function condText(c){return `<span class="ruleLine"><b>${esc(c.source||c.sensorId)}</b> ${esc(c.measure||c.variable)} ${esc(c.operator)} ${esc(c.value)} ${esc(c.unit||'')}</span>`}

@@ -10,7 +10,7 @@ if not exist "%ARDUINO_CLI%" (
 )
 
 echo Compilation RouteurSolaireESP32...
-"%ARDUINO_CLI%" compile --fqbn esp32:esp32:esp32 .
+"%ARDUINO_CLI%" compile --fqbn esp32:esp32:esp32:PartitionScheme=no_ota .
 echo.
 if errorlevel 1 (
   echo Compilation en erreur.

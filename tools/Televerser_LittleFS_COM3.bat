@@ -3,16 +3,18 @@ setlocal
 
 cd /d "%~dp0\.."
 
-set PORT=COM3
+set PORT=COM4
 set DATA_DIR=%CD%\data
 set IMAGE=%CD%\RouteurSolaireESP32_LittleFS.bin
 set MKLITTLEFS=C:\Users\andre\AppData\Local\Arduino15\packages\esp32\tools\mklittlefs\4.0.2-db0513a\mklittlefs.exe
 set ESPTOOL=C:\Users\andre\AppData\Local\Arduino15\packages\esp32\tools\esptool_py\5.2.0\esptool.exe
 
-rem Partition LittleFS reellement montee par le firmware actuel.
-rem Verifiee via /api/fs : totalBytes = 131072 = 0x20000.
-set FS_OFFSET=0x3D0000
-set FS_SIZE=0x20000
+rem Partition Arduino IDE: "No OTA (2MB APP / 2MB SPIFFS)".
+rem Table ESP32 Arduino 3.3.8 no_ota.csv:
+rem app0   : offset 0x10000, taille 0x200000
+rem spiffs : offset 0x210000, taille 0x1E0000
+set FS_OFFSET=0x210000
+set FS_SIZE=0x1E0000
 set BLOCK_SIZE=4096
 set PAGE_SIZE=256
 

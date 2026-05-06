@@ -41,8 +41,10 @@ private:
   void sendConfig(const char *name);
   void saveConfig(const char *name, const char *path);
   void sendStatusLite();
+  void sendSystemInfo();
   void appendJsonNumber(String &out, float value, uint8_t decimals = 1);
   bool streamLittleFsFile(const char *path, const char *contentType);
+  String fallbackStyleCss();
   void sendFsListJson();
   void appendFsListJson(String &out, const char *dirname);
   String fsPage();

@@ -1,22 +1,40 @@
 #include "wifi_manager.h"
 
+static const char *DEFAULT_AP_SSID = "RouteurSolaire_Config";
+static const char *DEFAULT_AP_PASSWORD = "routeur1234";
+
+static bool isWifiPlaceholder(const String &value) {
+  if (value.length() == 0) return true;
+  String text = value;
+  text.toUpperCase();
+  return text.indexOf("A_CONFIGURER") >= 0 || text.indexOf("ACONFIGURER") >= 0;
+}
+
 void SolarWiFiManager::begin() {
   JsonObject sys = config.system();
-  const char *ssid = sys["wifi"]["ssid"] | "WIFI_SSID_A_CONFIGURER";
-  const char *password = sys["wifi"]["password"] | "WIFI_PASSWORD_A_CONFIGURER";
+  String ssid = sys["wifi"]["ssid"] | sys["wifiSsid"] | "";
+  String password = sys["wifi"]["password"] | sys["wifiPassword"] | "";
   bool keepAp = sys["wifi"]["keepFallbackApAlwaysOn"] | true;
+  uint32_t connectTimeoutMs = sys["wifi"]["connectTimeoutMs"] | sys["wifiConnectTimeoutMs"] | 8000UL;
+  connectTimeoutMs = constrain(connectTimeoutMs, 1000UL, 20000UL);
   state.wifiSsid = ssid;
+
+  if (isWifiPlaceholder(ssid)) {
+    Serial.println(F("WiFi maison non configure, demarrage AP local."));
+    startFallbackAp();
+    return;
+  }
 
   WiFi.mode(keepAp ? WIFI_AP_STA : WIFI_STA);
   if (keepAp) startLocalAp();
-  WiFi.begin(ssid, password);
+  WiFi.begin(ssid.c_str(), password.c_str());
   state.networkMode = "STA_CONNECTING";
   state.addLog("WiFi connection attempt started");
   Serial.print(F("WiFi: connecting to SSID "));
   Serial.println(ssid);
 
   const uint32_t started = millis();
-  while (millis() - started < 20000) {
+  while (millis() - started < connectTimeoutMs) {
     if (WiFi.status() == WL_CONNECTED) {
       state.wifiConnected = true;
       state.networkMode = keepAp ? "AP_STA" : "STATION";
@@ -35,7 +53,9 @@ void SolarWiFiManager::begin() {
     }
     yield();
   }
-  Serial.println(F("WiFi connection failed after 20 seconds"));
+  Serial.print(F("WiFi connection failed after "));
+  Serial.print(connectTimeoutMs);
+  Serial.println(F(" ms"));
   startFallbackAp();
 }
 
@@ -59,8 +79,8 @@ void SolarWiFiManager::loop() {
 
 bool SolarWiFiManager::testConnection(const String &ssid, const String &password, uint32_t timeoutMs) {
   String previousMode = state.networkMode;
-  String previousSsid = config.system()["wifi"]["ssid"] | "WIFI_SSID_A_CONFIGURER";
-  String previousPassword = config.system()["wifi"]["password"] | "WIFI_PASSWORD_A_CONFIGURER";
+  String previousSsid = config.system()["wifi"]["ssid"] | config.system()["wifiSsid"] | "";
+  String previousPassword = config.system()["wifi"]["password"] | config.system()["wifiPassword"] | "";
   bool keepAp = config.system()["wifi"]["keepFallbackApAlwaysOn"] | true;
   WiFi.mode(keepAp ? WIFI_AP_STA : WIFI_STA);
   if (keepAp) startLocalAp();
@@ -101,15 +121,19 @@ void SolarWiFiManager::startFallbackAp() {
 
 void SolarWiFiManager::startLocalAp() {
   JsonObject ap = config.system()["fallbackAp"];
+  String ssid = ap["ssid"] | config.system()["fallbackApSsid"] | DEFAULT_AP_SSID;
+  String password = ap["password"] | config.system()["fallbackApPassword"] | DEFAULT_AP_PASSWORD;
+  if (isWifiPlaceholder(ssid)) ssid = DEFAULT_AP_SSID;
+  if (isWifiPlaceholder(password) || password.length() < 8) password = DEFAULT_AP_PASSWORD;
   IPAddress ip(192, 168, 4, 1);
   IPAddress gateway(192, 168, 4, 1);
   IPAddress subnet(255, 255, 255, 0);
   WiFi.mode(WIFI_AP_STA);
   WiFi.softAPConfig(ip, gateway, subnet);
-  WiFi.softAP(ap["ssid"] | "AP_SSID_A_CONFIGURER", ap["password"] | "AP_PASSWORD_A_CONFIGURER");
+  WiFi.softAP(ssid.c_str(), password.c_str());
   state.apIp = WiFi.softAPIP().toString();
   Serial.print(F("Local AP active. SSID: "));
-  Serial.println(ap["ssid"] | "AP_SSID_A_CONFIGURER");
+  Serial.println(ssid);
   Serial.print(F("Local AP IP: "));
   Serial.println(state.apIp);
 }

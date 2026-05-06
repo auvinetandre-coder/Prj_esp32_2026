@@ -21,6 +21,8 @@ public:
   bool resetToDefaults();
   void printConfigSummary();
   bool replaceFile(const char *path, const String &json);
+  String lastError() const { return configLastError; }
+  void setLastError(const String &error) { configLastError = error; }
 
   JsonObject device();
   JsonObject system();
@@ -36,14 +38,16 @@ public:
 
 private:
   DynamicJsonDocument deviceConfig{2048};
-  DynamicJsonDocument systemConfig{4096};
-  DynamicJsonDocument sensorsConfig{8192};
-  DynamicJsonDocument actuatorsConfig{6144};
-  DynamicJsonDocument rulesConfig{8192};
+  DynamicJsonDocument systemConfig{6144};
+  DynamicJsonDocument sensorsConfig{16384};
+  DynamicJsonDocument actuatorsConfig{8192};
+  DynamicJsonDocument rulesConfig{12288};
+  String configLastError = "";
 
   bool loadOrDefault(const char *path, DynamicJsonDocument &doc, void (ConfigManager::*defaults)());
   bool saveDoc(const char *path, DynamicJsonDocument &doc);
   bool validateDoc(const char *path, DynamicJsonDocument &doc);
+  bool normalizeSystemConfig();
   void backupCorruptFile(const char *path);
   void ensureConfigDir();
   void defaultDevice();

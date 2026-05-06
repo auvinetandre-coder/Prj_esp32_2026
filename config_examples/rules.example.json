@@ -42,7 +42,7 @@
       "logic": "OR",
       "conditions": [
         {
-          "source": "DS18B20_TOP",
+          "source": "sonde1",
           "measure": "temperatureC",
           "type": "number",
           "operator": ">=",

@@ -26,6 +26,8 @@ private:
   RuntimeState &state;
   uint32_t lastUpdateMs = 0;
   uint32_t enabledAtMs = 0;
+  uint32_t expiresAtMs = 0;
+  bool runtimeEnabled = false;
   static const uint32_t SIMULATION_TIMEOUT_MS = 300000UL;
 
   JsonObject simulationConfig();
