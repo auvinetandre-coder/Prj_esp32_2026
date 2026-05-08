@@ -34,6 +34,8 @@ public:
   float getGridPowerW() const { return reading.gridPowerW; }
   float getInjectionW() const { return reading.injectionW; }
   float getSurplusW() const { return reading.surplusW; }
+  void reloadConfig();
+  void stop();
   void printStatus();
 
 private:
@@ -42,11 +44,13 @@ private:
   JSYMK194TReading reading;
 
   uint8_t modbusAddress = 1;
-  uint8_t rxPin = 16;
-  uint8_t txPin = 17;
+  uint8_t rxPin = 26;
+  uint8_t txPin = 27;
+  int8_t rs485DirPin = -1;
   uint32_t baudrate = 4800;
   uint32_t readIntervalMs = 500;
   uint32_t timeoutMs = 400;
+  bool enabled = true;
   float minInjectionStartW = 200;
   float stopBelowInjectionW = 80;
   bool injectionActive = false;
@@ -58,6 +62,8 @@ private:
   uint32_t lastRequestMs = 0;
   uint32_t lastErrorLogMs = 0;
 
+  void configureFromJson();
+  void beginSerial();
   void sendRequest();
   uint16_t crc16(const uint8_t *data, uint8_t len);
   uint32_t readU32(const uint8_t *data);

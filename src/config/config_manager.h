@@ -48,6 +48,8 @@ private:
   bool saveDoc(const char *path, DynamicJsonDocument &doc);
   bool validateDoc(const char *path, DynamicJsonDocument &doc);
   bool normalizeSystemConfig();
+  bool normalizeSensorsConfig();
+  bool normalizeActuatorsConfig();
   void backupCorruptFile(const char *path);
   void ensureConfigDir();
   void defaultDevice();

@@ -2,8 +2,7 @@
 
 void SensorManager::begin() {
   ds18b20.begin();
-  jsy.begin();
-  tic.begin();
+  startMetersForCurrentSource();
   state.addLog("Sensors initialized");
 }
 
@@ -14,15 +13,72 @@ void SensorManager::loop(uint32_t now) {
     return;
   }
 
-  jsy.loop(now);
-  tic.loop(now);
+  startMetersForCurrentSource();
+  if (jsyStarted) jsy.loop(now);
+  if (ticStarted) tic.loop(now);
   ds18b20.loop(now);
   applyGridPowerSource();
 }
 
-void SensorManager::applyGridPowerSource() {
+String SensorManager::configuredGridPowerSource() {
   String source = config.system()["router"]["gridPowerSource"] | "JSY";
   source.toUpperCase();
+  if (source != "TIC" && source != "AUTO") source = "JSY";
+  return source;
+}
+
+bool SensorManager::meterPinsConflict() {
+  int jsyRx = -1;
+  int jsyTx = -1;
+  int ticRx = -1;
+
+  for (JsonObject sensor : config.sensors()) {
+    String id = sensor["id"] | "";
+    String type = sensor["type"] | "";
+    if (id == "jsy_grid" || type == "JSY-MK-194T") {
+      jsyRx = sensor["rx"] | 26;
+      jsyTx = sensor["tx"] | 27;
+    } else if (id == "tic_linky" || type == "TIC Linky") {
+      ticRx = sensor["rx"] | 26;
+    }
+  }
+
+  if (ticRx < 0 || jsyRx < 0) return false;
+  return ticRx == jsyRx || ticRx == jsyTx;
+}
+
+void SensorManager::startMetersForCurrentSource() {
+  String source = configuredGridPowerSource();
+  bool conflict = meterPinsConflict();
+
+  // Si JSY et Linky partagent une broche, un seul UART doit etre actif.
+  // AUTO garde le JSY comme reference rapide pour le routeur solaire.
+  bool wantJsy = !conflict || source == "JSY" || source == "AUTO";
+  bool wantTic = !conflict || source == "TIC";
+
+  if (wantJsy && !jsyStarted) {
+    jsy.begin();
+    jsyStarted = true;
+  }
+  if (!wantJsy && jsyStarted) {
+    jsyStarted = false;
+    jsy.stop();
+    state.addLog("JSY suspendu: source reseau TIC active");
+  }
+
+  if (wantTic && !ticStarted) {
+    tic.begin();
+    ticStarted = true;
+  }
+  if (!wantTic && ticStarted) {
+    ticStarted = false;
+    tic.stop();
+    state.addLog("TIC suspendue: source reseau JSY active");
+  }
+}
+
+void SensorManager::applyGridPowerSource() {
+  String source = configuredGridPowerSource();
   float selected = NAN;
 
   if (source == "TIC") {
@@ -67,6 +123,7 @@ float SensorManager::valueFor(const String &sensorId, const String &variable) {
 }
 
 String SensorManager::detectedDs18b20Json() {
+  ds18b20.scanBus();
   return ds18b20.detectedAddressesJson();
 }
 
@@ -79,6 +136,11 @@ bool SensorManager::assignDs18b20(const String &sensorId, const String &address)
 }
 
 void SensorManager::reloadConfiguration() {
+  if (jsyStarted) jsy.stop();
+  if (ticStarted) tic.stop();
+  jsyStarted = false;
+  ticStarted = false;
+  startMetersForCurrentSource();
   ds18b20.reloadConfig();
   applyGridPowerSource();
   state.addLog("Configuration capteurs rechargee");

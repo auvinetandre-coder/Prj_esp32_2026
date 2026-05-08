@@ -8,7 +8,6 @@ void ActuatorManager::begin() {
   commandTimeoutMs = config.system()["router"]["commandTimeoutMs"] | 5000;
   simulationMode = state.simulationMode;
   previousSimulationMode = simulationMode;
-  setupSimulationOutputs();
 
   for (JsonObject actuator : config.actuators()) {
     if (actuator["source"].as<String>() != "local") continue;
@@ -47,7 +46,6 @@ void ActuatorManager::loop(uint32_t now) {
     return;
   }
   if (realModeHoldUntilMs && now >= realModeHoldUntilMs) realModeHoldUntilMs = 0;
-  if (!simulationMode) allSimulationOutputsOff();
 
   if (state.safetyTripped) lockAllForSafety(state.safetyReason);
   else if (safetyLocked) unlockSafety();
@@ -76,7 +74,6 @@ void ActuatorManager::loop(uint32_t now) {
     if (channel->safetyLocked) channel->commandPercent = 0;
 
     applyLocal(actuator, now);
-    updateSimulationOutput(channel->id, channel->commandPercent, now);
   }
 }
 
@@ -97,10 +94,6 @@ void ActuatorManager::allOff() {
       digitalWrite(control, LOW);
     }
   }
-
-  pinMode(26, OUTPUT); digitalWrite(26, LOW);
-  pinMode(25, OUTPUT); digitalWrite(25, LOW);
-  pinMode(33, OUTPUT); digitalWrite(33, LOW);
 
   for (uint8_t i = 0; i < channelCount; i++) {
     channels[i].commandPercent = 0;
@@ -399,59 +392,6 @@ void ActuatorManager::publishPower(const String &id, float percent) {
   if (id == "ssr1_water_heater") state.ssr1PowerPct = percent;
   if (id == "ssr2_aux") state.ssr2PowerPct = percent;
   if (id == "robotdyn_triac") state.robotDynPowerPct = percent;
-}
-
-void ActuatorManager::setupSimulationOutputs() {
-  JsonObject sim = config.actuatorsDoc()["simulationOutput"].as<JsonObject>();
-  if (sim.isNull()) {
-    sim = config.actuatorsDoc()["simulationOutput"].to<JsonObject>();
-    sim["enabled"] = true;
-    sim["ledSsr1Gpio"] = 18;
-    sim["ledSsr2Gpio"] = 19;
-    sim["ledTriacGpio"] = 21;
-    sim["visualCycleMs"] = 1000;
-    config.saveActuators();
-  }
-  simOutputEnabled = sim["enabled"] | true;
-  simLedSsr1Pin = sim["ledSsr1Gpio"] | 18;
-  simLedSsr2Pin = sim["ledSsr2Gpio"] | 19;
-  simLedTriacPin = sim["ledTriacGpio"] | 21;
-  simVisualCycleMs = sim["visualCycleMs"] | 1000;
-  if (simOutputEnabled) {
-    pinMode(simLedSsr1Pin, OUTPUT);
-    pinMode(simLedSsr2Pin, OUTPUT);
-    pinMode(simLedTriacPin, OUTPUT);
-    allSimulationOutputsOff();
-  }
-}
-
-void ActuatorManager::updateSimulationOutput(const String &id, float percent, uint32_t now) {
-  if (!simulationMode || !simOutputEnabled) return;
-  int pin = -1;
-  if (id == "ssr1_water_heater") pin = simLedSsr1Pin;
-  if (id == "ssr2_aux") pin = simLedSsr2Pin;
-  if (id == "robotdyn_triac") pin = simLedTriacPin;
-  if (pin < 0) return;
-  percent = constrain(percent, 0.0f, 100.0f);
-  if (percent <= 0.0f) {
-    digitalWrite(pin, LOW);
-    return;
-  }
-  if (percent >= 100.0f) {
-    digitalWrite(pin, HIGH);
-    return;
-  }
-  uint32_t cycle = constrain(simVisualCycleMs, 100UL, 5000UL);
-  uint32_t elapsed = now % cycle;
-  uint32_t onTime = static_cast<uint32_t>((cycle * percent) / 100.0f);
-  digitalWrite(pin, elapsed < onTime ? HIGH : LOW);
-}
-
-void ActuatorManager::allSimulationOutputsOff() {
-  if (!simOutputEnabled) return;
-  if (simLedSsr1Pin >= 0) digitalWrite(simLedSsr1Pin, LOW);
-  if (simLedSsr2Pin >= 0) digitalWrite(simLedSsr2Pin, LOW);
-  if (simLedTriacPin >= 0) digitalWrite(simLedTriacPin, LOW);
 }
 
 void ActuatorManager::setupRobotDyn(JsonObject actuator) {

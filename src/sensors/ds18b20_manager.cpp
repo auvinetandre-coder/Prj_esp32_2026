@@ -1,15 +1,12 @@
 #include "ds18b20_manager.h"
 
 void DS18B20Manager::begin() {
-  JsonObject bus = config.sensorsDoc()["oneWireBus"];
-  oneWireGpio = bus["gpio"] | 4;
-  scanOnBoot = bus["scanOnBoot"] | true;
-  readIntervalMs = bus["readIntervalMs"] | 2000;
-  readIntervalMs = constrain(readIntervalMs, 1000UL, 60000UL);
+  configureBusFromConfig();
   loadConfig();
+  oneWire.begin(oneWireGpio);
   dallas.begin();
   dallas.setWaitForConversion(false);
-  if (scanOnBoot) scanBus();
+  if (busEnabled && scanOnBoot) scanBus();
   printSensorsStatus();
 }
 
@@ -18,6 +15,11 @@ void DS18B20Manager::loop() {
 }
 
 void DS18B20Manager::loop(uint32_t now) {
+  if (!busEnabled) {
+    for (uint8_t i = 0; i < sensorCount; i++) sensors[i].available = false;
+    publishRuntimeState();
+    return;
+  }
   if (!conversionPending && now - lastRequestMs >= readIntervalMs) {
     requestTemperatures();
     lastRequestMs = now;
@@ -32,6 +34,10 @@ void DS18B20Manager::loop(uint32_t now) {
 
 void DS18B20Manager::scanBus() {
   detectedCount = 0;
+  if (!busEnabled) {
+    Serial.println(F("DS18B20 scan ignore: bus OneWire desactive"));
+    return;
+  }
   DeviceAddress address;
   uint8_t count = min<uint8_t>(dallas.getDeviceCount(), 8);
   Serial.print(F("DS18B20 detectees: "));
@@ -248,8 +254,30 @@ bool DS18B20Manager::assignAddress(const String &sensorId, const String &address
 }
 
 void DS18B20Manager::reloadConfig() {
+  uint8_t previousGpio = oneWireGpio;
+  configureBusFromConfig();
+  if (oneWireGpio != previousGpio) {
+    oneWire.begin(oneWireGpio);
+    dallas.begin();
+    detectedCount = 0;
+    conversionPending = false;
+    lastRequestMs = 0;
+    Serial.print(F("DS18B20 bus OneWire change vers GPIO"));
+    Serial.println(oneWireGpio);
+  }
   loadConfig();
+  if (busEnabled) scanBus();
   publishRuntimeState();
+}
+
+void DS18B20Manager::configureBusFromConfig() {
+  JsonObject bus = config.sensorsDoc()["oneWireBus"];
+  oneWireGpio = bus["gpio"] | 13;
+  oneWireGpio = constrain(oneWireGpio, 0, 39);
+  busEnabled = bus["enabled"] | true;
+  scanOnBoot = bus["scanOnBoot"] | true;
+  readIntervalMs = bus["readIntervalMs"] | 2000;
+  readIntervalMs = constrain(readIntervalMs, 1000UL, 60000UL);
 }
 
 void DS18B20Manager::loadConfig() {

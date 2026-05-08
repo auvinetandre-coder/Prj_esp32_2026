@@ -1,19 +1,12 @@
 {
   "version": 2,
-  "simulationOutput": {
-    "enabled": true,
-    "ledSsr1Gpio": 18,
-    "ledSsr2Gpio": 19,
-    "ledTriacGpio": 21,
-    "visualCycleMs": 1000
-  },
   "actuators": [
     {
       "id": "ssr1_water_heater",
       "name": "SSR1 chauffe-eau principal",
       "type": "SSR",
       "source": "local",
-      "gpio": 26,
+      "gpio": 5,
       "mode": "BURST_FIRE",
       "maxPowerW": 1500,
       "cycleMs": 1000,
@@ -25,7 +18,7 @@
       "name": "SSR2 auxiliaire",
       "type": "SSR",
       "source": "local",
-      "gpio": 25,
+      "gpio": 17,
       "mode": "BURST_FIRE",
       "maxPowerW": 1000,
       "cycleMs": 1000,
@@ -37,11 +30,11 @@
       "name": "RobotDyn Triac",
       "type": "RobotDyn Triac",
       "source": "local",
-      "zeroCross": 27,
+      "zeroCross": -1,
       "control": 33,
       "mode": "PHASE_ANGLE",
       "maxPowerW": 1000,
-      "enabled": true,
+      "enabled": false,
       "critical": true
     }
   ]

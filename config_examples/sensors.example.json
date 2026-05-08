@@ -1,7 +1,7 @@
 {
   "version": 2,
   "oneWireBus": {
-    "gpio": 4,
+    "gpio": 13,
     "enabled": true,
     "scanOnBoot": true,
     "readIntervalMs": 2000
@@ -13,8 +13,13 @@
       "type": "JSY-MK-194T",
       "source": "local",
       "serial": "Serial2",
-      "rx": 16,
-      "tx": 17,
+      "rx": 26,
+      "tx": 27,
+      "baudrate": 4800,
+      "modbusAddress": 1,
+      "readIntervalMs": 500,
+      "timeoutMs": 400,
+      "rs485DirPin": -1,
       "role": "mesure reseau principal",
       "enabled": true,
       "channels": [
@@ -44,7 +49,8 @@
       "type": "TIC Linky",
       "source": "local",
       "serial": "Serial1",
-      "rx": 32,
+      "rx": 26,
+      "tx": 27,
       "role": "compteur officiel / puissance reseau",
       "enabled": true
     }

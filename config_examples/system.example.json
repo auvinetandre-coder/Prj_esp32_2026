@@ -40,5 +40,15 @@
     "pidKp": 0.2,
     "pidKi": 0.01,
     "pidKd": 0
+  },
+  "display": {
+    "enabled": true,
+    "type": "SSD1309_SPI",
+    "sclk": 18,
+    "mosi": 19,
+    "reset": 16,
+    "dc": 4,
+    "cs": 15,
+    "refreshMs": 1000
   }
 }

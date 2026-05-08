@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>RouteurSolaireESP32</title>
-  <link rel="stylesheet" href="/www/style.css?v=33">
+  <link rel="stylesheet" href="/www/style.css?v=36">
 </head>
 <body>
   <nav>
@@ -30,8 +30,15 @@
         app.innerHTML = '<h1>Erreur WebUI</h1><div class="banner">' + String(event.message || 'Erreur JavaScript') + '</div><p><a href="/lite">Interface Lite</a> <a href="/api/status-lite">Tester API</a> <a href="/fs">Voir LittleFS</a></p>';
       }
     });
+    window.addEventListener('unhandledrejection', function (event) {
+      var app = document.getElementById('app');
+      var reason = event.reason && event.reason.message ? event.reason.message : event.reason;
+      if (app) {
+        app.innerHTML = '<h1>Erreur WebUI</h1><div class="banner">' + String(reason || 'Promesse JavaScript rejetee') + '</div><p><a href="/lite">Interface Lite</a> <a href="/api/status-lite">Tester API</a> <a href="/fs">Voir LittleFS</a></p>';
+      }
+    });
   </script>
-  <script src="/www/app.js?v=33"></script>
+  <script src="/www/app.js?v=36"></script>
   <script>
     setTimeout(function () {
       var app = document.getElementById('app');

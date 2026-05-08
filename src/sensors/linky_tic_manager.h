@@ -40,6 +40,9 @@ public:
   float getCurrentA() const { return reading.currentA; }
   String getTariff() const { return reading.tariff; }
   uint32_t getLastValidReadMs() const { return reading.lastValidReadMs; }
+  void reloadConfig();
+  void setConfigured(bool value);
+  void stop();
   void printStatus();
 
 private:
@@ -49,7 +52,8 @@ private:
 
   bool configured = true;
   String mode = "historique";
-  uint8_t rxPin = 32;
+  uint8_t rxPin = 26;
+  int8_t txPin = 27;
   uint32_t baudrate = 1200;
   uint32_t timeoutMs = 5000;
   bool frameActive = false;
@@ -59,6 +63,7 @@ private:
   uint32_t lastByteMs = 0;
   uint32_t lastErrorLogMs = 0;
 
+  void loadConfig();
   bool validateChecksum(const String &line);
   void applyLabelValue(const String &label, const String &value);
   void publishRuntime();

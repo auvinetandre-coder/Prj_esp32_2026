@@ -55,10 +55,12 @@ private:
   uint8_t detectedCount = 0;
   uint32_t lastRequestMs = 0;
   bool conversionPending = false;
-  uint8_t oneWireGpio = 4;
+  uint8_t oneWireGpio = 13;
   uint32_t readIntervalMs = 2000;
   bool scanOnBoot = true;
+  bool busEnabled = true;
 
+  void configureBusFromConfig();
   void loadConfig();
   void publishRuntimeState();
   void publishConfigRuntimeFields();

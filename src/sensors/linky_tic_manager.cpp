@@ -1,17 +1,7 @@
 #include "linky_tic_manager.h"
 
 void LinkyTICManager::begin() {
-  JsonArray sensors = config.sensors();
-  for (JsonObject sensor : sensors) {
-    if (String(sensor["id"] | "") == "tic_linky") {
-      configured = sensor["enabled"] | true;
-      mode = sensor["mode"] | "historique";
-      rxPin = sensor["rx"] | 32;
-      baudrate = sensor["baudrate"] | (mode == "standard" ? 9600 : 1200);
-      timeoutMs = sensor["timeoutMs"] | 5000;
-      break;
-    }
-  }
+  loadConfig();
 
   if (!configured) {
     setStatus(TIC_NOT_CONFIGURED);
@@ -181,6 +171,63 @@ void LinkyTICManager::printStatus() {
   Serial.print(F("currentA=")); Serial.println(reading.currentA);
   Serial.print(F("tariff=")); Serial.println(reading.tariff);
   Serial.print(F("period=")); Serial.println(reading.period);
+}
+
+void LinkyTICManager::reloadConfig() {
+  uint8_t previousRx = rxPin;
+  uint32_t previousBaudrate = baudrate;
+  loadConfig();
+  frameActive = false;
+  frameHasValidLine = false;
+  lineBuffer = "";
+  frameBuffer = "";
+  if (!configured) {
+    setStatus(TIC_NOT_CONFIGURED);
+    publishRuntime();
+    return;
+  }
+  if (previousRx != rxPin || previousBaudrate != baudrate) {
+    Serial1.end();
+    Serial1.begin(baudrate, SERIAL_7E1, rxPin, -1);
+  }
+  setStatus(TIC_TIMEOUT);
+  publishRuntime();
+  state.addLog("Configuration TIC rechargee");
+}
+
+void LinkyTICManager::setConfigured(bool value) {
+  configured = value;
+  if (!configured) {
+    setStatus(TIC_NOT_CONFIGURED);
+    publishRuntime();
+  }
+}
+
+void LinkyTICManager::stop() {
+  configured = false;
+  frameActive = false;
+  frameHasValidLine = false;
+  lineBuffer = "";
+  frameBuffer = "";
+  Serial1.end();
+  setStatus(TIC_NOT_CONFIGURED);
+  publishRuntime();
+}
+
+void LinkyTICManager::loadConfig() {
+  configured = true;
+  JsonArray sensors = config.sensors();
+  for (JsonObject sensor : sensors) {
+    if (String(sensor["id"] | "") == "tic_linky") {
+      configured = sensor["enabled"] | true;
+      mode = sensor["mode"] | "historique";
+      rxPin = sensor["rx"] | 26;
+      txPin = sensor["tx"] | 27;
+      baudrate = sensor["baudrate"] | (mode == "standard" ? 9600 : 1200);
+      timeoutMs = sensor["timeoutMs"] | 5000;
+      break;
+    }
+  }
 }
 
 void LinkyTICManager::publishRuntime() {

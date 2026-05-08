@@ -25,5 +25,11 @@ private:
   DS18B20Manager ds18b20;
   JSYMK194TManager jsy;
   LinkyTICManager tic;
+  bool jsyStarted = false;
+  bool ticStarted = false;
+
+  String configuredGridPowerSource();
+  bool meterPinsConflict();
+  void startMetersForCurrentSource();
   void applyGridPowerSource();
 };

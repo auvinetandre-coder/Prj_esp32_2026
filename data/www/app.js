@@ -861,7 +861,16 @@ async function loadStatus() {
 async function refresh() {
   try {
     await loadStatus();
-    if ((page === "dashboard" || page === "diagnostic") && !cache.sensors) cache.sensors = await api("/api/sensors");
+    if ((page === "dashboard" || page === "diagnostic") && !cache.sensors) {
+      try {
+        cache.sensors = await api("/api/sensors");
+      } catch (sensorError) {
+        // Le Dashboard doit rester utilisable meme si la config capteurs est
+        // temporairement indisponible ou trop lente a charger.
+        cache.sensors = {sensors:[], ds18b20:[]};
+        state.lastWebWarning = sensorError.message || "Capteurs indisponibles";
+      }
+    }
     recordDashboardHistory();
     render();
   } catch (error) {
@@ -978,9 +987,34 @@ function drawSensorsPage() {
     var available = dsAvailable(i, temp);
     var cls = s.enabled === false ? "muted" : (available ? "ok" : (s.critical ? "bad" : "warn"));
     var statusText = s.enabled === false ? "desactive" : (available ? "OK" : (s.critical ? "critique absent" : "absent"));
-    rows += '<tr class="' + esc(cls) + '"><td>' + esc(s.name || s.id) + '</td><td>DS18B20</td><td>' + esc(s.role) + '</td><td>GPIO ' + esc((cache.sensors.oneWireBus || {}).gpio || 4) + '</td><td><span class="badge ' + esc(cls) + '">' + esc(statusText) + '</span> ' + dsValue(i, temp) + '</td><td class="actions"><button onclick="editDsSensor(' + i + ')">Modifier</button><button onclick="toggleDsSensor(' + i + ')">' + (s.enabled !== false ? "Desactiver" : "Activer") + '</button><button class="danger" onclick="deleteDsSensor(' + i + ')">Supprimer</button></td></tr>';
+    rows += '<tr class="' + esc(cls) + '"><td>' + esc(s.name || s.id) + '</td><td>DS18B20</td><td>' + esc(s.role) + '</td><td>GPIO ' + esc((cache.sensors.oneWireBus || {}).gpio || 13) + '</td><td><span class="badge ' + esc(cls) + '">' + esc(statusText) + '</span> ' + dsValue(i, temp) + '</td><td class="actions"><button onclick="editDsSensor(' + i + ')">Modifier</button><button onclick="toggleDsSensor(' + i + ')">' + (s.enabled !== false ? "Desactiver" : "Activer") + '</button><button class="danger" onclick="deleteDsSensor(' + i + ')">Supprimer</button></td></tr>';
   });
-  $("app").innerHTML = banner() + '<h1>Capteurs</h1>' + helpBox("sensors") + dirtyNotice("sensors") + '<div class="toolbar"><button onclick="newSensor()">Ajouter capteur</button><button onclick="newJsySensor()">Ajouter JSY 2 pinces</button><button onclick="newDsSensor()">Ajouter DS18B20</button><button onclick="saveSensors()">Sauvegarder</button><button onclick="scanDs()">Scanner DS18B20</button><button onclick="jsonEditor(\'sensors\')">JSON avance</button></div><section class="panel" id="sensorForm">Selectionne un capteur ou ajoute-en un nouveau.</section><table><tr><th>Nom</th><th>Type</th><th>Role</th><th>Bus/GPIO</th><th>Etat/Valeur</th><th>Actions</th></tr>' + rows + '</table><pre id="scan"></pre>';
+  $("app").innerHTML = banner() + '<h1>Capteurs</h1>' + helpBox("sensors") + dirtyNotice("sensors") + '<div class="toolbar"><button onclick="newSensor()">Ajouter capteur</button><button onclick="newJsySensor()">Ajouter JSY 2 pinces</button><button onclick="newDsSensor()">Ajouter DS18B20</button><button onclick="saveSensors()">Sauvegarder</button><button onclick="scanDs()">Scanner DS18B20</button><button onclick="jsonEditor(\'sensors\')">JSON avance</button></div>' + oneWireBusPanel() + '<section class="panel" id="sensorForm">Selectionne un capteur ou ajoute-en un nouveau.</section><table><tr><th>Nom</th><th>Type</th><th>Role</th><th>Bus/GPIO</th><th>Etat/Valeur</th><th>Actions</th></tr>' + rows + '</table><pre id="scan"></pre>';
+}
+
+function oneWireBusPanel() {
+  var bus = cache.sensors.oneWireBus || {};
+  var gpio = bus.gpio == null ? 13 : Number(bus.gpio);
+  var gpioChoices = [4, 5, 13, 14, 15, 18, 19, 21, 22, 23, 25, 26, 27, 32, 33];
+  if (gpioChoices.indexOf(gpio) < 0) gpioChoices.push(gpio);
+  gpioChoices.sort(function (a, b) { return a - b; });
+  return '<section class="panel oneWirePanel"><h2>Bus OneWire DS18B20</h2><div class="form">' +
+    '<label>GPIO des sondes<select id="oneWireGpio">' + options(gpioChoices.map(String), String(gpio)) + '</select></label>' +
+    '<label>Bus actif<select id="oneWireEnabled">' + options(["true", "false"], String(bus.enabled !== false)) + '</select></label>' +
+    '<label>Scan au demarrage<select id="oneWireScanBoot">' + options(["true", "false"], String(bus.scanOnBoot !== false)) + '</select></label>' +
+    '<label>Intervalle lecture ms<input id="oneWireReadMs" type="number" min="1000" max="60000" value="' + esc(bus.readIntervalMs || 2000) + '"></label>' +
+    '</div><p class="fieldHelp">Toutes les sondes DS18B20 partagent ce meme bus. Il faut une resistance de tirage, souvent 4,7 kOhm, entre DATA et 3V3.</p>' +
+    '<p><button onclick="applyOneWireBus()">Appliquer bus OneWire</button> <button onclick="scanDs()">Scanner sur ce GPIO</button></p></section>';
+}
+
+function applyOneWireBus(redraw) {
+  cache.sensors.oneWireBus = cache.sensors.oneWireBus || {};
+  cache.sensors.oneWireBus.gpio = Number($("oneWireGpio").value);
+  cache.sensors.oneWireBus.enabled = $("oneWireEnabled").value === "true";
+  cache.sensors.oneWireBus.scanOnBoot = $("oneWireScanBoot").value === "true";
+  cache.sensors.oneWireBus.readIntervalMs = Math.max(1000, Math.min(60000, Number($("oneWireReadMs").value) || 2000));
+  markDirty("sensors");
+  if (redraw !== false) drawSensorsPage();
 }
 
 function defaultJsyChannels() {
@@ -1035,15 +1069,10 @@ function sensorFormHtml(kind, index, s) {
     textField("sensorName", "Nom", s.name || "") +
     (isDs ? '<input id="sensorType" type="hidden" value="DS18B20">' : '<label>Type<select id="sensorType" onchange="updateSensorRoleOptions()">' + options(sensorTypes, type) + '</select></label>') +
     '<label>Role<select id="sensorRole">' + options(roleOptions, s.role || roleOptions[0] || "custom") + '</select></label>' +
-    (isDs ? textField("sensorAddress", "Adresse OneWire", s.address || "") : '') +
-    field("sensorGpio", "GPIO", s.gpio == null ? "" : s.gpio) +
-    field("sensorRx", "RX", s.rx == null ? "" : s.rx) +
-    field("sensorTx", "TX", s.tx == null ? "" : s.tx) +
-    textField("sensorSource", "Source", s.source || "local") +
-    textField("sensorMac", "MAC ESP-NOW", s.mac || "") +
+    (isDs ? textField("sensorAddress", "Adresse OneWire", s.address || "") + '<p class="fieldHelp">Le GPIO ne se regle pas par sonde: il est commun aux DS18B20 dans le bloc Bus OneWire ci-dessus.</p>' : field("sensorGpio", "GPIO", s.gpio == null ? "" : s.gpio) + field("sensorRx", "RX", s.rx == null ? "" : s.rx) + field("sensorTx", "TX", s.tx == null ? "" : s.tx) + textField("sensorSource", "Source", s.source || "local") + textField("sensorMac", "MAC ESP-NOW", s.mac || "")) +
     '<label><input id="sensorEnabled" class="check" type="checkbox" ' + checked(s.enabled) + '> Actif</label>' +
     (isDs ? '<label><input id="sensorCritical" class="check" type="checkbox" ' + checked(s.critical) + '> Critique securite</label>' : '') +
-    (isJsy ? '<div class="subPanel"><h3>Voies amperemetriques JSY</h3><div class="formGrid"><label>Pince 1 nom<input id="jsyCh1Name" value="' + esc((channels[0] || {}).name || "Pince 1") + '"></label><label>Pince 1 role<select id="jsyCh1Role">' + options(jsyClampRoles, (channels[0] || {}).role || "grid") + '</select></label><label>Pince 2 nom<input id="jsyCh2Name" value="' + esc((channels[1] || {}).name || "Pince 2") + '"></label><label>Pince 2 role<select id="jsyCh2Role">' + options(jsyClampRoles, (channels[1] || {}).role || "production") + '</select></label></div><p class="muted">grid = arrivee reseau, production = solaire, load = charge dediee, custom = autre usage. Dans Logique, utilise activePowerW1 pour la pince 1 et activePowerW2 pour la pince 2.</p></div>' : '') +
+    (isJsy ? '<div class="subPanel"><h3>Modbus JSY</h3><div class="formGrid">' + field("jsyBaudrate", "Vitesse bauds", s.baudrate || 4800) + field("jsyAddress", "Adresse Modbus", s.modbusAddress || s.address || 1) + field("jsyReadInterval", "Lecture ms", s.readIntervalMs || 500) + field("jsyTimeout", "Timeout ms", s.timeoutMs || 400) + field("jsyRs485Dir", "GPIO DE/RE RS485", s.rs485DirPin == null ? -1 : s.rs485DirPin) + '</div><p class="muted">Laisse DE/RE a -1 avec un adaptateur RS485 auto-direction ou une liaison TTL. Avec un MAX485 classique, indique le GPIO qui pilote DE et RE.</p></div><div class="subPanel"><h3>Voies amperemetriques JSY</h3><div class="formGrid"><label>Pince 1 nom<input id="jsyCh1Name" value="' + esc((channels[0] || {}).name || "Pince 1") + '"></label><label>Pince 1 role<select id="jsyCh1Role">' + options(jsyClampRoles, (channels[0] || {}).role || "grid") + '</select></label><label>Pince 2 nom<input id="jsyCh2Name" value="' + esc((channels[1] || {}).name || "Pince 2") + '"></label><label>Pince 2 role<select id="jsyCh2Role">' + options(jsyClampRoles, (channels[1] || {}).role || "production") + '</select></label></div><p class="muted">grid = arrivee reseau, production = solaire, load = charge dediee, custom = autre usage. Dans Logique, utilise activePowerW1 pour la pince 1 et activePowerW2 pour la pince 2.</p></div>' : '') +
     '<details class="advancedField"><summary>Avance</summary>' + textField("sensorId", "ID technique", s.id || "") + '<p class="muted">Laisse vide pour creer automatiquement un ID depuis le nom.</p></details>' +
     '</div><p><button onclick="applySensorForm()">Appliquer</button></p>';
 }
@@ -1061,7 +1090,7 @@ function updateSensorRoleOptions() {
 }
 
 function newSensor() { $("sensorForm").innerHTML = sensorFormHtml("sensor", -1, {enabled:true, source:"local"}); }
-function newJsySensor() { $("sensorForm").innerHTML = sensorFormHtml("sensor", -1, {id:"jsy_grid", name:"JSY reseau", type:"JSY-MK-194T", source:"local", serial:"Serial2", rx:16, tx:17, role:"mesure reseau principal", enabled:true, channels:defaultJsyChannels()}); }
+function newJsySensor() { $("sensorForm").innerHTML = sensorFormHtml("sensor", -1, {id:"jsy_grid", name:"JSY reseau", type:"JSY-MK-194T", source:"local", serial:"Serial2", rx:26, tx:27, baudrate:4800, modbusAddress:1, readIntervalMs:500, timeoutMs:400, rs485DirPin:-1, role:"mesure reseau principal", enabled:true, channels:defaultJsyChannels()}); }
 function editSensor(index) { $("sensorForm").innerHTML = sensorFormHtml("sensor", index, (cache.sensors.sensors || [])[index]); }
 function newDsSensor() { $("sensorForm").innerHTML = sensorFormHtml("ds", -1, {enabled:true, critical:false, unit:"C"}); }
 function editDsSensor(index) { $("sensorForm").innerHTML = sensorFormHtml("ds", index, (cache.sensors.ds18b20 || [])[index]); }
@@ -1091,6 +1120,11 @@ function applySensorForm() {
     item.tx = readNumber("sensorTx", undefined);
     item.mac = $("sensorMac").value;
     if (item.type === "JSY-MK-194T" || item.id === "jsy_grid") {
+      item.baudrate = readNumber("jsyBaudrate", 4800);
+      item.modbusAddress = readNumber("jsyAddress", 1);
+      item.readIntervalMs = readNumber("jsyReadInterval", 500);
+      item.timeoutMs = readNumber("jsyTimeout", 400);
+      item.rs485DirPin = readNumber("jsyRs485Dir", -1);
       item.channels = [
         {id:"clamp1", name:$("jsyCh1Name") ? $("jsyCh1Name").value : "Pince 1", role:$("jsyCh1Role") ? $("jsyCh1Role").value : "grid", measures:["currentA1", "activePowerW1"]},
         {id:"clamp2", name:$("jsyCh2Name") ? $("jsyCh2Name").value : "Pince 2", role:$("jsyCh2Role") ? $("jsyCh2Role").value : "production", measures:["currentA2", "activePowerW2"]}
@@ -1147,10 +1181,22 @@ function pinText(item) {
 }
 
 async function scanDs() {
+  if ($("oneWireGpio")) {
+    applyOneWireBus(false);
+    var saveResponse = await postJson("/api/sensors", cache.sensors);
+    if (!saveResponse.ok) {
+      $("scan").innerHTML = '<div class="warnBox">Impossible de sauvegarder le GPIO OneWire avant scan: ' + esc(await saveResponse.text()) + '</div>';
+      return;
+    }
+    clearDirty("sensors");
+    cache.sensors = await api("/api/sensors");
+    drawSensorsPage();
+  }
   var addresses = await api("/api/ds18b20");
   var list = Array.isArray(addresses) ? addresses : [];
+  var gpio = ((cache.sensors.oneWireBus || {}).gpio == null ? 13 : (cache.sensors.oneWireBus || {}).gpio);
   if (!list.length) {
-    $("scan").innerHTML = '<div class="warnBox">Aucune sonde detectee sur le bus OneWire GPIO4.</div><pre>' + esc(JSON.stringify(addresses, null, 2)) + '</pre>';
+    $("scan").innerHTML = '<div class="warnBox">Aucune sonde detectee sur le bus OneWire GPIO' + esc(gpio) + '.</div><pre>' + esc(JSON.stringify(addresses, null, 2)) + '</pre>';
     return;
   }
   var targets = (cache.sensors.ds18b20 || []).map(function (sensor, index) {
@@ -1862,7 +1908,7 @@ function gpioRowsFromConfig() {
     push(name, "TX", s.tx, s.type || "");
   });
   var bus = (cache.sensors && cache.sensors.oneWireBus) || {};
-  if ((cache.sensors && cache.sensors.ds18b20 || []).length || bus.gpio != null) push("Bus OneWire", "GPIO", bus.gpio == null ? 4 : bus.gpio, "DS18B20");
+  if ((cache.sensors && cache.sensors.ds18b20 || []).length || bus.gpio != null) push("Bus OneWire", "GPIO", bus.gpio == null ? 13 : bus.gpio, "DS18B20");
   var actuators = (cache.actuators && cache.actuators.actuators) || [];
   actuators.forEach(function (a) {
     var name = a.name || a.id || "actionneur";

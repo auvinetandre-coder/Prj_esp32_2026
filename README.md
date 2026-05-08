@@ -67,7 +67,7 @@ Modules principaux :
 - `SensorManager` : centralisation des capteurs.
 - `JSYMK194TManager` : JSY-MK-194T Modbus RTU.
 - `LinkyTICManager` : TIC Linky.
-- `DS18B20Manager` : bus OneWire GPIO4.
+- `DS18B20Manager` : bus OneWire GPIO13 par defaut, configurable.
 - `ActuatorManager` : SSR, RobotDyn, relais, PWM, sorties digitales.
 - `RuleEngine` : moteur de regles SI / ALORS.
 - `SafetyManager` : securites globales.
@@ -243,8 +243,8 @@ Configuration par defaut :
 
 ```text
 Serial2
-RX GPIO16
-TX GPIO17
+RX GPIO26
+TX GPIO27
 Adresse Modbus 1
 4800 bauds
 8N1
@@ -294,7 +294,8 @@ Configuration par defaut :
 
 ```text
 Serial1
-RX GPIO32
+RX GPIO26
+TX GPIO27 renseigne dans la configuration, non utilise par la TIC
 mode historique
 1200 bauds
 ```
@@ -316,7 +317,7 @@ La TIC sert surtout au diagnostic, a la coherence et aux informations energie. E
 Bus OneWire :
 
 ```text
-GPIO4
+GPIO13
 Pull-up 4.7 kOhm vers 3.3 V
 ```
 
@@ -358,9 +359,9 @@ Le scan ne sait pas quelle sonde est en haut/milieu/bas. Il faut associer chaque
 
 Actionneurs par defaut :
 
-- SSR1 chauffe-eau principal : GPIO26.
-- SSR2 auxiliaire : GPIO25.
-- RobotDyn Triac : zero-cross GPIO27, controle GPIO33.
+- SSR1 chauffe-eau principal : GPIO5.
+- SSR2 auxiliaire : GPIO17.
+- RobotDyn Triac : zero-cross a renseigner selon PCB, controle GPIO33.
 
 Types supportes :
 
@@ -520,11 +521,7 @@ Securites simulation :
 - le dashboard affiche le temps restant
 - en sortie de simulation, les sorties sont forcees OFF pendant au moins 2 secondes
 
-Sorties LED de simulation prevues :
-
-- SSR1 : GPIO18
-- SSR2 : GPIO19
-- RobotDyn : GPIO21
+Les anciennes sorties LED de simulation ont ete supprimees. La simulation reste visible dans l'interface Web et sur l'ecran OLED.
 
 ## ESP-NOW
 
@@ -585,10 +582,11 @@ Materiel par defaut :
 - JSY-MK-194T
 - TIC Linky
 - 3 DS18B20
-- SSR1 GPIO26
-- SSR2 GPIO25
-- RobotDyn GPIO27/GPIO33
+- SSR1 GPIO5
+- SSR2 GPIO17
+- RobotDyn zero-cross a renseigner / GPIO33
 - LED etat GPIO2
+- OLED SSD1309 SPI GPIO18/19/16/4/15
 
 Bibliotheques Arduino :
 
@@ -765,34 +763,37 @@ Si l'interface `/app` ne charge pas :
 ESP32 GPIO2   -> LED etat
 
 JSY-MK-194T:
-  RX ESP32 GPIO16 <- TX JSY
-  TX ESP32 GPIO17 -> RX JSY
+  RX ESP32 GPIO26 <- TX JSY
+  TX ESP32 GPIO27 -> RX JSY
   GND commun
 
 TIC Linky:
-  RX ESP32 GPIO32 <- interface TIC adaptee
+  RX ESP32 GPIO26 <- interface TIC adaptee
+  TX ESP32 GPIO27 reserve au meme connecteur, non utilise par la TIC
   GND commun selon interface
 
 DS18B20:
-  DATA GPIO4
+  DATA GPIO13
   Pull-up 4.7 kOhm vers 3.3 V
   VCC 3.3 V
   GND
 
 SSR1:
-  commande GPIO26
+  commande GPIO5
 
 SSR2:
-  commande GPIO25
+  commande GPIO17
 
 RobotDyn Triac:
-  zero-cross GPIO27
+  zero-cross a renseigner selon PCB
   gate/control GPIO33
 
-LED simulation:
-  SSR1 GPIO18
-  SSR2 GPIO19
-  Triac GPIO21
+OLED SSD1309 SPI:
+  SCLK GPIO18
+  SDA/MOSI GPIO19
+  RES GPIO16
+  DC GPIO4
+  CS GPIO15
 ```
 
 Respecter strictement la separation basse tension / secteur.

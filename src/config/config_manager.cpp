@@ -24,6 +24,20 @@ bool ConfigManager::begin() {
     saveSystem();
     Serial.println(F("Configuration systeme normalisee."));
   }
+  JsonObject display = systemConfig["display"].as<JsonObject>();
+  if (!display.isNull() && (display["mosi"] | 19) == 23) {
+    display["mosi"] = 19;
+    saveSystem();
+    Serial.println(F("Configuration ecran normalisee."));
+  }
+  if (normalizeSensorsConfig()) {
+    saveSensors();
+    Serial.println(F("Configuration capteurs normalisee."));
+  }
+  if (normalizeActuatorsConfig()) {
+    saveActuators();
+    Serial.println(F("Configuration actionneurs normalisee."));
+  }
   printConfigSummary();
   return ok;
 }
@@ -226,6 +240,124 @@ bool ConfigManager::normalizeSystemConfig() {
   return changed;
 }
 
+bool ConfigManager::normalizeSensorsConfig() {
+  bool changed = false;
+  JsonObject root = sensorsConfig.as<JsonObject>();
+  JsonObject bus = root["oneWireBus"].is<JsonObject>() ? root["oneWireBus"].as<JsonObject>() : root["oneWireBus"].to<JsonObject>();
+
+  // Migration douce des anciens defauts du projet vers le pinout actuel.
+  // Une valeur personnalisee differente n'est pas modifiee.
+  int busGpio = bus["gpio"] | 13;
+  if (busGpio == 4) {
+    bus["gpio"] = 13;
+    changed = true;
+  }
+  if (!bus["enabled"].is<bool>()) {
+    bus["enabled"] = true;
+    changed = true;
+  }
+  if (!bus["scanOnBoot"].is<bool>()) {
+    bus["scanOnBoot"] = true;
+    changed = true;
+  }
+  if (!bus["readIntervalMs"].is<uint32_t>()) {
+    bus["readIntervalMs"] = 2000;
+    changed = true;
+  }
+
+  JsonArray arr = root["sensors"].as<JsonArray>();
+  for (JsonObject sensor : arr) {
+    const char *id = sensor["id"] | "";
+    const char *type = sensor["type"] | "";
+    if (strcmp(id, "jsy_grid") == 0 || strcmp(type, "JSY-MK-194T") == 0) {
+      int rx = sensor["rx"] | 26;
+      int tx = sensor["tx"] | 27;
+      if (rx == 16 && tx == 17) {
+        sensor["rx"] = 26;
+        sensor["tx"] = 27;
+        changed = true;
+      }
+      if (!sensor["baudrate"].is<uint32_t>()) {
+        sensor["baudrate"] = 4800;
+        changed = true;
+      }
+      if (!sensor["modbusAddress"].is<int>()) {
+        sensor["modbusAddress"] = 1;
+        changed = true;
+      }
+      if (!sensor["readIntervalMs"].is<uint32_t>()) {
+        sensor["readIntervalMs"] = 500;
+        changed = true;
+      }
+      if (!sensor["timeoutMs"].is<uint32_t>()) {
+        sensor["timeoutMs"] = 400;
+        changed = true;
+      }
+      if (!sensor["rs485DirPin"].is<int>()) {
+        sensor["rs485DirPin"] = -1;
+        changed = true;
+      }
+    } else if (strcmp(id, "tic_linky") == 0 || strcmp(type, "TIC Linky") == 0) {
+      int rx = sensor["rx"] | 26;
+      if (rx == 32) {
+        sensor["rx"] = 26;
+        changed = true;
+      }
+      if (!sensor["tx"].is<int>()) {
+        sensor["tx"] = 27;
+        changed = true;
+      }
+      if (!sensor["baudrate"].is<uint32_t>()) {
+        const char *ticMode = sensor["mode"] | "historique";
+        sensor["baudrate"] = strcmp(ticMode, "standard") == 0 ? 9600 : 1200;
+        changed = true;
+      }
+      if (!sensor["timeoutMs"].is<uint32_t>()) {
+        sensor["timeoutMs"] = 5000;
+        changed = true;
+      }
+    }
+  }
+  return changed;
+}
+
+bool ConfigManager::normalizeActuatorsConfig() {
+  bool changed = false;
+  if (actuatorsConfig["simulationOutput"].is<JsonObject>()) {
+    actuatorsConfig.remove("simulationOutput");
+    changed = true;
+  }
+  JsonArray arr = actuatorsConfig["actuators"].as<JsonArray>();
+
+  for (JsonObject actuator : arr) {
+    String id = actuator["id"] | "";
+
+    if (id == "ssr1_water_heater") {
+      int gpio = actuator["gpio"] | 5;
+      if (gpio == 26) {
+        actuator["gpio"] = 5;
+        changed = true;
+      }
+    } else if (id == "ssr2_aux") {
+      int gpio = actuator["gpio"] | 17;
+      if (gpio == 25) {
+        actuator["gpio"] = 17;
+        changed = true;
+      }
+    } else if (id == "robotdyn_triac") {
+      int zc = actuator["zeroCross"] | -1;
+      // Ancien defaut en conflit avec le TX JSY sur GPIO27. On desactive
+      // le triac tant que ses vraies broches PCB ne sont pas renseignees.
+      if (zc == 27) {
+        actuator["zeroCross"] = -1;
+        actuator["enabled"] = false;
+        changed = true;
+      }
+    }
+  }
+  return changed;
+}
+
 void ConfigManager::backupCorruptFile(const char *path) {
   if (!LittleFS.exists(path)) return;
   String backup = String(path) + ".bak";
@@ -317,6 +449,15 @@ void ConfigManager::defaultSystem() {
   router["kp"] = 0.08;
   router["ki"] = 0.01;
   router["kd"] = 0.0;
+  JsonObject display = root["display"].to<JsonObject>();
+  display["enabled"] = true;
+  display["type"] = "SSD1309_SPI";
+  display["sclk"] = 18;
+  display["mosi"] = 19;
+  display["reset"] = 16;
+  display["dc"] = 4;
+  display["cs"] = 15;
+  display["refreshMs"] = 1000;
   root["debug"] = true;
   root["peers"].to<JsonArray>();
 }
@@ -325,14 +466,16 @@ void ConfigManager::defaultSensors() {
   sensorsConfig.clear();
   sensorsConfig["version"] = CONFIG_VERSION;
   JsonObject bus = sensorsConfig["oneWireBus"].to<JsonObject>();
-  bus["gpio"] = 4;
+  bus["gpio"] = 13;
   bus["enabled"] = true;
   bus["scanOnBoot"] = true;
   bus["readIntervalMs"] = 2000;
   JsonArray arr = sensorsConfig["sensors"].to<JsonArray>();
   JsonObject s = arr.add<JsonObject>();
   s["id"] = "jsy_grid"; s["name"] = "JSY reseau"; s["type"] = "JSY-MK-194T"; s["source"] = "local";
-  s["serial"] = "Serial2"; s["rx"] = 16; s["tx"] = 17; s["role"] = "mesure reseau principal"; s["enabled"] = true;
+  s["serial"] = "Serial2"; s["rx"] = 26; s["tx"] = 27; s["baudrate"] = 4800; s["modbusAddress"] = 1;
+  s["readIntervalMs"] = 500; s["timeoutMs"] = 400; s["rs485DirPin"] = -1;
+  s["role"] = "mesure reseau principal"; s["enabled"] = true;
   JsonArray channels = s["channels"].to<JsonArray>();
   JsonObject ch1 = channels.add<JsonObject>();
   ch1["id"] = "clamp1"; ch1["name"] = "Pince 1"; ch1["role"] = "grid"; ch1["measures"].add("currentA1"); ch1["measures"].add("activePowerW1");
@@ -340,7 +483,7 @@ void ConfigManager::defaultSensors() {
   ch2["id"] = "clamp2"; ch2["name"] = "Pince 2"; ch2["role"] = "production"; ch2["measures"].add("currentA2"); ch2["measures"].add("activePowerW2");
   JsonObject t = arr.add<JsonObject>();
   t["id"] = "tic_linky"; t["name"] = "TIC Linky"; t["type"] = "TIC Linky"; t["source"] = "local";
-  t["serial"] = "Serial1"; t["rx"] = 32; t["mode"] = "historique"; t["baudrate"] = 1200; t["timeoutMs"] = 5000;
+  t["serial"] = "Serial1"; t["rx"] = 26; t["tx"] = 27; t["mode"] = "historique"; t["baudrate"] = 1200; t["timeoutMs"] = 5000;
   t["role"] = "compteur officiel / puissance reseau"; t["enabled"] = true;
   JsonArray ds = sensorsConfig["ds18b20"].to<JsonArray>();
   const char *ids[] = {"sonde1", "sonde2", "sonde3"};
@@ -365,22 +508,16 @@ void ConfigManager::defaultSensors() {
 void ConfigManager::defaultActuators() {
   actuatorsConfig.clear();
   actuatorsConfig["version"] = CONFIG_VERSION;
-  JsonObject sim = actuatorsConfig["simulationOutput"].to<JsonObject>();
-  sim["enabled"] = true;
-  sim["ledSsr1Gpio"] = 18;
-  sim["ledSsr2Gpio"] = 19;
-  sim["ledTriacGpio"] = 21;
-  sim["visualCycleMs"] = 1000;
   JsonArray arr = actuatorsConfig["actuators"].to<JsonArray>();
   JsonObject a = arr.add<JsonObject>();
   a["id"] = "ssr1_water_heater"; a["name"] = "SSR1 chauffe-eau principal"; a["type"] = "SSR"; a["source"] = "local";
-  a["gpio"] = 26; a["mode"] = "BURST_FIRE"; a["maxPowerW"] = 1500; a["cycleMs"] = 1000; a["critical"] = true; a["enabled"] = true;
+  a["gpio"] = 5; a["mode"] = "BURST_FIRE"; a["maxPowerW"] = 1500; a["cycleMs"] = 1000; a["critical"] = true; a["enabled"] = true;
   JsonObject b = arr.add<JsonObject>();
   b["id"] = "ssr2_aux"; b["name"] = "SSR2 auxiliaire"; b["type"] = "SSR"; b["source"] = "local";
-  b["gpio"] = 25; b["mode"] = "BURST_FIRE"; b["maxPowerW"] = 1000; b["cycleMs"] = 1000; b["critical"] = true; b["enabled"] = true;
+  b["gpio"] = 17; b["mode"] = "BURST_FIRE"; b["maxPowerW"] = 1000; b["cycleMs"] = 1000; b["critical"] = true; b["enabled"] = true;
   JsonObject c = arr.add<JsonObject>();
   c["id"] = "robotdyn_triac"; c["name"] = "RobotDyn Triac"; c["type"] = "RobotDyn Triac"; c["source"] = "local";
-  c["zeroCross"] = 27; c["control"] = 33; c["mode"] = "PHASE_ANGLE"; c["maxPowerW"] = 1000; c["critical"] = true; c["enabled"] = true;
+  c["zeroCross"] = -1; c["control"] = 33; c["mode"] = "PHASE_ANGLE"; c["maxPowerW"] = 1000; c["critical"] = true; c["enabled"] = false;
 }
 
 void ConfigManager::defaultRules() {

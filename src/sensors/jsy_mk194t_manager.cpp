@@ -1,11 +1,8 @@
 #include "jsy_mk194t_manager.h"
 
 void JSYMK194TManager::begin() {
-  JsonObject router = config.system()["router"];
-  minInjectionStartW = router["minInjectionStartW"] | 200.0f;
-  stopBelowInjectionW = router["stopBelowInjectionW"] | 80.0f;
-  Serial2.begin(baudrate, SERIAL_8N1, rxPin, txPin);
-  Serial.println(F("JSY-MK-194T Serial2 pret: RX16 TX17 4800 8N1 adresse 1"));
+  configureFromJson();
+  beginSerial();
 }
 
 void JSYMK194TManager::loop() {
@@ -21,6 +18,14 @@ void JSYMK194TManager::loop(uint32_t now) {
 }
 
 void JSYMK194TManager::readFrame(uint32_t now) {
+  if (!enabled) {
+    if (reading.available) {
+      reading.available = false;
+      publishRuntime();
+    }
+    return;
+  }
+
   if (!waiting && now - lastRequestMs >= readIntervalMs) {
     sendRequest();
     lastRequestMs = now;
@@ -118,10 +123,93 @@ void JSYMK194TManager::calculatePowerDirection() {
 
 void JSYMK194TManager::printStatus() {
   Serial.println(F("=== JSY-MK-194T status ==="));
+  Serial.print(F("enabled=")); Serial.println(enabled ? F("true") : F("false"));
+  Serial.print(F("Serial2 RX=")); Serial.print(rxPin);
+  Serial.print(F(" TX=")); Serial.print(txPin);
+  Serial.print(F(" baud=")); Serial.print(baudrate);
+  Serial.print(F(" addr=")); Serial.println(modbusAddress);
   Serial.print(F("available=")); Serial.println(reading.available ? F("true") : F("false"));
   Serial.print(F("gridPowerW=")); Serial.println(reading.gridPowerW);
   Serial.print(F("injectionW=")); Serial.println(reading.injectionW);
   Serial.print(F("surplusW=")); Serial.println(reading.surplusW);
+}
+
+void JSYMK194TManager::reloadConfig() {
+  uint8_t previousRx = rxPin;
+  uint8_t previousTx = txPin;
+  uint32_t previousBaudrate = baudrate;
+  configureFromJson();
+  if (previousRx != rxPin || previousTx != txPin || previousBaudrate != baudrate) {
+    beginSerial();
+  }
+  waiting = false;
+  rxLen = 0;
+  expectedLen = 0;
+  lastRequestMs = 0;
+  reading.available = false;
+  publishRuntime();
+  state.addLog("Configuration JSY rechargee");
+}
+
+void JSYMK194TManager::stop() {
+  waiting = false;
+  rxLen = 0;
+  expectedLen = 0;
+  reading.available = false;
+  Serial2.end();
+  publishRuntime();
+}
+
+void JSYMK194TManager::configureFromJson() {
+  JsonObject router = config.system()["router"];
+  minInjectionStartW = router["minInjectionStartW"] | 200.0f;
+  stopBelowInjectionW = router["stopBelowInjectionW"] | 80.0f;
+
+  JsonObject jsy;
+  for (JsonObject sensor : config.sensors()) {
+    const char *id = sensor["id"] | "";
+    const char *type = sensor["type"] | "";
+    if (strcmp(id, "jsy_grid") == 0 || strcmp(type, "JSY-MK-194T") == 0) {
+      jsy = sensor;
+      break;
+    }
+  }
+
+  enabled = jsy.isNull() ? true : (jsy["enabled"] | true);
+  int address = jsy["modbusAddress"] | (jsy["address"] | 1);
+  modbusAddress = constrain(address, 1, 247);
+  rxPin = constrain(jsy["rx"] | 26, 0, 39);
+  txPin = constrain(jsy["tx"] | 27, 0, 39);
+  baudrate = jsy["baudrate"] | 4800;
+  if (baudrate < 1200 || baudrate > 115200) baudrate = 4800;
+  readIntervalMs = jsy["readIntervalMs"] | 500;
+  readIntervalMs = constrain(readIntervalMs, 200UL, 10000UL);
+  timeoutMs = jsy["timeoutMs"] | 400;
+  timeoutMs = constrain(timeoutMs, 100UL, 3000UL);
+  rs485DirPin = jsy["rs485DirPin"] | jsy["dePin"] | -1;
+  if (rs485DirPin < 0 || rs485DirPin > 39) rs485DirPin = -1;
+}
+
+void JSYMK194TManager::beginSerial() {
+  if (rs485DirPin >= 0) {
+    pinMode(rs485DirPin, OUTPUT);
+    digitalWrite(rs485DirPin, LOW);
+  }
+  Serial2.end();
+  Serial2.begin(baudrate, SERIAL_8N1, rxPin, txPin);
+  Serial.print(F("JSY-MK-194T Serial2: RX"));
+  Serial.print(rxPin);
+  Serial.print(F(" TX"));
+  Serial.print(txPin);
+  Serial.print(F(" "));
+  Serial.print(baudrate);
+  Serial.print(F(" 8N1 adresse "));
+  Serial.print(modbusAddress);
+  if (rs485DirPin >= 0) {
+    Serial.print(F(" DE/RE GPIO"));
+    Serial.print(rs485DirPin);
+  }
+  Serial.println();
 }
 
 void JSYMK194TManager::sendRequest() {
@@ -129,7 +217,10 @@ void JSYMK194TManager::sendRequest() {
   uint16_t crc = crc16(frame, 6);
   frame[6] = crc & 0xFF;
   frame[7] = crc >> 8;
+  if (rs485DirPin >= 0) digitalWrite(rs485DirPin, HIGH);
   Serial2.write(frame, sizeof(frame));
+  Serial2.flush();
+  if (rs485DirPin >= 0) digitalWrite(rs485DirPin, LOW);
 }
 
 uint16_t JSYMK194TManager::crc16(const uint8_t *data, uint8_t len) {

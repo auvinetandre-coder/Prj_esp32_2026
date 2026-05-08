@@ -16,6 +16,7 @@
 #include "src/logger/logger.h"
 #include "src/simulation/simulation_manager.h"
 #include "src/status/status_led.h"
+#include "src/display/display_manager.h"
 
 ConfigManager configManager;
 RuntimeState runtimeState;
@@ -30,6 +31,7 @@ SafetyManager safetyManager(configManager, runtimeState, actuatorManager);
 SimulationManager simulationManager(configManager, runtimeState);
 WebUi webUi(configManager, runtimeState, solarWiFi, espNowManager, redundancyManager, sensorManager, actuatorManager, ruleEngine, safetyManager, simulationManager);
 StatusLed statusLed(runtimeState);
+DisplayManager displayManager(configManager, runtimeState);
 
 static uint32_t lastSensorTick = 0;
 static uint32_t lastLogicTick = 0;
@@ -77,6 +79,7 @@ void setup() {
   Serial.println(F("Starting Web UI..."));
   webUi.begin();
   ruleEngine.begin();
+  displayManager.begin();
 
   runtimeState.addLog("Boot completed");
   Serial.print(F("Boot completed. Network mode: "));
@@ -97,6 +100,7 @@ void loop() {
   espNowManager.loop();
   actuatorManager.loop(now);
   statusLed.loop(now);
+  displayManager.loop(now);
   simulationManager.loop(now);
 
   if (now - lastSensorTick >= 500) {
