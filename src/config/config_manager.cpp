@@ -1,5 +1,7 @@
 #include "config_manager.h"
 #include <LittleFS.h>
+#include <Preferences.h>
+#include "../build_info.h"
 
 static const char *DEVICE_PATH = "/config/device.json";
 static const char *SYSTEM_PATH = "/config/system.json";
@@ -7,15 +9,49 @@ static const char *SENSORS_PATH = "/config/sensors.json";
 static const char *ACTUATORS_PATH = "/config/actuators.json";
 static const char *RULES_PATH = "/config/rules.json";
 static const uint16_t CONFIG_VERSION = 2;
-static const char *FIRMWARE_VERSION = "0.2.0";
+static const char *FIRMWARE_VERSION = ROUTEUR_FIRMWARE_VERSION;
 static const char *DEFAULT_AP_SSID = "RouteurSolaire_Config";
 static const char *DEFAULT_AP_PASSWORD = "routeur1234";
+static const char *CONFIG_BACKUP_NAMESPACE = "rs_cfg_bak";
+static const size_t CONFIG_BACKUP_CHUNK_SIZE = 850;
 
 static bool isConfigPlaceholder(const char *value) {
   if (!value || !value[0]) return true;
   String text(value);
   text.toUpperCase();
   return text.indexOf("A_CONFIGURER") >= 0 || text.indexOf("ACONFIGURER") >= 0;
+}
+
+static bool putChunkedString(Preferences &prefs, const char *prefix, const String &value) {
+  const uint16_t chunks = (value.length() + CONFIG_BACKUP_CHUNK_SIZE - 1) / CONFIG_BACKUP_CHUNK_SIZE;
+  String countKey = String(prefix) + "_cnt";
+  if (!prefs.putUShort(countKey.c_str(), chunks)) return false;
+  for (uint16_t i = 0; i < chunks; i++) {
+    String key = String(prefix) + "_" + String(i);
+    String part = value.substring(i * CONFIG_BACKUP_CHUNK_SIZE, min(value.length(), static_cast<size_t>((i + 1) * CONFIG_BACKUP_CHUNK_SIZE)));
+    if (!prefs.putString(key.c_str(), part)) return false;
+  }
+  return true;
+}
+
+static String getChunkedString(Preferences &prefs, const char *prefix) {
+  String countKey = String(prefix) + "_cnt";
+  uint16_t chunks = prefs.getUShort(countKey.c_str(), 0);
+  String value;
+  for (uint16_t i = 0; i < chunks; i++) {
+    String key = String(prefix) + "_" + String(i);
+    value += prefs.getString(key.c_str(), "");
+  }
+  return value;
+}
+
+static bool writeTextFile(const char *path, const String &value) {
+  File file = LittleFS.open(path, "w");
+  if (!file) return false;
+  size_t written = file.print(value);
+  file.flush();
+  file.close();
+  return written == value.length();
 }
 
 bool ConfigManager::begin() {
@@ -29,6 +65,11 @@ bool ConfigManager::begin() {
     display["mosi"] = 19;
     saveSystem();
     Serial.println(F("Configuration ecran normalisee."));
+  }
+  if (!display.isNull() && (display["refreshMs"] | 4000) < 3000) {
+    display["refreshMs"] = 4000;
+    saveSystem();
+    Serial.println(F("Rafraichissement ecran ralenti."));
   }
   if (normalizeSensorsConfig()) {
     saveSensors();
@@ -44,6 +85,7 @@ bool ConfigManager::begin() {
 
 bool ConfigManager::loadAll() {
   ensureConfigDir();
+  restoreFromNvsAfterLittleFsOta();
   bool ok = true;
   ok &= loadOrDefault(DEVICE_PATH, deviceConfig, &ConfigManager::defaultDevice);
   ok &= loadOrDefault(SYSTEM_PATH, systemConfig, &ConfigManager::defaultSystem);
@@ -75,6 +117,98 @@ bool ConfigManager::resetToDefaults() {
   defaultActuators();
   defaultRules();
   return saveAll();
+}
+
+bool ConfigManager::backupToNvsBeforeLittleFsOta() {
+  configLastError = "";
+  Preferences prefs;
+  if (!prefs.begin(CONFIG_BACKUP_NAMESPACE, false)) {
+    configLastError = "Impossible d'ouvrir NVS pour sauvegarde config";
+    return false;
+  }
+
+  prefs.clear();
+  bool ok = true;
+  String payload;
+
+  payload = "";
+  serializeJson(deviceConfig, payload);
+  ok = ok && putChunkedString(prefs, "dev", payload);
+
+  payload = "";
+  serializeJson(systemConfig, payload);
+  ok = ok && putChunkedString(prefs, "sys", payload);
+
+  payload = "";
+  serializeJson(sensorsConfig, payload);
+  ok = ok && putChunkedString(prefs, "sen", payload);
+
+  payload = "";
+  serializeJson(actuatorsConfig, payload);
+  ok = ok && putChunkedString(prefs, "act", payload);
+
+  payload = "";
+  serializeJson(rulesConfig, payload);
+  ok = ok && putChunkedString(prefs, "rul", payload);
+
+  if (ok) {
+    prefs.putBool("pending", true);
+    prefs.putString("fw", ROUTEUR_FIRMWARE_VERSION);
+  } else {
+    prefs.putBool("pending", false);
+    configLastError = "Sauvegarde NVS incomplete avant OTA LittleFS";
+  }
+  prefs.end();
+  return ok;
+}
+
+bool ConfigManager::restoreFromNvsAfterLittleFsOta() {
+  Preferences prefs;
+  if (!prefs.begin(CONFIG_BACKUP_NAMESPACE, false)) return false;
+  bool pending = prefs.getBool("pending", false);
+  if (!pending) {
+    prefs.end();
+    return false;
+  }
+
+  ensureConfigDir();
+  struct RestoreItem {
+    const char *prefix;
+    const char *path;
+  };
+  const RestoreItem items[] = {
+      {"dev", DEVICE_PATH},
+      {"sys", SYSTEM_PATH},
+      {"sen", SENSORS_PATH},
+      {"act", ACTUATORS_PATH},
+      {"rul", RULES_PATH},
+  };
+
+  bool ok = true;
+  for (const RestoreItem &item : items) {
+    String json = getChunkedString(prefs, item.prefix);
+    if (!json.length()) {
+      ok = false;
+      continue;
+    }
+    DynamicJsonDocument check(32768);
+    DeserializationError err = deserializeJson(check, json);
+    if (err || check.overflowed() || !validateDoc(item.path, check)) {
+      ok = false;
+      continue;
+    }
+    ok = writeTextFile(item.path, json) && ok;
+  }
+
+  if (ok) {
+    prefs.clear();
+    Serial.println(F("Configuration restauree depuis NVS apres OTA LittleFS."));
+  } else {
+    prefs.putBool("pending", false);
+    Serial.println(F("Restauration NVS incomplete apres OTA LittleFS."));
+  }
+  prefs.end();
+  return ok;
 }
 
 JsonObject ConfigManager::device() { return deviceConfig.as<JsonObject>(); }
@@ -237,6 +371,92 @@ bool ConfigManager::normalizeSystemConfig() {
     wifi["connectTimeoutMs"] = 8000;
     changed = true;
   }
+  JsonObject webAuth = root["webAuth"].is<JsonObject>() ? root["webAuth"].as<JsonObject>() : root["webAuth"].to<JsonObject>();
+  if (!webAuth["enabled"].is<bool>()) {
+    webAuth["enabled"] = true;
+    changed = true;
+  }
+  if (!webAuth["username"].is<const char *>() || isConfigPlaceholder(webAuth["username"] | "")) {
+    webAuth["username"] = "admin";
+    changed = true;
+  }
+  if (!webAuth["password"].is<const char *>() || isConfigPlaceholder(webAuth["password"] | "") || strlen(webAuth["password"] | "") < 4) {
+    webAuth["password"] = "routeur1234";
+    changed = true;
+  }
+  JsonObject mqtt = root["mqtt"].is<JsonObject>() ? root["mqtt"].as<JsonObject>() : root["mqtt"].to<JsonObject>();
+  if (!mqtt["enabled"].is<bool>()) {
+    mqtt["enabled"] = false;
+    changed = true;
+  }
+  if (!mqtt["host"].is<const char *>() || isConfigPlaceholder(mqtt["host"] | "")) {
+    mqtt["host"] = "192.168.0.48";
+    changed = true;
+  }
+  if (!mqtt["port"].is<uint16_t>()) {
+    mqtt["port"] = 1883;
+    changed = true;
+  }
+  if (!mqtt["clientId"].is<const char *>()) {
+    mqtt["clientId"] = "RouteurSolaireESP32";
+    changed = true;
+  }
+  if (!mqtt["baseTopic"].is<const char *>()) {
+    mqtt["baseTopic"] = "routeurSolaire";
+    changed = true;
+  }
+  if (!mqtt["username"].is<const char *>()) {
+    mqtt["username"] = "";
+    changed = true;
+  }
+  if (!mqtt["password"].is<const char *>()) {
+    mqtt["password"] = "";
+    changed = true;
+  }
+  if (!mqtt["publishIntervalMs"].is<uint32_t>()) {
+    mqtt["publishIntervalMs"] = 5000;
+    changed = true;
+  }
+  if (!mqtt["retain"].is<bool>()) {
+    mqtt["retain"] = false;
+    changed = true;
+  }
+  if (!mqtt["publishIndividualTopics"].is<bool>()) {
+    mqtt["publishIndividualTopics"] = true;
+    changed = true;
+  }
+  JsonObject mqttTopics = mqtt["topics"].is<JsonObject>() ? mqtt["topics"].as<JsonObject>() : mqtt["topics"].to<JsonObject>();
+  const char *baseTopic = mqtt["baseTopic"] | "routeurSolaire";
+  if (!mqttTopics["state"].is<const char *>()) {
+    mqttTopics["state"] = String(baseTopic) + "/state";
+    changed = true;
+  }
+  if (!mqttTopics["command"].is<const char *>()) {
+    mqttTopics["command"] = String(baseTopic) + "/command";
+    changed = true;
+  }
+  if (!mqttTopics["actuatorSet"].is<const char *>()) {
+    mqttTopics["actuatorSet"] = String(baseTopic) + "/actuator/+/set";
+    changed = true;
+  }
+  if (!mqttTopics["availability"].is<const char *>()) {
+    mqttTopics["availability"] = String(baseTopic) + "/availability";
+    changed = true;
+  }
+  JsonObject router = root["router"].is<JsonObject>() ? root["router"].as<JsonObject>() : root["router"].to<JsonObject>();
+  if (!router["mode"].is<const char *>()) { router["mode"] = "AUTO"; changed = true; }
+  if (!router["gridPowerSource"].is<const char *>()) { router["gridPowerSource"] = "JSY"; changed = true; }
+  if (!router["pidEnabled"].is<bool>()) { router["pidEnabled"] = true; changed = true; }
+  if (!router["gridSetpointW"].is<float>() && !router["gridSetpointW"].is<int>()) { router["gridSetpointW"] = 0; changed = true; }
+  if (!router["deadbandW"].is<float>() && !router["deadbandW"].is<int>()) { router["deadbandW"] = 30; changed = true; }
+  if (!router["alphaFilter"].is<float>() && !router["alphaFilter"].is<int>()) { router["alphaFilter"] = 0.25; changed = true; }
+  if (!router["maxOutputRampPercentPerSecond"].is<float>() && !router["maxOutputRampPercentPerSecond"].is<int>()) { router["maxOutputRampPercentPerSecond"] = 15; changed = true; }
+  if (!router["heaterMaxPowerW"].is<float>() && !router["heaterMaxPowerW"].is<int>()) { router["heaterMaxPowerW"] = router["ssr1MaxW"] | 1500; changed = true; }
+  if (!router["jsyReadIntervalMs"].is<uint32_t>()) { router["jsyReadIntervalMs"] = 100; changed = true; }
+  if (!router["voltageMinV"].is<float>() && !router["voltageMinV"].is<int>()) { router["voltageMinV"] = 180; changed = true; }
+  if (!router["voltageMaxV"].is<float>() && !router["voltageMaxV"].is<int>()) { router["voltageMaxV"] = 260; changed = true; }
+  if (!router["frequencyMinHz"].is<float>() && !router["frequencyMinHz"].is<int>()) { router["frequencyMinHz"] = 47; changed = true; }
+  if (!router["frequencyMaxHz"].is<float>() && !router["frequencyMaxHz"].is<int>()) { router["frequencyMaxHz"] = 53; changed = true; }
   return changed;
 }
 
@@ -296,6 +516,39 @@ bool ConfigManager::normalizeSensorsConfig() {
       if (!sensor["rs485DirPin"].is<int>()) {
         sensor["rs485DirPin"] = -1;
         changed = true;
+      }
+      JsonArray channels = sensor["channels"].as<JsonArray>();
+      if (channels.isNull() || channels.size() < 2) {
+        channels = sensor["channels"].to<JsonArray>();
+        JsonObject ch1 = channels.add<JsonObject>();
+        ch1["id"] = "clamp1"; ch1["name"] = "Pince 1"; ch1["role"] = "production"; ch1["measures"].add("voltageV1"); ch1["measures"].add("currentA1"); ch1["measures"].add("activePowerW1"); ch1["measures"].add("powerFactor1");
+        JsonObject ch2 = channels.add<JsonObject>();
+        ch2["id"] = "clamp2"; ch2["name"] = "Pince 2"; ch2["role"] = "grid"; ch2["measures"].add("voltageV2"); ch2["measures"].add("currentA2"); ch2["measures"].add("activePowerW2"); ch2["measures"].add("powerFactor2");
+        changed = true;
+      } else {
+        JsonObject ch1 = channels[0].as<JsonObject>();
+        JsonObject ch2 = channels[1].as<JsonObject>();
+        if (!ch1["id"].is<const char *>()) { ch1["id"] = "clamp1"; changed = true; }
+        if (!ch2["id"].is<const char *>()) { ch2["id"] = "clamp2"; changed = true; }
+        if (!ch1["name"].is<const char *>() || strlen(ch1["name"] | "") == 0) { ch1["name"] = "Pince 1"; changed = true; }
+        if (!ch2["name"].is<const char *>() || strlen(ch2["name"] | "") == 0) { ch2["name"] = "Pince 2"; changed = true; }
+        if (!ch1["measures"].is<JsonArray>()) {
+          JsonArray m = ch1["measures"].to<JsonArray>();
+          m.add("voltageV1"); m.add("currentA1"); m.add("activePowerW1"); m.add("powerFactor1");
+          changed = true;
+        }
+        if (!ch2["measures"].is<JsonArray>()) {
+          JsonArray m = ch2["measures"].to<JsonArray>();
+          m.add("voltageV2"); m.add("currentA2"); m.add("activePowerW2"); m.add("powerFactor2");
+          changed = true;
+        }
+        const char *role1 = ch1["role"] | "";
+        const char *role2 = ch2["role"] | "";
+        if (strcmp(role1, "grid") == 0 && strcmp(role2, "production") == 0) {
+          ch1["role"] = "production";
+          ch2["role"] = "grid";
+          changed = true;
+        }
       }
     } else if (strcmp(id, "tic_linky") == 0 || strcmp(type, "TIC Linky") == 0) {
       int rx = sensor["rx"] | 26;
@@ -429,6 +682,26 @@ void ConfigManager::defaultSystem() {
   ap["ssid"] = DEFAULT_AP_SSID;
   ap["password"] = DEFAULT_AP_PASSWORD;
   ap["ip"] = "192.168.4.1";
+  JsonObject webAuth = root["webAuth"].to<JsonObject>();
+  webAuth["enabled"] = true;
+  webAuth["username"] = "admin";
+  webAuth["password"] = "routeur1234";
+  JsonObject mqtt = root["mqtt"].to<JsonObject>();
+  mqtt["enabled"] = false;
+  mqtt["host"] = "192.168.0.48";
+  mqtt["port"] = 1883;
+  mqtt["clientId"] = "RouteurSolaireESP32";
+  mqtt["baseTopic"] = "routeurSolaire";
+  mqtt["username"] = "";
+  mqtt["password"] = "";
+  mqtt["publishIntervalMs"] = 5000;
+  mqtt["retain"] = false;
+  mqtt["publishIndividualTopics"] = true;
+  JsonObject mqttTopics = mqtt["topics"].to<JsonObject>();
+  mqttTopics["state"] = "routeurSolaire/state";
+  mqttTopics["command"] = "routeurSolaire/command";
+  mqttTopics["actuatorSet"] = "routeurSolaire/actuator/+/set";
+  mqttTopics["availability"] = "routeurSolaire/availability";
   JsonObject router = root["router"].to<JsonObject>();
   router["mode"] = "AUTO";
   router["gridPowerSource"] = "JSY";
@@ -446,6 +719,17 @@ void ConfigManager::defaultSystem() {
   router["robotDynMaxW"] = 1000;
   router["ssrCycleMs"] = 1000;
   router["commandTimeoutMs"] = 5000;
+  router["pidEnabled"] = true;
+  router["gridSetpointW"] = 0;
+  router["deadbandW"] = 30;
+  router["alphaFilter"] = 0.25;
+  router["maxOutputRampPercentPerSecond"] = 15;
+  router["heaterMaxPowerW"] = 1500;
+  router["jsyReadIntervalMs"] = 100;
+  router["voltageMinV"] = 180;
+  router["voltageMaxV"] = 260;
+  router["frequencyMinHz"] = 47;
+  router["frequencyMaxHz"] = 53;
   router["kp"] = 0.08;
   router["ki"] = 0.01;
   router["kd"] = 0.0;
@@ -457,7 +741,7 @@ void ConfigManager::defaultSystem() {
   display["reset"] = 16;
   display["dc"] = 4;
   display["cs"] = 15;
-  display["refreshMs"] = 1000;
+  display["refreshMs"] = 4000;
   root["debug"] = true;
   root["peers"].to<JsonArray>();
 }
@@ -474,13 +758,13 @@ void ConfigManager::defaultSensors() {
   JsonObject s = arr.add<JsonObject>();
   s["id"] = "jsy_grid"; s["name"] = "JSY reseau"; s["type"] = "JSY-MK-194T"; s["source"] = "local";
   s["serial"] = "Serial2"; s["rx"] = 26; s["tx"] = 27; s["baudrate"] = 4800; s["modbusAddress"] = 1;
-  s["readIntervalMs"] = 500; s["timeoutMs"] = 400; s["rs485DirPin"] = -1;
+  s["readIntervalMs"] = 100; s["timeoutMs"] = 300; s["rs485DirPin"] = -1;
   s["role"] = "mesure reseau principal"; s["enabled"] = true;
   JsonArray channels = s["channels"].to<JsonArray>();
   JsonObject ch1 = channels.add<JsonObject>();
-  ch1["id"] = "clamp1"; ch1["name"] = "Pince 1"; ch1["role"] = "grid"; ch1["measures"].add("currentA1"); ch1["measures"].add("activePowerW1");
+  ch1["id"] = "clamp1"; ch1["name"] = "Pince 1"; ch1["role"] = "production"; ch1["measures"].add("voltageV1"); ch1["measures"].add("currentA1"); ch1["measures"].add("activePowerW1"); ch1["measures"].add("powerFactor1");
   JsonObject ch2 = channels.add<JsonObject>();
-  ch2["id"] = "clamp2"; ch2["name"] = "Pince 2"; ch2["role"] = "production"; ch2["measures"].add("currentA2"); ch2["measures"].add("activePowerW2");
+  ch2["id"] = "clamp2"; ch2["name"] = "Pince 2"; ch2["role"] = "grid"; ch2["measures"].add("voltageV2"); ch2["measures"].add("currentA2"); ch2["measures"].add("activePowerW2"); ch2["measures"].add("powerFactor2");
   JsonObject t = arr.add<JsonObject>();
   t["id"] = "tic_linky"; t["name"] = "TIC Linky"; t["type"] = "TIC Linky"; t["source"] = "local";
   t["serial"] = "Serial1"; t["rx"] = 26; t["tx"] = 27; t["mode"] = "historique"; t["baudrate"] = 1200; t["timeoutMs"] = 5000;

@@ -21,7 +21,7 @@ Les securites logicielles du firmware ne remplacent jamais les securites materie
 - Supporter ESP-NOW pour des modules distribues.
 - Gerer une redondance MASTER/BACKUP.
 - Continuer a fonctionner sans WiFi maison grace au point d'acces local.
-- Prevoir des extensions futures comme MQTT.
+- Publier et recevoir des donnees MQTT vers Jeedom si l'option est activee.
 
 ## Architecture
 
@@ -73,6 +73,7 @@ Modules principaux :
 - `SafetyManager` : securites globales.
 - `SimulationManager` : simulation sans capteurs ni charge 230 V.
 - `EspNowManager` : communication ESP-NOW.
+- `MqttManager` : publication et reception MQTT pour Jeedom.
 - `RedundancyManager` : MASTER/BACKUP.
 - `WebUi` : API REST et interface Web.
 - `RuntimeState` : etat global.
@@ -167,6 +168,8 @@ Pages :
 - Actionneurs
 - Logique
 - Diagnostic & Simulation
+- Systeme
+- MQTT
 - Parametres
 
 Interface de secours :
@@ -187,6 +190,98 @@ API utiles :
 - `/api/device`
 - `/api/simulation`
 - `/fs`
+
+### Login Web
+
+L'interface Web est protegee par une authentification HTTP Basic.
+
+Identifiants par defaut :
+
+```text
+Utilisateur : admin
+Mot de passe : routeur1234
+```
+
+Le navigateur affiche une fenetre de connexion au premier acces a `/`, `/app`, `/lite`, aux API ou aux pages OTA.
+
+La configuration est stockee dans `/config/system.json` :
+
+```json
+{
+  "webAuth": {
+    "enabled": true,
+    "username": "admin",
+    "password": "routeur1234"
+  }
+}
+```
+
+Depuis la page **Parametres > Acces Web**, il est possible de :
+
+- activer ou desactiver le login
+- modifier l'utilisateur
+- modifier le mot de passe
+
+Si le champ mot de passe est laisse vide dans l'interface, le mot de passe actuel est conserve.
+
+Attention : HTTP Basic protege l'acces local, mais ce n'est pas du HTTPS. Ne pas exposer l'ESP32 directement a Internet.
+
+## MQTT / Jeedom
+
+Le firmware integre un runtime MQTT base sur `PubSubClient`. Il reste inactif tant que MQTT n'est pas active dans la page **MQTT** ou dans `system.json`.
+
+Configuration par defaut :
+
+```text
+Broker Jeedom: 192.168.0.48
+Port: 1883
+Topic de base: routeurSolaire
+Publication: toutes les 5000 ms
+```
+
+Topics principaux par defaut :
+
+```text
+routeurSolaire/state
+routeurSolaire/availability
+routeurSolaire/command
+routeurSolaire/actuator/+/set
+```
+
+`routeurSolaire/state` publie un JSON global avec les mesures importantes : puissance reseau, injection, surplus, consommation, tension, courant, securite, simulation, temperatures DS18B20 et commandes actionneurs.
+
+Si les topics individuels sont actives, le firmware publie aussi des valeurs simples utiles pour Jeedom :
+
+```text
+routeurSolaire/gridPowerW
+routeurSolaire/injectionW
+routeurSolaire/consumptionW
+routeurSolaire/surplusW
+routeurSolaire/ssr1PowerPct
+routeurSolaire/ssr2PowerPct
+routeurSolaire/robotDynPowerPct
+routeurSolaire/safetyLevel
+routeurSolaire/ds18b20/sonde1/temperatureC
+```
+
+Commande JSON depuis Jeedom :
+
+```json
+{
+  "actuatorId": "ssr1_water_heater",
+  "command": "setActuatorPercent",
+  "value": 25
+}
+```
+
+Commande directe par topic :
+
+```text
+Topic: routeurSolaire/actuator/ssr1_water_heater/set
+Payload: 25
+```
+
+En etat Safety CRITICAL, les commandes MQTT actionneurs sont refusees sauf les commandes d'arret.
 
 ## Dashboard
 
@@ -213,6 +308,64 @@ Graphes :
 - echelle visible
 - tooltip au survol
 - personnalisation des blocs et courbes
+
+Graphe temps reel rapide :
+
+- fenetre affichee : 10 dernieres secondes
+- pas configurable : 100 a 500 ms
+- valeur par defaut : 300 ms
+- duree maximale active : 2 minutes
+- desactive automatiquement apres redemarrage
+- polling rapide arrete quand le graphe est desactive
+
+Les donnees rapides viennent de l'API legere :
+
+```text
+GET /api/realtime
+```
+
+L'historique rapide reste cote navigateur. Il n'est pas stocke dans LittleFS et ne provoque pas d'ecriture flash.
+
+## Regulation PID
+
+Le pilotage chauffe-eau utilise un controleur PID separe du gestionnaire de capteurs.
+
+Principe :
+
+- `SensorManager` selectionne la source reseau JSY/TIC/AUTO.
+- la puissance brute est stockee dans `gridPowerRawW`.
+- un filtre alpha produit `gridPowerFilteredW`.
+- `PIDController` lit uniquement cette puissance filtree.
+- la sortie PID devient une commande 0 a 100 % pour SSR1.
+- `ActuatorManager` applique la commande aux sorties physiques.
+- `SafetyManager` reste prioritaire et force la commande a 0 % en cas de defaut critique.
+
+Parametres principaux dans `system.json` :
+
+```json
+{
+  "router": {
+    "pidEnabled": true,
+    "gridSetpointW": 0,
+    "deadbandW": 30,
+    "alphaFilter": 0.25,
+    "maxOutputRampPercentPerSecond": 15,
+    "heaterMaxPowerW": 1500,
+    "jsyReadIntervalMs": 100,
+    "kp": 0.08,
+    "ki": 0.01,
+    "kd": 0.0
+  }
+}
+```
+
+Cadences principales :
+
+- JSY : 80 a 100 ms si configure
+- SensorManager : 100 ms
+- PIDController : 100 ms
+- SafetyManager : 100 ms
+- ActuatorManager : appele a chaque boucle, pilotage non bloquant
 
 ## Source puissance reseau
 
@@ -267,9 +420,13 @@ Mesures :
 Deux pinces sont gerees :
 
 - `activePowerW1`
+- `voltageV1`
 - `currentA1`
+- `powerFactor1`
 - `activePowerW2`
+- `voltageV2`
 - `currentA2`
+- `powerFactor2`
 
 Dans la page Capteurs, le JSY est un seul capteur avec deux voies :
 
@@ -597,6 +754,7 @@ Bibliotheques Arduino :
 - WiFi ESP32
 - WebServer ESP32
 - ESP-NOW ESP32
+- PubSubClient
 
 Carte :
 
@@ -604,16 +762,76 @@ Carte :
 ESP32 Dev Module
 ```
 
-Partition conseillee : une partition avec LittleFS disponible.
+Partition conseillee :
+
+```text
+RouteurSolaire OTA (1.5MB APP x2 / 960KB LittleFS)
+```
+
+Cette partition permet :
+
+- deux emplacements firmware OTA d'environ 1.5 Mo chacun
+- environ 960 Ko pour LittleFS
+- l'interface Web complete dans `/www`
+- les fichiers JSON de configuration dans `/config`
+
+Si le menu de partition n'apparait pas dans Arduino IDE :
+
+1. Fermer Arduino IDE.
+2. Relancer Arduino IDE.
+3. Ouvrir le gestionnaire de cartes.
+4. Laisser l'IDE recharger les donnees des cartes.
+5. Revenir dans `Outils > Partition Scheme`.
+6. Selectionner `RouteurSolaire OTA (1.5MB APP x2 / 960KB LittleFS)`.
+
+Il peut y avoir un cache cote Arduino IDE. Si l'option n'apparait pas tout de suite, un redemarrage complet de l'IDE ou un rechargement des donnees de cartes peut etre necessaire.
+
+Le fichier de partition du projet est :
+
+```text
+partitions_ota_1m5app_960k_littlefs.csv
+```
+
+Il contient :
+
+```text
+app0   0x10000   0x180000
+app1   0x190000  0x180000
+spiffs 0x310000  0x0F0000
+```
+
+Dans le core ESP32 Arduino, la partition est declaree sous le nom :
+
+```text
+partitions_ota_1m5app_960k_littlefs
+```
 
 ## Compilation
 
-Depuis Arduino IDE :
+Deux methodes sont possibles.
+
+### Methode 1 : Arduino IDE
 
 1. Ouvrir `RouteurSolaireESP32.ino`.
-2. Choisir la carte ESP32.
+2. Choisir la carte :
+
+```text
+ESP32 Dev Module
+```
+
 3. Choisir le port COM.
-4. Compiler.
+4. Choisir le partitionnement :
+
+```text
+RouteurSolaire OTA (1.5MB APP x2 / 960KB LittleFS)
+```
+
+5. Compiler.
+6. Televerser.
+
+Cette methode met a jour le firmware, mais pas les fichiers Web LittleFS.
+
+### Methode 2 : script de compilation
 
 Script fourni :
 
@@ -621,24 +839,137 @@ Script fourni :
 Compiler_RouteurSolaireESP32.bat
 ```
 
+Ce script compile avec la bonne partition RouteurSolaire et genere le firmware dans le dossier de build Arduino.
+
+Il est utile si Arduino IDE ne propose pas encore la partition dans le menu, ou si l'on veut eviter une erreur de selection de partition.
+
+Apres compilation, le script copie automatiquement le firmware OTA ici :
+
+```text
+build/ota/RouteurSolaireESP32_firmware.bin
+build/ota/RouteurSolaireESP32_firmware_YYYYMMDD-NN.bin
+```
+
+Le fichier sans date est toujours le dernier firmware compile. Le fichier avec version permet de conserver un historique.
+
+Le format de version est :
+
+```text
+YYYYMMDD-NN
+```
+
+Exemple :
+
+```text
+RouteurSolaireESP32_firmware_20260509-01.bin
+```
+
+La version est aussi visible dans la page **Systeme**.
+
+Le script genere aussi `src/build_info.h`. Ce fichier injecte dans le firmware :
+
+- la version `YYYYMMDD-NN`
+- la date de build
+- le numero de build du jour
+- un timestamp complet
+- une signature embarquee dans le binaire
+
+Signature embarquee :
+
+```text
+RS32_VERSION:YYYYMMDD-NN;
+```
+
+Cette signature permet a la page **Systeme** de relire la version presente dans APP1 et APP2, meme pour la partition OTA inactive.
+
+Important : une partition qui contient un ancien firmware construit avant cette signature peut afficher `N/A`. Elle affichera sa version apres avoir recu un firmware genere avec ce systeme.
+
+Dans la page **Systeme > OTA firmware**, on peut voir :
+
+- la partition lancee actuellement : `app0` ou `app1`
+- la partition configuree au boot
+- la prochaine partition utilisee par l'OTA
+- la version APP1 / OTA_0
+- la version APP2 / OTA_1
+- la taille du slot firmware
+- la taille du firmware utilise
+- le reste disponible
+
+La page propose aussi un bouton **Rollback firmware**.
+
+Ce bouton :
+
+1. verifie l'autre partition OTA
+2. refuse l'action si elle ne contient pas une image valide
+3. configure l'autre partition comme partition de boot
+4. redemarre l'ESP32
+
+Exemple :
+
+```text
+ESP32 lance depuis app0
+Rollback firmware -> prochain boot sur app1
+```
+
+Le rollback ne modifie pas LittleFS. L'interface et les fichiers `/config` restent donc ceux de la partition LittleFS actuelle.
+
 ## Televersement firmware
 
-Depuis Arduino IDE :
+### Depuis Arduino IDE
 
 1. Selectionner le port COM.
 2. Cliquer Televerser.
 
 Le firmware seul ne met pas a jour l'interface Web LittleFS.
 
+### Depuis les scripts
+
+Scripts fournis :
+
+```text
+Televerser_Firmware_COM3.bat
+Televerser_Firmware_COM4.bat
+```
+
+Utiliser le script correspondant au port serie de l'ESP32.
+
+Exemple si l'ESP32 est sur COM4 :
+
+```text
+Televerser_Firmware_COM4.bat
+```
+
+Ces scripts utilisent le firmware compile precedemment.
+
 ## Televersement LittleFS
 
 Quand `data/www/app.js`, `data/www/style.css` ou `data/www/index.html` change, il faut televerser LittleFS.
 
-Script fourni pour COM3 :
+Scripts fournis :
 
 ```text
 Televerser_LittleFS_COM3.bat
+Televerser_LittleFS_COM4.bat
 ```
+
+Utiliser le script correspondant au port serie de l'ESP32.
+
+Exemple si l'ESP32 est sur COM4 :
+
+```text
+Televerser_LittleFS_COM4.bat
+```
+
+Le script :
+
+1. construit l'image LittleFS a partir du dossier `data`
+2. cree le fichier OTA LittleFS dans `build/ota/RouteurSolaireESP32_littlefs.bin`
+3. ecrit la version LittleFS dans `data/www/littlefs_version.txt`
+4. cree aussi une copie versionnee `build/ota/RouteurSolaireESP32_littlefs_YYYYMMDD-NN.bin`
+5. demande si l'on veut televerser maintenant sur le port COM
+6. si la reponse est oui, l'ecrit dans la partition LittleFS a l'adresse `0x310000`
+7. utilise une taille LittleFS de `0xF0000`
+8. redemarre l'ESP32 en fin de televersement si possible
 
 Apres televersement, ouvrir :
 
@@ -647,6 +978,129 @@ http://192.168.4.1/app
 ```
 
 ou l'IP donnee par le WiFi maison.
+
+Si `/app` affiche une ancienne interface, une page blanche, ou `Not found: /www/index.html`, verifier :
+
+1. que le bon schema de partition est selectionne
+2. que LittleFS a bien ete televerse
+3. que le port COM est le bon
+4. que l'ESP32 a bien redemarre apres le televersement
+5. que l'URL utilisee est `/app`
+
+Page de secours :
+
+```text
+http://192.168.4.1/
+http://192.168.4.1/lite
+```
+
+La page de secours permet aussi d'envoyer un firmware ou une image LittleFS par OTA quand le reseau fonctionne.
+
+## OTA Web
+
+La page de secours integre deux zones de mise a jour OTA :
+
+- firmware
+- LittleFS
+
+Adresse :
+
+```text
+http://adresse-ip/
+```
+
+Routes OTA :
+
+```text
+POST /ota/firmware
+POST /ota/littlefs
+```
+
+Procedure OTA firmware :
+
+1. Compiler le firmware avec `Compiler_RouteurSolaireESP32.bat`.
+2. Recuperer le fichier `.bin` genere dans `build/ota`.
+3. Ouvrir la page de secours.
+4. S'identifier si le navigateur demande le login.
+5. Choisir le fichier firmware.
+6. Envoyer.
+7. Attendre le redemarrage.
+
+Procedure OTA LittleFS :
+
+1. Generer l'image LittleFS avec `Televerser_LittleFS_COM3.bat` ou `Televerser_LittleFS_COM4.bat`.
+2. Ouvrir la page de secours.
+3. S'identifier si le navigateur demande le login.
+4. Choisir le fichier LittleFS `.bin`.
+5. Envoyer.
+6. Attendre le redemarrage.
+
+### Conservation de la configuration pendant OTA LittleFS
+
+L'OTA LittleFS remplace toute la partition LittleFS. Sans protection, les fichiers suivants pourraient etre perdus :
+
+```text
+/config/device.json
+/config/system.json
+/config/sensors.json
+/config/actuators.json
+/config/rules.json
+```
+
+Le firmware sauvegarde donc automatiquement ces fichiers dans la partition NVS avant de commencer l'ecriture OTA LittleFS.
+
+Au redemarrage suivant, si une sauvegarde NVS est en attente, le `ConfigManager` restaure les fichiers `/config/*.json` avant de charger la configuration.
+
+Cela permet de conserver :
+
+- SSID WiFi maison
+- mot de passe WiFi maison
+- nom du module
+- role du module
+- login Web
+- capteurs
+- actionneurs
+- regles
+- parametres routeur solaire
+
+Si la sauvegarde NVS echoue, l'OTA LittleFS est refusee pour eviter de perdre la configuration.
+
+Ne pas couper l'alimentation pendant une mise a jour OTA.
+
+## Resume des methodes de mise a jour
+
+Firmware uniquement :
+
+```text
+Arduino IDE > Televerser
+ou
+Televerser_Firmware_COM3.bat / Televerser_Firmware_COM4.bat
+ou
+OTA firmware depuis la page de secours avec build/ota/RouteurSolaireESP32_firmware.bin
+```
+
+Interface Web uniquement :
+
+```text
+Televerser_LittleFS_COM3.bat / Televerser_LittleFS_COM4.bat
+ou
+OTA LittleFS depuis la page de secours avec build/ota/RouteurSolaireESP32_littlefs.bin
+```
+
+Firmware + interface Web :
+
+```text
+1. Televerser le firmware
+2. Televerser LittleFS
+3. Redemarrer l'ESP32
+4. Ouvrir /app
+```
+
+Regle pratique :
+
+- modification `.ino`, `.cpp`, `.h` : televerser le firmware
+- modification `data/www/*` : televerser LittleFS
+- modification des deux : televerser firmware puis LittleFS
 
 ## Premiere configuration
 

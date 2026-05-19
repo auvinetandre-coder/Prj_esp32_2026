@@ -19,6 +19,8 @@ public:
   bool saveActuatorsConfig();
   bool saveRulesConfig();
   bool resetToDefaults();
+  bool backupToNvsBeforeLittleFsOta();
+  bool restoreFromNvsAfterLittleFsOta();
   void printConfigSummary();
   bool replaceFile(const char *path, const String &json);
   String lastError() const { return configLastError; }

@@ -10,8 +10,14 @@ static const RuleEngine::MeasureDef RULE_MEASURES[] = {
   {"JSY-MK-194T", "voltageV", RuleEngine::MEASURE_NUMBER, "V", ""},
   {"JSY-MK-194T", "currentA", RuleEngine::MEASURE_NUMBER, "A", ""},
   {"JSY-MK-194T", "activePowerW", RuleEngine::MEASURE_NUMBER, "W", ""},
+  {"JSY-MK-194T", "voltageV1", RuleEngine::MEASURE_NUMBER, "V", ""},
+  {"JSY-MK-194T", "currentA1", RuleEngine::MEASURE_NUMBER, "A", ""},
   {"JSY-MK-194T", "activePowerW1", RuleEngine::MEASURE_NUMBER, "W", ""},
+  {"JSY-MK-194T", "powerFactor1", RuleEngine::MEASURE_NUMBER, "", ""},
+  {"JSY-MK-194T", "voltageV2", RuleEngine::MEASURE_NUMBER, "V", ""},
+  {"JSY-MK-194T", "currentA2", RuleEngine::MEASURE_NUMBER, "A", ""},
   {"JSY-MK-194T", "activePowerW2", RuleEngine::MEASURE_NUMBER, "W", ""},
+  {"JSY-MK-194T", "powerFactor2", RuleEngine::MEASURE_NUMBER, "", ""},
   {"JSY-MK-194T", "powerFactor", RuleEngine::MEASURE_NUMBER, "", ""},
   {"JSY-MK-194T", "frequencyHz", RuleEngine::MEASURE_NUMBER, "Hz", ""},
   {"JSY-MK-194T", "available", RuleEngine::MEASURE_BOOL, "", ""},
@@ -331,9 +337,12 @@ float RuleEngine::numericMeasureValue(const String &source, const String &measur
     if (measure == "injectionW") return state.injectionW;
     if (measure == "consumptionW") return state.consumptionW;
     if (measure == "surplusW") return state.surplusW;
-    if (measure == "voltageV") return state.voltageV1;
-    if (measure == "currentA") return state.currentA1;
-    if (measure == "powerFactor") return state.powerFactor1;
+    if (measure == "voltageV" || measure == "voltageV1") return state.voltageV1;
+    if (measure == "voltageV2") return state.voltageV2;
+    if (measure == "currentA" || measure == "currentA1") return state.currentA1;
+    if (measure == "currentA2") return state.currentA2;
+    if (measure == "powerFactor" || measure == "powerFactor1") return state.powerFactor1;
+    if (measure == "powerFactor2") return state.powerFactor2;
     if (measure == "frequencyHz") return state.gridFrequencyHz;
     if (measure == "available") return state.jsyOnline ? 1 : 0;
   }

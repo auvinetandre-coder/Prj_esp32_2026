@@ -38,6 +38,8 @@ struct RuntimeState {
   uint32_t watchdogSeenMs = 0;
 
   float gridPowerW = 0;
+  float gridPowerRawW = NAN;
+  float gridPowerFilteredW = NAN;
   String gridPowerSource = "JSY";
   float jsyGridPowerW = NAN;
   float ticGridPowerW = NAN;
@@ -46,6 +48,11 @@ struct RuntimeState {
   float gridPowerFactor = NAN;
   float gridFrequencyHz = NAN;
   String gridEnergyDirection = "unknown";
+  float jsyImportEnergyWh1 = NAN;
+  float jsyExportEnergyWh1 = NAN;
+  float jsyImportEnergyWh2 = NAN;
+  float jsyExportEnergyWh2 = NAN;
+  uint32_t jsyPollingMs = 0;
   float voltageV1 = NAN;
   float currentA1 = NAN;
   float activePowerW1 = NAN;
@@ -83,11 +90,21 @@ struct RuntimeState {
   float ssr1PowerPct = 0;
   float ssr2PowerPct = 0;
   float robotDynPowerPct = 0;
+  float heaterPowerW = 0;
+  float commandPercent = 0;
+  float pidOutputPercent = 0;
+  bool pidEnabled = true;
+  float pidErrorW = 0;
+  String pidStatus = "IDLE";
   String systemMode = "AUTO";
   bool simulationMode = false;
   String simulationType = "manual";
   String simulationScenario = "normal";
   uint32_t simulationRemainingMs = 0;
+  bool mqttEnabled = false;
+  bool mqttConnected = false;
+  String mqttStatus = "MQTT_DISABLED";
+  uint32_t lastMqttPublishMs = 0;
   String lastActuatorCommandLog = "";
   bool littleFsOk = false;
 

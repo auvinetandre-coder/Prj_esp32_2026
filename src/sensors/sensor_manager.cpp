@@ -92,11 +92,15 @@ void SensorManager::applyGridPowerSource() {
   }
 
   if (isnan(selected)) return;
+  state.gridPowerRawW = selected;
+  const float alpha = constrain(config.system()["router"]["alphaFilter"] | 0.25f, 0.01f, 1.0f);
+  if (isnan(state.gridPowerFilteredW)) state.gridPowerFilteredW = selected;
+  else state.gridPowerFilteredW = (alpha * selected) + ((1.0f - alpha) * state.gridPowerFilteredW);
   state.gridPowerSource = source;
-  state.gridPowerW = selected;
-  state.gridEnergyDirection = selected < 0 ? "injection" : "consumption";
-  state.injectionW = selected < 0 ? -selected : 0;
-  state.consumptionW = selected > 0 ? selected : 0;
+  state.gridPowerW = state.gridPowerFilteredW;
+  state.gridEnergyDirection = state.gridPowerW < 0 ? "injection" : "consumption";
+  state.injectionW = state.gridPowerW < 0 ? -state.gridPowerW : 0;
+  state.consumptionW = state.gridPowerW > 0 ? state.gridPowerW : 0;
   state.surplusW = state.injectionW;
 }
 

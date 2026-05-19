@@ -38,6 +38,18 @@ void SafetyManager::evaluate(uint32_t now) {
   if (configError()) return setLevel(SAFETY_CRITICAL, "CONFIG_ERROR", "Configuration de securite invalide", now);
   if (doubleMasterRisk()) return setLevel(SAFETY_CRITICAL, "DOUBLE_MASTER_RISK", "Risque double pilotage MASTER/BACKUP", now);
   if (topTemperatureHigh(safetyC)) return setLevel(SAFETY_CRITICAL, "TEMP_HIGH_LIMIT", "Temperature ballon au-dessus de la limite", now);
+  const float voltageMin = router["voltageMinV"] | 180.0f;
+  const float voltageMax = router["voltageMaxV"] | 260.0f;
+  const float frequencyMin = router["frequencyMinHz"] | 47.0f;
+  const float frequencyMax = router["frequencyMaxHz"] | 53.0f;
+  if (state.jsyOnline && !isnan(state.gridVoltageV) && state.gridVoltageV > 1.0f &&
+      (state.gridVoltageV < voltageMin || state.gridVoltageV > voltageMax)) {
+    return setLevel(SAFETY_CRITICAL, "VOLTAGE_OUT_OF_RANGE", "Tension reseau hors plage", now);
+  }
+  if (state.jsyOnline && !isnan(state.gridFrequencyHz) && state.gridFrequencyHz > 1.0f &&
+      (state.gridFrequencyHz < frequencyMin || state.gridFrequencyHz > frequencyMax)) {
+    return setLevel(SAFETY_CRITICAL, "FREQUENCY_OUT_OF_RANGE", "Frequence reseau hors plage", now);
+  }
 
   const bool topMissing = topSensorMissing();
   const bool criticalMissing = criticalDs18b20Missing();
@@ -48,17 +60,22 @@ void SafetyManager::evaluate(uint32_t now) {
 
   const bool jsyMissing = jsyConfigured() && jsyTimedOut(now, jsyTimeoutMs);
   const bool ticMissing = ticConfigured() && ticTimedOut(now, ticTimeoutMs);
+  const bool jsyOk = jsyConfigured() && !jsyMissing && state.jsyOnline;
+  const bool ticOk = ticConfigured() && !ticMissing && state.ticAvailable;
+  const bool meterConfigured = jsyConfigured() || ticConfigured();
+  const bool meterAvailable = jsyOk || ticOk;
 
-  if (jsyMissing && (!ticConfigured() || ticMissing)) {
-    if (safetyEnabled && blockMissingJsyAndTic && !warningOnlyMissingSensors) return setLevel(SAFETY_CRITICAL, "JSY_TIMEOUT", "JSY et TIC indisponibles", now);
-    return setLevel(SAFETY_DEGRADED, "JSY_TIMEOUT", "JSY et TIC indisponibles", now);
-  }
-  if (jsyMissing) {
-    if (safetyEnabled && blockMissingJsy && !warningOnlyMissingSensors) return setLevel(SAFETY_CRITICAL, "JSY_TIMEOUT", "JSY absent trop longtemps", now);
-    return setLevel(SAFETY_DEGRADED, "JSY_TIMEOUT", "JSY absent trop longtemps", now);
+  // Une seule mesure reseau valide suffit : JSY OU Linky.
+  // L'autre capteur peut etre absent sans bloquer le routeur solaire.
+  if (meterConfigured && !meterAvailable) {
+    String details;
+    if (jsyConfigured() && ticConfigured()) details = "JSY et TIC indisponibles";
+    else if (jsyConfigured()) details = "JSY indisponible";
+    else details = "TIC indisponible";
+    if (safetyEnabled && (blockMissingJsyAndTic || blockMissingJsy) && !warningOnlyMissingSensors) return setLevel(SAFETY_CRITICAL, "POWER_METER_TIMEOUT", details, now);
+    return setLevel(SAFETY_DEGRADED, "POWER_METER_TIMEOUT", details, now);
   }
   if (masterLost(now, takeoverTimeoutMs)) return setLevel(SAFETY_DEGRADED, "MASTER_LOST", "MASTER perdu, fonctionnement en reprise BACKUP", now);
-  if (ticMissing && state.jsyOnline) return setLevel(SAFETY_WARNING, "TIC_TIMEOUT", "TIC absente, JSY disponible", now);
   if (warningCause.length()) return setLevel(SAFETY_WARNING, warningCause.substring(0, warningCause.indexOf(':')), warningCause.substring(warningCause.indexOf(':') + 2), now);
 
   setLevel(SAFETY_OK, "", "", now);

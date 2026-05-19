@@ -7,10 +7,12 @@
 #include "src/web/web_ui.h"
 #include "src/communication/espnow_manager.h"
 #include "src/communication/redundancy_manager.h"
+#include "src/communication/mqtt_manager.h"
 #include "src/sensors/sensor_manager.h"
 #include "src/actuators/actuator_manager.h"
 #include "src/logic/rule_engine.h"
 #include "src/logic/solar_router.h"
+#include "src/logic/pid_controller.h"
 #include "src/safety/safety_manager.h"
 #include "src/runtime/runtime_state.h"
 #include "src/logger/logger.h"
@@ -25,8 +27,10 @@ EspNowManager espNowManager(configManager, runtimeState);
 RedundancyManager redundancyManager(configManager, runtimeState, espNowManager);
 SensorManager sensorManager(configManager, runtimeState);
 ActuatorManager actuatorManager(configManager, runtimeState, espNowManager);
+MqttManager mqttManager(configManager, runtimeState, actuatorManager);
 RuleEngine ruleEngine(configManager, runtimeState, actuatorManager);
 SolarRouter solarRouter(configManager, runtimeState, actuatorManager);
+PIDController pidController(configManager, runtimeState, actuatorManager);
 SafetyManager safetyManager(configManager, runtimeState, actuatorManager);
 SimulationManager simulationManager(configManager, runtimeState);
 WebUi webUi(configManager, runtimeState, solarWiFi, espNowManager, redundancyManager, sensorManager, actuatorManager, ruleEngine, safetyManager, simulationManager);
@@ -35,6 +39,8 @@ DisplayManager displayManager(configManager, runtimeState);
 
 static uint32_t lastSensorTick = 0;
 static uint32_t lastLogicTick = 0;
+static uint32_t lastPidTick = 0;
+static uint32_t lastSafetyTick = 0;
 static uint32_t lastWatchdogTick = 0;
 
 void setup() {
@@ -78,7 +84,10 @@ void setup() {
   redundancyManager.begin();
   Serial.println(F("Starting Web UI..."));
   webUi.begin();
+  Serial.println(F("Starting MQTT manager..."));
+  mqttManager.begin();
   ruleEngine.begin();
+  pidController.begin();
   displayManager.begin();
 
   runtimeState.addLog("Boot completed");
@@ -98,24 +107,33 @@ void loop() {
   webUi.loop();
   solarWiFi.loop();
   espNowManager.loop();
+  mqttManager.loop(now);
   actuatorManager.loop(now);
   statusLed.loop(now);
   displayManager.loop(now);
   simulationManager.loop(now);
 
-  if (now - lastSensorTick >= 500) {
+  if (now - lastSensorTick >= 100) {
     lastSensorTick = now;
     sensorManager.loop(now);
   }
 
   redundancyManager.loop(now);
 
+  if (now - lastSafetyTick >= 100) {
+    lastSafetyTick = now;
+    safetyManager.evaluate(now);
+  }
+
+  if (now - lastPidTick >= 100) {
+    lastPidTick = now;
+    pidController.update(now);
+  }
+
   if (now - lastLogicTick >= 250) {
     lastLogicTick = now;
-    safetyManager.evaluate(now);
     if (!runtimeState.safetyTripped) {
       ruleEngine.loop(now);
-      solarRouter.loop(now);
     }
   }
 

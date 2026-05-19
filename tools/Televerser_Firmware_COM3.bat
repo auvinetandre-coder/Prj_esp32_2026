@@ -1,6 +1,8 @@
 @echo off
 setlocal EnableExtensions
 cd /d "%~dp0\.."
+
+set "PORT=COM3"
 set "ARDUINO_CLI=C:\Program Files\Arduino IDE\resources\app\lib\backend\resources\arduino-cli.exe"
 set "PARTITION_NAME=partitions_ota_1m5app_960k_littlefs"
 set "PARTITION_FILE=%CD%\%PARTITION_NAME%.csv"
@@ -43,25 +45,32 @@ if not defined BUILD_VERSION (
   pause
   exit /b 1
 )
-set "OTA_FIRMWARE_VERSIONED_BIN=%OTA_DIR%\RouteurSolaireESP32_firmware_%BUILD_VERSION%.bin"
 
-echo Compilation RouteurSolaireESP32...
-"%ARDUINO_CLI%" compile --fqbn esp32:esp32:esp32:PartitionScheme=custom --build-path "%BUILD_DIR%" --build-property build.partitions=%PARTITION_NAME% --build-property upload.maximum_size=%MAX_APP_SIZE% .
+echo ==================================================
+echo Compilation et televersement firmware OTA custom
+echo Port      : %PORT%
+echo Partition : %PARTITION_NAME%
+echo App max   : %MAX_APP_SIZE% octets
+echo Version   : %BUILD_VERSION%
+echo ==================================================
+echo Ferme le moniteur serie Arduino IDE avant de continuer.
 echo.
+
+"%ARDUINO_CLI%" compile --upload -p %PORT% --fqbn esp32:esp32:esp32:PartitionScheme=custom --build-path "%BUILD_DIR%" --build-property build.partitions=%PARTITION_NAME% --build-property upload.maximum_size=%MAX_APP_SIZE% .
 if errorlevel 1 (
-  echo Compilation en erreur.
-) else (
-  echo Compilation OK.
-  if exist "%FIRMWARE_BIN%" (
-    copy /Y "%FIRMWARE_BIN%" "%OTA_FIRMWARE_BIN%" >nul
-    copy /Y "%FIRMWARE_BIN%" "%OTA_FIRMWARE_VERSIONED_BIN%" >nul
-    echo Firmware OTA copie ici:
-    echo %OTA_FIRMWARE_BIN%
-    echo Firmware OTA horodate:
-    echo %OTA_FIRMWARE_VERSIONED_BIN%
-  ) else (
-    echo ATTENTION: firmware .bin introuvable:
-    echo %FIRMWARE_BIN%
-  )
+  echo.
+  echo ERREUR: compilation ou televersement firmware echoue.
+  pause
+  exit /b 1
 )
+
+echo.
+echo Firmware televerse avec succes.
+if exist "%FIRMWARE_BIN%" (
+  copy /Y "%FIRMWARE_BIN%" "%OTA_FIRMWARE_BIN%" >nul
+  copy /Y "%FIRMWARE_BIN%" "%OTA_DIR%\RouteurSolaireESP32_firmware_%BUILD_VERSION%.bin" >nul
+  echo Firmware OTA copie dans build\ota.
+)
+echo Pense maintenant a televerser LittleFS avec le script COM3.
+echo.
 pause

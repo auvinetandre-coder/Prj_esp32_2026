@@ -26,19 +26,23 @@
         {
           "id": "clamp1",
           "name": "Pince 1",
-          "role": "grid",
+          "role": "production",
           "measures": [
+            "voltageV1",
             "currentA1",
-            "activePowerW1"
+            "activePowerW1",
+            "powerFactor1"
           ]
         },
         {
           "id": "clamp2",
           "name": "Pince 2",
-          "role": "production",
+          "role": "grid",
           "measures": [
+            "voltageV2",
             "currentA2",
-            "activePowerW2"
+            "activePowerW2",
+            "powerFactor2"
           ]
         }
       ]

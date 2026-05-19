@@ -35,8 +35,12 @@ private:
   SafetyManager &safety;
   SimulationManager &simulation;
   WebServer server;
+  bool littleFsOtaBackupOk = false;
 
   void routes();
+  bool authEnabled();
+  bool isAuthenticated();
+  bool requireAuth();
   void sendJson(DynamicJsonDocument &doc);
   void sendConfig(const char *name);
   void saveConfig(const char *name, const char *path);
@@ -49,6 +53,5 @@ private:
   void appendFsListJson(String &out, const char *dirname);
   String fsPage();
   String homePage();
-  String page();
   String litePage();
 };

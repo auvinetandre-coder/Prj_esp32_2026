@@ -54,6 +54,7 @@ void JSYMK194TManager::readFrame(uint32_t now) {
 }
 
 bool JSYMK194TManager::parseFrame(uint32_t now) {
+  const uint32_t pollingMs = lastRequestMs ? now - lastRequestMs : 0;
   if (rxLen < 61 || rx[0] != modbusAddress || rx[1] != 0x03 || rx[2] != 56) {
     reading.errorCount++;
     logError(F("JSY trame invalide"), now);
@@ -68,44 +69,111 @@ bool JSYMK194TManager::parseFrame(uint32_t now) {
     return false;
   }
 
-  const uint8_t *p = &rx[3];
-  uint32_t voltageRaw = readU32(p + 0);
-  uint32_t currentRaw = readU32(p + 4);
-  uint32_t powerRaw = readU32(p + 8);
-  uint32_t powerFactorRaw = readU32(p + 16);
-  uint32_t directionRaw = readU32(p + 24);
-  uint32_t frequencyRaw = readU32(p + 28);
-  uint32_t voltage2Raw = readU32(p + 32);
-  uint32_t current2Raw = readU32(p + 36);
-  uint32_t power2Raw = readU32(p + 40);
-  uint32_t powerFactor2Raw = readU32(p + 48);
+  // Decodage volontairement aligne sur l'exemple JSY-MK-194:
+  // 14 blocs de 4 octets commencent a l'octet 3 de la trame.
+  uint32_t data[14];
+  uint8_t dataIndex = 3;
+  for (uint8_t i = 0; i < 14; i++) {
+    data[i] = readU32(rx + dataIndex);
+    dataIndex += 4;
+  }
 
-  bool injection = ((directionRaw >> 24) & 0xFF) == 0x01;
-  bool injection2 = ((directionRaw >> 16) & 0xFF) == 0x01;
-  float power = powerRaw / 10000.0f;
-  float power2 = power2Raw / 10000.0f;
+  const uint8_t sens1 = rx[27];
+  const uint8_t sens2 = rx[28];
+  const bool injection = sens1 > 0;
+  const bool injection2 = sens2 > 0;
 
-  reading.voltageV = voltageRaw / 10000.0f;
-  reading.currentA = currentRaw / 10000.0f;
-  reading.activePowerW = injection ? -power : power;
-  reading.gridPowerW = reading.activePowerW;
-  reading.powerFactor = powerFactorRaw / 1000.0f;
-  reading.frequencyHz = frequencyRaw / 100.0f;
-  reading.energyDirection = injection ? "injection" : "consumption";
+  float power = data[2] / 10000.0f;
+  float power2 = data[10] / 10000.0f;
+
+  const float voltage1 = data[0] / 10000.0f;
+  const float current1 = data[1] / 10000.0f;
+  const float powerFactor1 = data[4] / 1000.0f;
+  const String direction1 = injection ? "injection" : "consumption";
+  const float voltage2 = data[8] / 10000.0f;
+  const float voltage2ForPower = voltage2 > 1.0f ? voltage2 : voltage1;
+  const float current2 = data[9] / 10000.0f;
+  const float powerFactor2 = data[12] / 1000.0f;
+  const String direction2 = injection2 ? "injection" : "consumption";
+  auto calculateActivePower = [](float measuredPower, float voltage, float current, float powerFactor, bool isInjection) {
+    float activePower = isInjection ? -measuredPower : measuredPower;
+    if (fabs(activePower) >= 5.0f || current <= 0.2f || voltage <= 50.0f) return activePower;
+    const float usablePowerFactor = powerFactor > 0.05f && powerFactor <= 1.2f ? powerFactor : 1.0f;
+    const float estimatedPower = voltage * current * usablePowerFactor;
+    return isInjection ? -estimatedPower : estimatedPower;
+  };
+  const float activePower1 = calculateActivePower(power, voltage1, current1, powerFactor1, injection);
+  const float activePower2 = calculateActivePower(power2, voltage2ForPower, current2, powerFactor2, injection2);
+  const bool estimatedPower1 = fabs(power) < 5.0f && fabs(activePower1) >= 5.0f;
+  const bool estimatedPower2 = fabs(power2) < 5.0f && fabs(activePower2) >= 5.0f;
+
+  state.voltageV1 = voltage1;
+  state.currentA1 = current1;
+  state.activePowerW1 = activePower1;
+  state.powerFactor1 = powerFactor1;
+  state.energyDirection1 = direction1;
+  // Certains JSY double pince renvoient une seule tension commune sur la voie 1.
+  // Dans ce cas, on affiche et utilise cette tension commune pour la pince 2.
+  state.voltageV2 = voltage2ForPower;
+  state.currentA2 = current2;
+  state.activePowerW2 = activePower2;
+  state.powerFactor2 = powerFactor2;
+  state.energyDirection2 = direction2;
+  state.jsyImportEnergyWh1 = data[3] / 10.0f;
+  state.jsyExportEnergyWh1 = data[5] / 10.0f;
+  state.jsyImportEnergyWh2 = data[11] / 10.0f;
+  state.jsyExportEnergyWh2 = data[13] / 10.0f;
+  state.jsyPollingMs = pollingMs;
+
+  if (clamp2Role == "grid") {
+    reading.voltageV = voltage2ForPower;
+    reading.currentA = current2;
+    reading.activePowerW = activePower2;
+    reading.gridPowerW = activePower2;
+    reading.powerFactor = powerFactor2;
+    reading.energyDirection = direction2;
+  } else {
+    reading.voltageV = voltage1;
+    reading.currentA = current1;
+    reading.activePowerW = activePower1;
+    reading.gridPowerW = activePower1;
+    reading.powerFactor = powerFactor1;
+    reading.energyDirection = direction1;
+  }
+  reading.frequencyHz = data[7] / 100.0f;
   reading.available = true;
   reading.lastValidReadMs = now;
 
-  state.voltageV1 = reading.voltageV;
-  state.currentA1 = reading.currentA;
-  state.activePowerW1 = reading.activePowerW;
-  state.powerFactor1 = reading.powerFactor;
-  state.energyDirection1 = reading.energyDirection;
-  state.voltageV2 = voltage2Raw / 10000.0f;
-  state.currentA2 = current2Raw / 10000.0f;
-  state.activePowerW2 = injection2 ? -power2 : power2;
-  state.powerFactor2 = powerFactor2Raw / 1000.0f;
-  state.energyDirection2 = injection2 ? "injection" : "consumption";
-  state.productionW = max(0.0f, state.activePowerW2);
+  if (clamp1Role == "production") state.productionW = max(0.0f, activePower1);
+  else if (clamp2Role == "production") state.productionW = max(0.0f, activePower2);
+  else state.productionW = 0.0f;
+
+  if (now - lastAnomalyLogMs > 10000) {
+    lastAnomalyLogMs = now;
+    String msg = "JSY decode:";
+    msg += " D0=" + String(data[0]);
+    msg += " D8=" + String(data[8]);
+    msg += " S1=" + String(sens1);
+    msg += " S2=" + String(sens2);
+    msg += " P1 U=" + String(voltage1, 1) + "V";
+    msg += " I=" + String(current1, 2) + "A";
+    msg += " W=" + String(activePower1, 1);
+    msg += " PF=" + String(powerFactor1, 3);
+    msg += " sens=" + direction1;
+    msg += " | P2 U=" + String(voltage2ForPower, 1) + "V";
+    msg += " I=" + String(current2, 2) + "A";
+    msg += " W=" + String(activePower2, 1);
+    msg += " PF=" + String(powerFactor2, 3);
+    msg += " sens=" + direction2;
+    if (estimatedPower1) {
+      msg += " P1_W_ESTIME";
+    }
+    if (estimatedPower2) {
+      msg += " P2_W_ESTIME";
+    }
+    Serial.println(msg);
+    state.addLog(msg);
+  }
 
   calculatePowerDirection();
   publishRuntime();
@@ -181,13 +249,24 @@ void JSYMK194TManager::configureFromJson() {
   rxPin = constrain(jsy["rx"] | 26, 0, 39);
   txPin = constrain(jsy["tx"] | 27, 0, 39);
   baudrate = jsy["baudrate"] | 4800;
-  if (baudrate < 1200 || baudrate > 115200) baudrate = 4800;
-  readIntervalMs = jsy["readIntervalMs"] | 500;
-  readIntervalMs = constrain(readIntervalMs, 200UL, 10000UL);
-  timeoutMs = jsy["timeoutMs"] | 400;
-  timeoutMs = constrain(timeoutMs, 100UL, 3000UL);
+  if (baudrate != 4800 && baudrate != 9600 && baudrate != 19200 && baudrate != 38400) baudrate = 4800;
+  readIntervalMs = jsy["readIntervalMs"] | config.system()["router"]["jsyReadIntervalMs"] | 100;
+  readIntervalMs = constrain(readIntervalMs, 80UL, 10000UL);
+  timeoutMs = jsy["timeoutMs"] | 300;
+  timeoutMs = constrain(timeoutMs, 80UL, 3000UL);
   rs485DirPin = jsy["rs485DirPin"] | jsy["dePin"] | -1;
   if (rs485DirPin < 0 || rs485DirPin > 39) rs485DirPin = -1;
+
+  clamp1Role = "production";
+  clamp2Role = "grid";
+  JsonArray channels = jsy["channels"].as<JsonArray>();
+  for (JsonObject channel : channels) {
+    String id = channel["id"] | "";
+    String role = channel["role"] | "";
+    role.toLowerCase();
+    if (id == "clamp1") clamp1Role = role.length() ? role : "production";
+    if (id == "clamp2") clamp2Role = role.length() ? role : "grid";
+  }
 }
 
 void JSYMK194TManager::beginSerial() {
@@ -245,6 +324,7 @@ uint32_t JSYMK194TManager::readU32(const uint8_t *data) {
 void JSYMK194TManager::publishRuntime() {
   state.gridVoltageV = reading.voltageV;
   state.gridCurrentA = reading.currentA;
+  state.gridPowerRawW = reading.gridPowerW;
   state.jsyGridPowerW = reading.gridPowerW;
   state.gridPowerW = reading.gridPowerW;
   state.gridPowerFactor = reading.powerFactor;

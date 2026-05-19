@@ -5,6 +5,12 @@ var dashHistory = [];
 var lastHistorySampleMs = 0;
 var historySampleIntervalMs = 5000;
 var historyMaxPoints = 360;
+var realtimeGraphEnabled = false;
+var realtimeGraphStepMs = Number(localStorage.getItem("realtimeGraphStepMs") || 300);
+var realtimeGraphTimer = null;
+var realtimeGraphStopTimer = null;
+var realtimeGraphStartedAt = 0;
+var realtimeHistory = [];
 var dashboardMetricKeys = loadDashboardList("dashboardMetrics", ["gridPowerW", "injectionW", "surplusW", "ssr1PowerPct"]);
 var dashboardChartKeys = loadDashboardList("dashboardCharts", ["injectionW", "ssr1PowerPct", "tankTopC"]);
 var dashboardGraphDefaults = {
@@ -30,6 +36,10 @@ var state = {
   simulationMode: false,
   simulationType: "off",
   simulationRemainingMs: 0,
+  mqttEnabled: false,
+  mqttConnected: false,
+  mqttStatus: "MQTT_DISABLED",
+  lastMqttPublishAgeMs: 4294967295,
   moduleName: "Routeur solaire",
   role: "-",
   deviceId: "-",
@@ -43,6 +53,8 @@ var state = {
   littleFsTotal: 0,
   littleFsUsed: 0,
   gridPowerW: 0,
+  gridPowerRawW: 0,
+  gridPowerFilteredW: 0,
   gridPowerSource: "JSY",
   jsyGridPowerW: null,
   ticGridPowerW: null,
@@ -59,6 +71,9 @@ var state = {
   ssr1PowerPct: 0,
   ssr2PowerPct: 0,
   robotDynPowerPct: 0,
+  pidOutputPercent: 0,
+  heaterPowerW: 0,
+  pidStatus: "IDLE",
   heapFree: 0
 };
 var cache = {};
@@ -110,7 +125,7 @@ var actuatorModeHelp = {
 };
 var jsyClampRoles = ["grid", "production", "load", "custom"];
 var ruleSources = [
-  {id:"JSY-MK-194T", label:"JSY-MK-194T", measures:[["gridPowerW","number","W"],["injectionW","number","W"],["consumptionW","number","W"],["surplusW","number","W"],["voltageV","number","V"],["currentA","number","A"],["activePowerW","number","W"],["activePowerW1","number","W"],["activePowerW2","number","W"],["powerFactor","number",""],["frequencyHz","number","Hz"],["available","boolean",""]]},
+  {id:"JSY-MK-194T", label:"JSY-MK-194T", measures:[["gridPowerW","number","W"],["injectionW","number","W"],["consumptionW","number","W"],["surplusW","number","W"],["voltageV","number","V"],["currentA","number","A"],["activePowerW","number","W"],["voltageV1","number","V"],["currentA1","number","A"],["activePowerW1","number","W"],["powerFactor1","number",""],["voltageV2","number","V"],["currentA2","number","A"],["activePowerW2","number","W"],["powerFactor2","number",""],["powerFactor","number",""],["frequencyHz","number","Hz"],["available","boolean",""]]},
   {id:"TIC Linky", label:"TIC Linky", measures:[["gridPowerW","number","W"],["apparentPowerVA","number","VA"],["currentA","number","A"],["tariff","text",""],["available","boolean",""],["lastValidReadAgeMs","number","ms"]]},
   {id:"sonde1", label:"sonde1", measures:[["temperatureC","number","C"],["available","boolean",""],["lastValidReadAgeMs","number","ms"]]},
   {id:"sonde2", label:"sonde2", measures:[["temperatureC","number","C"],["available","boolean",""],["lastValidReadAgeMs","number","ms"]]},
@@ -158,6 +173,12 @@ var measureLabels = {
   activePowerW:"Puissance active",
   activePowerW1:"Puissance active 1",
   activePowerW2:"Puissance active 2",
+  voltageV1:"Tension pince 1",
+  voltageV2:"Tension pince 2",
+  currentA1:"Courant pince 1",
+  currentA2:"Courant pince 2",
+  powerFactor1:"Facteur puissance 1",
+  powerFactor2:"Facteur puissance 2",
   powerFactor:"Facteur de puissance",
   frequencyHz:"Frequence",
   apparentPowerVA:"Puissance apparente",
@@ -206,6 +227,13 @@ var helpTexts = {
     ["missing_sensors_off", "Ne bloque pas sur absence capteurs/JSY. Utile pour tests sans capteurs."],
     ["off", "Desactive les securites logiciel. A utiliser uniquement sans charge 230 V."],
     ["AP local toujours actif", "Garde le WiFi de configuration disponible meme si l'ESP32 est connecte a la box."]
+  ],
+  mqtt: [
+    ["Jeedom", "Adresse par defaut du broker MQTT Jeedom : 192.168.0.48, port 1883."],
+    ["Publication", "Quand MQTT est active, l'ESP32 publie un JSON global et des topics individuels pour Jeedom."],
+    ["Mot de passe", "Le mot de passe MQTT n'est jamais re-affiche. Laisse le champ vide pour conserver la valeur actuelle."],
+    ["Reception", "Jeedom peut envoyer une commande JSON sur le topic commande ou une valeur % sur le topic actionneur."],
+    ["Topic de base", "Prefixe utilise pour les messages, par exemple routeurSolaire/state ou routeurSolaire/gridPowerW."]
   ]
 };
 
@@ -405,12 +433,16 @@ function refreshControls() {
 function dashboardSeries() {
   var list = [
     {key:"gridPowerW", label:"Puissance reseau", unit:"W", cls:"gridCurve", value:state.gridPowerW},
+    {key:"gridPowerRawW", label:"Reseau brut", unit:"W", cls:"gridCurve", value:state.gridPowerRawW},
+    {key:"gridPowerFilteredW", label:"Reseau filtre", unit:"W", cls:"surplusCurve", value:state.gridPowerFilteredW},
     {key:"injectionW", label:"Injection", unit:"W", cls:"injectionCurve", value:state.injectionW, min:0},
     {key:"consumptionW", label:"Consommation", unit:"W", cls:"consumptionCurve", value:state.consumptionW, min:0},
     {key:"surplusW", label:"Surplus", unit:"W", cls:"surplusCurve", value:state.surplusW, min:0},
     {key:"ssr1PowerPct", label:"SSR1", unit:"%", cls:"heat", value:state.ssr1PowerPct, min:0, max:100},
     {key:"ssr2PowerPct", label:"SSR2", unit:"%", cls:"info", value:state.ssr2PowerPct, min:0, max:100},
     {key:"robotDynPowerPct", label:"RobotDyn", unit:"%", cls:"warn", value:state.robotDynPowerPct, min:0, max:100},
+    {key:"pidOutputPercent", label:"PID", unit:"%", cls:"info", value:state.pidOutputPercent, min:0, max:100},
+    {key:"heaterPowerW", label:"Chauffe-eau", unit:"W", cls:"heat", value:state.heaterPowerW, min:0},
     {key:"tankTopC", label:"Sonde 1", unit:"C", cls:"tempCurve1", value:dsAvailable(0, state.tankTopC) ? state.tankTopC : null, min:0, max:80},
     {key:"tankMiddleC", label:"Sonde 2", unit:"C", cls:"tempCurve2", value:dsAvailable(1, state.tankMiddleC) ? state.tankMiddleC : null, min:0, max:80},
     {key:"tankBottomC", label:"Sonde 3", unit:"C", cls:"tempCurve3", value:dsAvailable(2, state.tankBottomC) ? state.tankBottomC : null, min:0, max:80},
@@ -434,6 +466,31 @@ function seriesByKeyOrNull(key) {
   var list = dashboardSeries();
   for (var i = 0; i < list.length; i++) if (list[i].key === key) return list[i];
   return null;
+}
+
+function configuredJsySensor() {
+  var sensors = cache.sensors && Array.isArray(cache.sensors.sensors) ? cache.sensors.sensors : [];
+  for (var i = 0; i < sensors.length; i++) {
+    var sensor = sensors[i] || {};
+    if ((sensor.id || "") === "jsy_grid" || (sensor.type || "") === "JSY-MK-194T") return sensor;
+  }
+  return null;
+}
+
+function jsyChannel(index) {
+  var sensor = configuredJsySensor();
+  var channels = sensor && Array.isArray(sensor.channels) ? sensor.channels : defaultJsyChannels();
+  return channels[index] || defaultJsyChannels()[index] || {};
+}
+
+function jsyChannelName(index) {
+  var channel = jsyChannel(index);
+  return channel.name || channel.id || ("Pince " + (index + 1));
+}
+
+function jsyChannelRole(index) {
+  var channel = jsyChannel(index);
+  return channel.role || "custom";
 }
 
 function seriesOptions(selected) {
@@ -494,6 +551,99 @@ function saveDashboardDisplay() {
 
 function resetDashboardDisplay() {
   resetDashboardGraphs();
+}
+
+function realtimeControls() {
+  var remaining = realtimeGraphEnabled ? Math.max(0, 120 - Math.floor((Date.now() - realtimeGraphStartedAt) / 1000)) : 0;
+  return '<section class="panel realtimePanel"><div class="wideChartHead"><b>Temps reel rapide</b><span>' + (realtimeGraphEnabled ? "actif - " + remaining + " s restantes" : "inactif") + '</span></div>' +
+    '<div class="toolbar"><label>Pas <select id="realtimeStep" onchange="setRealtimeStep(this.value)">' +
+    options(["100", "200", "300", "400", "500"], String(realtimeGraphStepMs)) +
+    '</select></label><button onclick="startRealtimeGraph()">Activer 2 min</button><button onclick="stopRealtimeGraph()">Desactiver</button></div>' +
+    realtimeGraphHtml() +
+    '<small>10 dernieres secondes. Le polling rapide s arrete automatiquement apres 2 minutes et reste inactif apres redemarrage.</small></section>';
+}
+
+function setRealtimeStep(value) {
+  realtimeGraphStepMs = Math.max(100, Math.min(500, Number(value) || 300));
+  localStorage.setItem("realtimeGraphStepMs", String(realtimeGraphStepMs));
+  if (realtimeGraphEnabled) {
+    stopRealtimePollingOnly();
+    startRealtimePolling();
+  }
+}
+
+function startRealtimeGraph() {
+  realtimeGraphEnabled = true;
+  realtimeGraphStartedAt = Date.now();
+  realtimeHistory = [];
+  stopRealtimePollingOnly();
+  startRealtimePolling();
+  if (realtimeGraphStopTimer) clearTimeout(realtimeGraphStopTimer);
+  realtimeGraphStopTimer = setTimeout(stopRealtimeGraph, 120000);
+  render();
+}
+
+function stopRealtimePollingOnly() {
+  if (realtimeGraphTimer) clearInterval(realtimeGraphTimer);
+  realtimeGraphTimer = null;
+}
+
+function stopRealtimeGraph() {
+  realtimeGraphEnabled = false;
+  stopRealtimePollingOnly();
+  if (realtimeGraphStopTimer) clearTimeout(realtimeGraphStopTimer);
+  realtimeGraphStopTimer = null;
+  render();
+}
+
+function startRealtimePolling() {
+  realtimeGraphTimer = setInterval(pollRealtime, realtimeGraphStepMs);
+  pollRealtime();
+}
+
+async function pollRealtime() {
+  if (!realtimeGraphEnabled || page !== "dashboard") return;
+  try {
+    var data = await api("/api/realtime");
+    var now = Date.now();
+    realtimeHistory.push({
+      t: now,
+      gridPowerRawW: Number(data.gridPowerRawW) || 0,
+      gridPowerFilteredW: Number(data.gridPowerFilteredW) || 0,
+      injectionW: Number(data.injectionW) || 0,
+      pidOutputPercent: Number(data.pidOutputPercent) || 0,
+      heaterPowerW: Number(data.heaterPowerW) || 0
+    });
+    while (realtimeHistory.length && now - realtimeHistory[0].t > 10000) realtimeHistory.shift();
+    state.gridPowerRawW = data.gridPowerRawW;
+    state.gridPowerFilteredW = data.gridPowerFilteredW;
+    state.injectionW = data.injectionW;
+    state.pidOutputPercent = data.pidOutputPercent;
+    state.heaterPowerW = data.heaterPowerW;
+    var box = $("realtimeGraphBox");
+    if (box) box.innerHTML = realtimeGraphSvg();
+  } catch (e) {
+    // Le dashboard principal reste maitre; on ignore une erreur ponctuelle de polling rapide.
+  }
+}
+
+function realtimeGraphHtml() {
+  return '<div id="realtimeGraphBox">' + realtimeGraphSvg() + '</div>';
+}
+
+function realtimeGraphSvg() {
+  if (!realtimeGraphEnabled) return '<div class="sparkline muted">graphe rapide desactive</div>';
+  if (realtimeHistory.length < 2) return '<div class="sparkline muted">acquisition rapide...</div>';
+  var old = dashHistory;
+  dashHistory = realtimeHistory;
+  var html = multiSparkline([
+    {key:"gridPowerRawW", label:"Brut", cls:"gridCurve"},
+    {key:"gridPowerFilteredW", label:"Filtre", cls:"surplusCurve"},
+    {key:"injectionW", label:"Injection", cls:"injectionCurve"},
+    {key:"heaterPowerW", label:"Chauffe-eau", cls:"heat"}
+  ], "W");
+  dashHistory = old;
+  return html;
 }
 
 function setDashboardRefresh(value) {
@@ -934,7 +1084,7 @@ function dashboard() {
 
   var sensorBlock = dashboardBlock("Capteurs", "etat des mesures",
     '<div class="blockMetricGrid">' +
-      blockMetric("JSY-MK-194T", state.jsyOnline ? "OK" : "absent", "", state.jsyOnline ? "ok" : "bad", "P1 " + fmt(state.activePowerW1) + " W / P2 " + fmt(state.activePowerW2) + " W") +
+      blockMetric("JSY-MK-194T", state.jsyOnline ? "OK" : "absent", "", state.jsyOnline ? "ok" : "bad", jsyChannelName(0) + " (" + jsyChannelRole(0) + ") " + fmt(state.activePowerW1) + " W - " + fmt(state.voltageV1) + " V / " + jsyChannelName(1) + " (" + jsyChannelRole(1) + ") " + fmt(state.activePowerW2) + " W - " + fmt(state.voltageV2) + " V") +
       blockMetric("TIC Linky", state.ticAvailable ? "OK" : "absent", "", state.ticAvailable ? "ok" : "warn", state.ticStatus || "diagnostic") +
       configuredDsMetrics() +
     '</div>', "sensors");
@@ -949,6 +1099,7 @@ function dashboard() {
     '<section class="updateStrip"><div>Routeur solaire local - ' + esc(state.gridPowerSource || "JSY") + ' comme source reseau</div><button onclick="refresh()">Actualiser</button></section>' +
     helpBox("dashboard") + refreshControls() + dashboardCustomizeBox() +
     '<section class="dashBlockGrid">' + overviewBlock + energyBlock + routingBlock + sensorBlock + '</section>' +
+    realtimeControls() +
     dashboardTitle("Graphiques") +
     '<section class="wideCharts">' +
       dashboardGraphsHtml() +
@@ -1019,14 +1170,22 @@ function applyOneWireBus(redraw) {
 
 function defaultJsyChannels() {
   return [
-    {id:"clamp1", name:"Pince 1", role:"grid", measures:["currentA1", "activePowerW1"]},
-    {id:"clamp2", name:"Pince 2", role:"production", measures:["currentA2", "activePowerW2"]}
+    {id:"clamp1", name:"Pince 1", role:"production", measures:["voltageV1", "currentA1", "activePowerW1", "powerFactor1"]},
+    {id:"clamp2", name:"Pince 2", role:"grid", measures:["voltageV2", "currentA2", "activePowerW2", "powerFactor2"]}
   ];
 }
 
 function ensureJsyChannels(s) {
   if (!s || ((s.id || "") !== "jsy_grid" && (s.type || "") !== "JSY-MK-194T")) return;
   if (!Array.isArray(s.channels) || s.channels.length < 2) s.channels = defaultJsyChannels();
+  var defaults = defaultJsyChannels();
+  for (var i = 0; i < 2; i++) {
+    s.channels[i] = s.channels[i] || {};
+    if (!s.channels[i].id) s.channels[i].id = defaults[i].id;
+    if (!s.channels[i].name) s.channels[i].name = defaults[i].name;
+    if (!s.channels[i].role) s.channels[i].role = defaults[i].role;
+    if (!Array.isArray(s.channels[i].measures) || !s.channels[i].measures.length) s.channels[i].measures = defaults[i].measures.slice();
+  }
 }
 
 function genericSensorState(s) {
@@ -1041,16 +1200,21 @@ function genericSensorState(s) {
 function sensorRoleText(s) {
   if ((s.id || "") === "jsy_grid" || (s.type || "") === "JSY-MK-194T") {
     var channels = s.channels || [];
-    if (channels.length) return channels.map(function (c) { return (c.name || c.id || "voie") + " : " + (c.role || "non defini"); }).join(" / ");
+    if (channels.length) return channels.map(function (c, i) {
+      return (c.name || c.id || ("voie " + (i + 1))) + " : " + (c.role || "non defini");
+    }).join(" / ");
   }
   return s.role || "";
 }
 
 function sensorExtraValue(s) {
   if ((s.id || "") !== "jsy_grid" && (s.type || "") !== "JSY-MK-194T") return "";
+  var channels = Array.isArray(s.channels) ? s.channels : defaultJsyChannels();
+  var ch1 = channels[0] || defaultJsyChannels()[0];
+  var ch2 = channels[1] || defaultJsyChannels()[1];
   return '<div class="channelGrid">' +
-    '<span><b>Pince 1</b> ' + esc(fmt(state.activePowerW1)) + ' W / ' + esc(fmt(state.currentA1)) + ' A</span>' +
-    '<span><b>Pince 2</b> ' + esc(fmt(state.activePowerW2)) + ' W / ' + esc(fmt(state.currentA2)) + ' A</span>' +
+    '<span><b>' + esc(ch1.name || ch1.id || "Pince 1") + '</b> <small>' + esc(ch1.role || "custom") + '</small> ' + esc(fmt(state.activePowerW1)) + ' W / ' + esc(fmt(state.currentA1)) + ' A / ' + esc(fmt(state.voltageV1)) + ' V / PF ' + esc(fmt(state.powerFactor1)) + '</span>' +
+    '<span><b>' + esc(ch2.name || ch2.id || "Pince 2") + '</b> <small>' + esc(ch2.role || "custom") + '</small> ' + esc(fmt(state.activePowerW2)) + ' W / ' + esc(fmt(state.currentA2)) + ' A / ' + esc(fmt(state.voltageV2)) + ' V / PF ' + esc(fmt(state.powerFactor2)) + '</span>' +
     '<span><b>Reseau</b> ' + esc(fmt(state.gridPowerW)) + ' W</span>' +
     '<span><b>Surplus</b> ' + esc(fmt(state.surplusW)) + ' W</span>' +
     '</div>';
@@ -1072,7 +1236,7 @@ function sensorFormHtml(kind, index, s) {
     (isDs ? textField("sensorAddress", "Adresse OneWire", s.address || "") + '<p class="fieldHelp">Le GPIO ne se regle pas par sonde: il est commun aux DS18B20 dans le bloc Bus OneWire ci-dessus.</p>' : field("sensorGpio", "GPIO", s.gpio == null ? "" : s.gpio) + field("sensorRx", "RX", s.rx == null ? "" : s.rx) + field("sensorTx", "TX", s.tx == null ? "" : s.tx) + textField("sensorSource", "Source", s.source || "local") + textField("sensorMac", "MAC ESP-NOW", s.mac || "")) +
     '<label><input id="sensorEnabled" class="check" type="checkbox" ' + checked(s.enabled) + '> Actif</label>' +
     (isDs ? '<label><input id="sensorCritical" class="check" type="checkbox" ' + checked(s.critical) + '> Critique securite</label>' : '') +
-    (isJsy ? '<div class="subPanel"><h3>Modbus JSY</h3><div class="formGrid">' + field("jsyBaudrate", "Vitesse bauds", s.baudrate || 4800) + field("jsyAddress", "Adresse Modbus", s.modbusAddress || s.address || 1) + field("jsyReadInterval", "Lecture ms", s.readIntervalMs || 500) + field("jsyTimeout", "Timeout ms", s.timeoutMs || 400) + field("jsyRs485Dir", "GPIO DE/RE RS485", s.rs485DirPin == null ? -1 : s.rs485DirPin) + '</div><p class="muted">Laisse DE/RE a -1 avec un adaptateur RS485 auto-direction ou une liaison TTL. Avec un MAX485 classique, indique le GPIO qui pilote DE et RE.</p></div><div class="subPanel"><h3>Voies amperemetriques JSY</h3><div class="formGrid"><label>Pince 1 nom<input id="jsyCh1Name" value="' + esc((channels[0] || {}).name || "Pince 1") + '"></label><label>Pince 1 role<select id="jsyCh1Role">' + options(jsyClampRoles, (channels[0] || {}).role || "grid") + '</select></label><label>Pince 2 nom<input id="jsyCh2Name" value="' + esc((channels[1] || {}).name || "Pince 2") + '"></label><label>Pince 2 role<select id="jsyCh2Role">' + options(jsyClampRoles, (channels[1] || {}).role || "production") + '</select></label></div><p class="muted">grid = arrivee reseau, production = solaire, load = charge dediee, custom = autre usage. Dans Logique, utilise activePowerW1 pour la pince 1 et activePowerW2 pour la pince 2.</p></div>' : '') +
+    (isJsy ? '<div class="subPanel"><h3>Modbus JSY</h3><div class="formGrid">' + field("jsyBaudrate", "Vitesse bauds", s.baudrate || 4800) + field("jsyAddress", "Adresse Modbus", s.modbusAddress || s.address || 1) + field("jsyReadInterval", "Lecture ms", s.readIntervalMs || 500) + field("jsyTimeout", "Timeout ms", s.timeoutMs || 400) + field("jsyRs485Dir", "GPIO DE/RE RS485", s.rs485DirPin == null ? -1 : s.rs485DirPin) + '</div><p class="muted">Laisse DE/RE a -1 avec un adaptateur RS485 auto-direction ou une liaison TTL. Avec un MAX485 classique, indique le GPIO qui pilote DE et RE.</p></div><div class="subPanel"><h3>Voies amperemetriques JSY</h3><div class="formGrid"><label>Pince 1 nom<input id="jsyCh1Name" value="' + esc((channels[0] || {}).name || "Pince 1") + '"></label><label>Pince 1 role<select id="jsyCh1Role">' + options(jsyClampRoles, (channels[0] || {}).role || "production") + '</select></label><label>Pince 2 nom<input id="jsyCh2Name" value="' + esc((channels[1] || {}).name || "Pince 2") + '"></label><label>Pince 2 role<select id="jsyCh2Role">' + options(jsyClampRoles, (channels[1] || {}).role || "grid") + '</select></label></div><p class="muted">grid = arrivee reseau, production = solaire, load = charge dediee, custom = autre usage. Dans Logique, utilise activePowerW1 pour la pince 1 et activePowerW2 pour la pince 2.</p></div>' : '') +
     '<details class="advancedField"><summary>Avance</summary>' + textField("sensorId", "ID technique", s.id || "") + '<p class="muted">Laisse vide pour creer automatiquement un ID depuis le nom.</p></details>' +
     '</div><p><button onclick="applySensorForm()">Appliquer</button></p>';
 }
@@ -1126,8 +1290,8 @@ function applySensorForm() {
       item.timeoutMs = readNumber("jsyTimeout", 400);
       item.rs485DirPin = readNumber("jsyRs485Dir", -1);
       item.channels = [
-        {id:"clamp1", name:$("jsyCh1Name") ? $("jsyCh1Name").value : "Pince 1", role:$("jsyCh1Role") ? $("jsyCh1Role").value : "grid", measures:["currentA1", "activePowerW1"]},
-        {id:"clamp2", name:$("jsyCh2Name") ? $("jsyCh2Name").value : "Pince 2", role:$("jsyCh2Role") ? $("jsyCh2Role").value : "production", measures:["currentA2", "activePowerW2"]}
+        {id:"clamp1", name:$("jsyCh1Name") ? $("jsyCh1Name").value : "Pince 1", role:$("jsyCh1Role") ? $("jsyCh1Role").value : "production", measures:["voltageV1", "currentA1", "activePowerW1", "powerFactor1"]},
+        {id:"clamp2", name:$("jsyCh2Name") ? $("jsyCh2Name").value : "Pince 2", role:$("jsyCh2Role") ? $("jsyCh2Role").value : "grid", measures:["voltageV2", "currentA2", "activePowerW2", "powerFactor2"]}
       ];
     }
     cache.sensors.sensors = cache.sensors.sensors || [];
@@ -1167,8 +1331,11 @@ function deleteDsSensor(index) {
 
 async function saveSensors() {
   var response = await postJson("/api/sensors", cache.sensors);
-  if (response.ok) clearDirty("sensors");
-  alert(response.ok ? "Capteurs sauvegardes" : "Sauvegarde refusee: " + await response.text());
+  if (response.ok) {
+    clearDirty("sensors");
+    cache.sensors = await api("/api/sensors");
+  }
+  alert(response.ok ? "Capteurs sauvegardes et relus depuis LittleFS" : "Sauvegarde refusee: " + await response.text());
   drawSensorsPage();
 }
 
@@ -1756,6 +1923,7 @@ async function settingsPage() {
   var w = s.wifi || {};
   var r = s.router || {};
   var safe = s.safety || {};
+  var auth = s.webAuth || {};
   $("app").innerHTML = banner() + '<h1>Parametres</h1>' + helpBox("settings") + '<div class="settingsGrid">' +
     '<section class="panel"><h2>Module</h2><div class="form">' +
       textField("devName", "Nom module", d.name || d.deviceName || "") +
@@ -1767,6 +1935,11 @@ async function settingsPage() {
       passwordField("wifiPassword", "Mot de passe WiFi") +
       selectField("keepAp", "AP local toujours actif", w.keepFallbackApAlwaysOn !== false) +
     '</div>' + miniState("IP box", state.stationIp || state.localIp || "-", "info") + miniState("IP AP", state.apIp || "-", "info") + miniState("RSSI", state.rssi == null ? "-" : state.rssi + " dBm", state.wifiConnected ? "ok" : "warn") + '</section>' +
+    '<section class="panel"><h2>Acces Web</h2><div class="form">' +
+      selectField("webAuthEnabled", "Login active", auth.enabled !== false) +
+      textField("webAuthUser", "Utilisateur", auth.username || "admin") +
+      passwordField("webAuthPassword", "Mot de passe Web") +
+    '</div><div class="warnBox">Par defaut: admin / routeur1234. Laisse le mot de passe vide pour conserver l actuel.</div></section>' +
     '<section class="panel"><h2>Securite</h2><div class="form">' +
       '<label>Mode Safety<select id="safetyMode">' + options(["strict", "warning_only", "missing_sensors_off", "off"], safetyModeFromConfig(safe)) + '</select></label>' +
       field("tankMax", "Temp max ballon C", r.tankMaxC || 65) +
@@ -1777,9 +1950,17 @@ async function settingsPage() {
       field("minInjection", "Seuil demarrage injection W", r.minInjectionStartW || 200) +
       field("stopInjection", "Seuil arret injection W", r.stopBelowInjectionW || 80) +
       field("hysteresis", "Hysteresis W", r.hysteresisW || 50) +
-      field("pidKp", "PID Kp", r.pidKp || 0.2) +
-      field("pidKi", "PID Ki", r.pidKi || 0.01) +
-      field("pidKd", "PID Kd", r.pidKd || 0) +
+      '<label>Mode routeur<select id="routerMode">' + options(["OFF", "AUTO", "FORCED"], r.mode || "AUTO") + '</select></label>' +
+      selectField("pidEnabled", "PID actif", r.pidEnabled !== false) +
+      field("gridSetpointW", "Consigne reseau W", r.gridSetpointW || 0) +
+      field("deadbandW", "Deadband W", r.deadbandW || 30) +
+      field("alphaFilter", "Alpha filtre", r.alphaFilter || 0.25) +
+      field("maxRamp", "Rampe max %/s", r.maxOutputRampPercentPerSecond || 15) +
+      field("heaterMax", "Puissance chauffe-eau W", r.heaterMaxPowerW || r.ssr1MaxW || 1500) +
+      field("jsyReadMs", "Cadence JSY ms", r.jsyReadIntervalMs || 100) +
+      field("pidKp", "PID Kp", r.kp || r.pidKp || 0.08) +
+      field("pidKi", "PID Ki", r.ki || r.pidKi || 0.01) +
+      field("pidKd", "PID Kd", r.kd || r.pidKd || 0) +
     '</div><p class="muted">JSY = mesure rapide via pince. TIC = Linky si la trame donne une puissance exploitable. AUTO = TIC si disponible, sinon JSY.</p></section>' +
     '</div><p><button onclick="saveSettings()">Sauvegarder</button> <button onclick="restartEsp()">Redemarrer ESP32</button> <button onclick="jsonEditor(\'system\')">JSON system</button> <button onclick="jsonEditor(\'device\')">JSON module</button></p>';
 }
@@ -1819,6 +2000,7 @@ async function saveSettings() {
   s.router = s.router || {};
   s.safety = s.safety || {};
   s.simulation = s.simulation || {};
+  s.webAuth = s.webAuth || {};
   d.name = $("devName").value;
   d.deviceName = d.name;
   d.role = $("devRole").value;
@@ -1830,13 +2012,28 @@ async function saveSettings() {
     s.wifiPassword = s.wifi.password;
   }
   s.wifi.keepFallbackApAlwaysOn = $("keepAp").value === "true";
+  s.webAuth.enabled = $("webAuthEnabled").value === "true";
+  s.webAuth.username = $("webAuthUser").value || "admin";
+  if ($("webAuthPassword").value) s.webAuth.password = $("webAuthPassword").value;
   s.router.gridPowerSource = $("gridPowerSource").value;
+  s.router.mode = $("routerMode").value;
+  s.router.pidEnabled = $("pidEnabled").value === "true";
+  s.router.gridSetpointW = Number($("gridSetpointW").value);
+  s.router.deadbandW = Number($("deadbandW").value);
+  s.router.alphaFilter = Number($("alphaFilter").value);
+  s.router.maxOutputRampPercentPerSecond = Number($("maxRamp").value);
+  s.router.heaterMaxPowerW = Number($("heaterMax").value);
+  s.router.ssr1MaxW = s.router.heaterMaxPowerW;
+  s.router.jsyReadIntervalMs = Number($("jsyReadMs").value);
   s.router.minInjectionStartW = Number($("minInjection").value);
   s.router.stopBelowInjectionW = Number($("stopInjection").value);
   s.router.hysteresisW = Number($("hysteresis").value);
-  s.router.pidKp = Number($("pidKp").value);
-  s.router.pidKi = Number($("pidKi").value);
-  s.router.pidKd = Number($("pidKd").value);
+  s.router.kp = Number($("pidKp").value);
+  s.router.ki = Number($("pidKi").value);
+  s.router.kd = Number($("pidKd").value);
+  s.router.pidKp = s.router.kp;
+  s.router.pidKi = s.router.ki;
+  s.router.pidKd = s.router.kd;
   s.router.tankMaxC = Number($("tankMax").value);
   s.router.tempSafetyMaxC = Number($("tankSafety").value);
   s.router.tankSafetyC = s.router.tempSafetyMaxC;
@@ -1858,6 +2055,70 @@ async function restartEsp() {
   if (!confirm("Redemarrer ESP32 maintenant ?")) return;
   await fetch("/api/system/reboot", {method:"POST"});
   $("app").innerHTML = '<h1>Redemarrage...</h1><div class="panel">Attends quelques secondes puis recharge /app.</div>';
+}
+
+async function mqttPage() {
+  cache.system = await api("/api/system");
+  var s = cache.system;
+  var mqtt = s.mqtt || {};
+  var topics = mqtt.topics || {};
+  var baseTopic = mqtt.baseTopic || "routeurSolaire";
+  $("app").innerHTML = banner() + '<h1>MQTT / Jeedom</h1>' + helpBox("mqtt") +
+    '<div class="settingsGrid">' +
+      '<section class="panel"><h2>Broker Jeedom</h2><div class="form">' +
+        selectField("mqttEnabled", "MQTT active", mqtt.enabled === true) +
+        textField("mqttHost", "Adresse broker", mqtt.host || "192.168.0.48") +
+        field("mqttPort", "Port", mqtt.port || 1883) +
+        textField("mqttClientId", "Client ID", mqtt.clientId || "RouteurSolaireESP32") +
+        textField("mqttBaseTopic", "Topic de base", mqtt.baseTopic || "routeurSolaire") +
+      '</div></section>' +
+      '<section class="panel"><h2>Authentification</h2><div class="form">' +
+        textField("mqttUsername", "Utilisateur", mqtt.username || "") +
+        passwordField("mqttPassword", "Mot de passe MQTT") +
+        selectField("mqttRetain", "Retain", mqtt.retain === true) +
+        selectField("mqttIndividual", "Topics individuels Jeedom", mqtt.publishIndividualTopics !== false) +
+        field("mqttPublishInterval", "Publication toutes les ms", mqtt.publishIntervalMs || 5000) +
+      '</div><div class="warnBox">Ne mets pas de mot de passe si ton broker Jeedom n en demande pas. Le champ reste vide volontairement.</div></section>' +
+      '<section class="panel"><h2>Topics programmables</h2><div class="form">' +
+        textField("mqttStateTopic", "JSON etat", topics.state || baseTopic + "/state") +
+        textField("mqttCommandTopic", "Commande JSON", topics.command || baseTopic + "/command") +
+        textField("mqttActuatorTopic", "Commande actionneur", topics.actuatorSet || baseTopic + "/actuator/+/set") +
+        textField("mqttAvailabilityTopic", "Disponibilite", topics.availability || baseTopic + "/availability") +
+      '</div></section>' +
+      '<section class="panel"><h2>Etat actuel</h2>' +
+        miniState("MQTT", state.mqttStatus || (mqtt.enabled ? "active" : "desactive"), state.mqttConnected ? "ok" : (mqtt.enabled ? "warn" : "muted")) +
+        miniState("Broker", (mqtt.host || "192.168.0.48") + ":" + (mqtt.port || 1883), "info") +
+        miniState("WiFi", state.wifiConnected ? "connecte" : "AP/local", state.wifiConnected ? "ok" : "warn") +
+        miniState("Derniere publication", state.lastMqttPublishAgeMs && state.lastMqttPublishAgeMs < 4294967295 ? Math.round(state.lastMqttPublishAgeMs / 1000) + " s" : "-", "info") +
+        '<p class="muted">Exemple commande JSON: {"actuatorId":"ssr1_water_heater","command":"setActuatorPercent","value":25}</p>' +
+        '<p class="muted">Exemple topic direct: ' + esc(baseTopic) + '/actuator/ssr1_water_heater/set avec payload 25.</p>' +
+      '</section>' +
+    '</div><p><button onclick="saveMqtt()">Sauvegarder MQTT</button> <button onclick="jsonEditor(\'system\')">JSON system</button></p>';
+}
+
+async function saveMqtt() {
+  var s = cache.system || await api("/api/system");
+  s.mqtt = s.mqtt || {};
+  s.mqtt.enabled = $("mqttEnabled").value === "true";
+  s.mqtt.host = $("mqttHost").value || "192.168.0.48";
+  s.mqtt.port = Number($("mqttPort").value) || 1883;
+  s.mqtt.clientId = $("mqttClientId").value || "RouteurSolaireESP32";
+  s.mqtt.baseTopic = $("mqttBaseTopic").value || "routeurSolaire";
+  s.mqtt.username = $("mqttUsername").value || "";
+  s.mqtt.retain = $("mqttRetain").value === "true";
+  s.mqtt.publishIndividualTopics = $("mqttIndividual").value === "true";
+  s.mqtt.publishIntervalMs = Number($("mqttPublishInterval").value) || 5000;
+  s.mqtt.topics = s.mqtt.topics || {};
+  s.mqtt.topics.state = $("mqttStateTopic").value || s.mqtt.baseTopic + "/state";
+  s.mqtt.topics.command = $("mqttCommandTopic").value || s.mqtt.baseTopic + "/command";
+  s.mqtt.topics.actuatorSet = $("mqttActuatorTopic").value || s.mqtt.baseTopic + "/actuator/+/set";
+  s.mqtt.topics.availability = $("mqttAvailabilityTopic").value || s.mqtt.baseTopic + "/availability";
+  if ($("mqttPassword").value) s.mqtt.password = $("mqttPassword").value;
+  var response = await postJson("/api/system", s);
+  if (!response.ok) return alert("Sauvegarde MQTT refusee: " + await response.text());
+  cache.system = s;
+  alert("Configuration MQTT sauvegardee");
+  await refresh();
 }
 
 function diagnosticPage() {
@@ -1930,15 +2191,27 @@ async function systemPage() {
   var storage = sys.storage || {};
   var services = sys.services || {};
   var solar = sys.solarRouter || {};
+  var ota = sys.ota || {};
+  function otaSlotCard(title, slot) {
+    slot = slot || {};
+    var version = slot.routeurVersion || slot.version || "N/A";
+    return '<div class="miniCard ' + (slot.running ? 'okCard' : '') + '">' +
+      '<div class="miniTitle">' + esc(title) + (slot.running ? ' <span class="badge ok">ACTIVE</span>' : '') + '</div>' +
+      '<div class="miniValue">' + esc(version) + '</div>' +
+      '<div class="miniSub">' + esc(slot.label || "N/A") + ' - ' + (slot.valid ? 'image valide' : 'vide / invalide') + '</div>' +
+      '<div class="miniSub">Taille slot: ' + bytesHuman(slot.size) + '</div>' +
+      '<div class="miniSub">Adresse: ' + (slot.address == null ? 'N/A' : '0x' + Number(slot.address).toString(16)) + '</div>' +
+    '</div>';
+  }
   $("app").innerHTML = banner() + '<h1>Systeme</h1><div class="toolbar"><button onclick="refresh()">Actualiser</button><button class="danger" onclick="restartSystemPage()">Redemarrer ESP32</button><a href="/api/system-info">JSON systeme</a></div><div class="settingsGrid">' +
-    dashboardBlock("Resume appareil", "identite du module",
+    dashboardBlock("Module ESP", "carte, firmware et uptime",
       '<div class="blockMetricGrid">' +
         blockMetric("Nom", sys.deviceName || "N/A", "", "info", sys.role || "N/A") +
         blockMetric("Firmware", sys.firmwareVersion || "N/A", "", "muted", "") +
+        blockMetric("Version build", sys.buildVersion || "N/A", "", "info", "format YYYYMMDD-NN") +
         blockMetric("Compilation", sys.buildDate || "N/A", "", "muted", "") +
+        blockMetric("Build timestamp", sys.buildTimestamp || "N/A", "", "muted", "") +
         blockMetric("Uptime", uptimeHuman(sys.uptime), "", "ok", "") +
-        blockMetric("MAC WiFi", sys.mac || "N/A", "", "muted", "") +
-        blockMetric("IP active", sys.ip || "N/A", "", "info", "") +
       '</div>', "identity") +
     dashboardBlock("Reseau WiFi", "connectivite locale",
       '<div class="blockMetricGrid">' +
@@ -1946,9 +2219,31 @@ async function systemPage() {
         blockMetric("RSSI", sys.rssi == null ? "N/A" : sys.rssi, sys.rssi == null ? "" : "dBm", stateClass(sys.wifiQuality), sys.wifiQuality || "N/A") +
         blockMetric("Qualite WiFi", sys.wifiQuality || "N/A", "", stateClass(sys.wifiQuality), "") +
         blockMetric("Mode", sys.networkMode || "N/A", "", "info", "") +
+        blockMetric("IP active", sys.ip || "N/A", "", "info", "") +
         blockMetric("IP station", sys.stationIp || "N/A", "", "info", "") +
         blockMetric("IP AP", sys.apIp || "N/A", "", "info", "") +
+        blockMetric("MAC WiFi", sys.mac || "N/A", "", "muted", "") +
       '</div>', "network") +
+    dashboardBlock("OTA firmware", "app active et prochain slot",
+      '<div class="blockMetricGrid">' +
+        blockMetric("Lancee depuis", ota.runningSlot || "N/A", "", "ok", ota.runningLabel || "") +
+        blockMetric("Boot configure", ota.bootSlot || "N/A", "", "info", ota.bootLabel || "") +
+        blockMetric("Prochaine MAJ", ota.nextUpdateSlot || "N/A", "", "warn", ota.nextUpdateLabel || "") +
+        blockMetric("Taille slot", bytesHuman(ota.runningSlotSize), "", "info", "partition app") +
+        blockMetric("Firmware utilise", bytesHuman(ota.sketchSize), "", "muted", "") +
+        blockMetric("Reste disponible", bytesHuman(ota.runningRemainingBytes), "", ota.runningRemainingBytes > 250000 ? "ok" : "warn", "marge firmware") +
+      '</div><div class="miniGrid">' +
+        otaSlotCard("APP1 / OTA_0", ota.app0) +
+        otaSlotCard("APP2 / OTA_1", ota.app1) +
+      '</div><p><button class="danger" onclick="rollbackFirmware()">Rollback firmware</button></p><p class="muted">Redemarre sur l autre partition OTA si elle contient une image valide.</p>', "firmware") +
+    dashboardBlock("Partition LittleFS", "stockage interface et configuration",
+      '<div class="blockMetricGrid">' +
+        blockMetric("Type", storage.type || "N/A", "", "info", "") +
+        blockMetric("Version", storage.version || "N/A", "", "info", "LittleFS") +
+        blockMetric("Etat", storage.status || "N/A", "", stateClass(storage.status), "") +
+        blockMetric("Utilise", bytesHuman(storage.used), "", "info", "") +
+        blockMetric("Total", bytesHuman(storage.total), "", "ok", "") +
+      '</div><p class="muted"><a href="/fs">Voir les fichiers LittleFS</a></p>', "storage") +
     dashboardBlock("Memoire / CPU", "ressources ESP32",
       '<div class="blockMetricGrid">' +
         blockMetric("RAM libre", bytesHuman(sys.freeHeap), "", "ok", "") +
@@ -1961,13 +2256,6 @@ async function systemPage() {
         blockMetric("Uptime ms", sys.uptime || "N/A", "", "muted", "") +
         blockMetric("Safety", sys.safetyLevel || "N/A", "", stateClass(sys.safetyLevel), sys.safetyReason || "N/A") +
       '</div>', "stability") +
-    dashboardBlock("Stockage", "LittleFS",
-      '<div class="blockMetricGrid">' +
-        blockMetric("Type", storage.type || "N/A", "", "info", "") +
-        blockMetric("Etat", storage.status || "N/A", "", stateClass(storage.status), "") +
-        blockMetric("Utilise", bytesHuman(storage.used), "", "info", "") +
-        blockMetric("Total", bytesHuman(storage.total), "", "ok", "") +
-      '</div><p class="muted"><a href="/fs">Voir les fichiers LittleFS</a></p>', "storage") +
     dashboardBlock("Services", "etat general",
       '<div class="statusMiniGrid">' +
         statusMini("WiFi", services.wifi) +
@@ -1999,6 +2287,13 @@ async function restartSystemPage() {
   if (!confirm("Redemarrer ESP32 maintenant ?")) return;
   await fetch("/api/restart", {method:"POST"});
   $("app").innerHTML = '<h1>Redemarrage...</h1><div class="panel">Attends quelques secondes puis recharge /app.</div>';
+}
+
+async function rollbackFirmware() {
+  if (!confirm("Redemarrer sur l autre partition firmware ?")) return;
+  var response = await fetch("/api/ota/rollback", {method:"POST"});
+  if (!response.ok) return alert("Rollback refuse: " + await response.text());
+  $("app").innerHTML = '<h1>Rollback firmware...</h1><div class="panel">L ESP32 redemarre sur l autre partition OTA. Attends quelques secondes puis recharge /app.</div>';
 }
 
 function simulationControlsHtml() {
@@ -2067,6 +2362,7 @@ async function render() {
   if (page === "settings") return settingsPage();
   if (page === "diagnostic") return diagnosticPage();
   if (page === "system") return systemPage();
+  if (page === "mqtt") return mqttPage();
   $("app").innerHTML = dashboard();
   refreshLabelPatch();
 }
@@ -2074,6 +2370,7 @@ async function render() {
 Array.prototype.forEach.call(document.querySelectorAll("button[data-page]"), function (button) {
   button.addEventListener("click", function () {
     page = button.getAttribute("data-page");
+    if (page !== "dashboard" && realtimeGraphEnabled) stopRealtimeGraph();
     Array.prototype.forEach.call(document.querySelectorAll("button[data-page]"), function (item) {
       item.classList.toggle("active", item === button);
     });

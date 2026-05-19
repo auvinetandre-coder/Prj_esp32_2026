@@ -20,7 +20,7 @@ private:
   bool ready = false;
   uint8_t page = 0;
   uint32_t lastRefreshMs = 0;
-  uint32_t refreshIntervalMs = 1000;
+  uint32_t refreshIntervalMs = 4000;
   int pinSclk = 18;
   int pinMosi = 19;
   int pinReset = 16;

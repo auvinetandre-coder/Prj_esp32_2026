@@ -54,6 +54,8 @@ private:
   float minInjectionStartW = 200;
   float stopBelowInjectionW = 80;
   bool injectionActive = false;
+  String clamp1Role = "production";
+  String clamp2Role = "grid";
 
   uint8_t rx[80]{};
   uint8_t rxLen = 0;
@@ -61,6 +63,7 @@ private:
   bool waiting = false;
   uint32_t lastRequestMs = 0;
   uint32_t lastErrorLogMs = 0;
+  uint32_t lastAnomalyLogMs = 0;
 
   void configureFromJson();
   void beginSerial();

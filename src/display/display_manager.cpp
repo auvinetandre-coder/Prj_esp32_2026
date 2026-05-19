@@ -46,8 +46,8 @@ void DisplayManager::loadConfig() {
   pinReset = display["reset"] | 16;
   pinDc = display["dc"] | 4;
   pinCs = display["cs"] | 15;
-  refreshIntervalMs = display["refreshMs"] | 1000;
-  refreshIntervalMs = constrain(refreshIntervalMs, 500UL, 10000UL);
+  refreshIntervalMs = display["refreshMs"] | 4000;
+  refreshIntervalMs = constrain(refreshIntervalMs, 1000UL, 15000UL);
 }
 
 void DisplayManager::oledReset() {
@@ -167,25 +167,25 @@ void DisplayManager::renderOverview() {
 
 void DisplayManager::renderPower() {
   drawHeader(String("SOURCE ") + state.gridPowerSource);
-  drawText(0, 16, String("RESEAU ") + fmtFloat(state.gridPowerW) + " W");
-  drawText(0, 28, String("INJ ") + fmtFloat(state.injectionW) + " W");
-  drawText(0, 40, String("CONSO ") + fmtFloat(state.consumptionW) + " W");
+  drawText(0, 16, String("RES ") + fmtFloat(state.gridPowerW) + "W");
+  drawText(0, 28, String("INJ ") + fmtFloat(state.injectionW) + "W");
+  drawText(0, 40, String("CON ") + fmtFloat(state.consumptionW) + "W");
   drawText(0, 52, state.gridPowerSource == "TIC" ? state.ticStatus : (state.jsyOnline ? "JSY OK" : "JSY ABS"));
 }
 
 void DisplayManager::renderTemperatures() {
   drawHeader("TEMPERATURES");
-  drawText(0, 16, String("S1 ") + fmtFloat(state.ds18b20Temps[0], 1) + " C " + (state.ds18b20Available[0] ? "OK" : "ABS"));
-  drawText(0, 28, String("S2 ") + fmtFloat(state.ds18b20Temps[1], 1) + " C " + (state.ds18b20Available[1] ? "OK" : "ABS"));
-  drawText(0, 40, String("S3 ") + fmtFloat(state.ds18b20Temps[2], 1) + " C " + (state.ds18b20Available[2] ? "OK" : "ABS"));
+  drawText(0, 16, String("S1 ") + fmtFloat(state.ds18b20Temps[0], 1) + "C");
+  drawText(0, 28, String("S2 ") + fmtFloat(state.ds18b20Temps[1], 1) + "C");
+  drawText(0, 40, String("S3 ") + fmtFloat(state.ds18b20Temps[2], 1) + "C");
   drawText(0, 52, state.ds18b20CriticalMissing ? "SONDE CRIT ABS" : "SONDES OK");
 }
 
 void DisplayManager::renderOutputs() {
   drawHeader("SORTIES");
-  drawText(0, 16, String("SSR1 ") + fmtFloat(state.ssr1PowerPct) + " %");
-  drawText(0, 28, String("SSR2 ") + fmtFloat(state.ssr2PowerPct) + " %");
-  drawText(0, 40, String("TRIAC ") + fmtFloat(state.robotDynPowerPct) + " %");
+  drawText(0, 16, String("SSR1 ") + fmtFloat(state.ssr1PowerPct) + "%");
+  drawText(0, 28, String("SSR2 ") + fmtFloat(state.ssr2PowerPct) + "%");
+  drawText(0, 40, String("TRIAC ") + fmtFloat(state.robotDynPowerPct) + "%");
   drawText(0, 52, state.simulationMode ? "SIMULATION" : state.systemMode);
 }
 

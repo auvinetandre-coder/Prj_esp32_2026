@@ -13,7 +13,11 @@ void RuntimeState::begin(ConfigManager &config) {
   simulationMode = config.system()["simulation"]["enabled"] | config.system()["simulationMode"] | false;
   simulationType = config.system()["simulation"]["mode"] | "manual";
   simulationScenario = config.system()["simulation"]["scenario"] | "normal";
+  mqttEnabled = config.system()["mqtt"]["enabled"] | false;
+  mqttStatus = mqttEnabled ? "MQTT_WAIT_WIFI" : "MQTT_DISABLED";
   gridPowerSource = config.system()["router"]["gridPowerSource"] | "JSY";
+  pidEnabled = config.system()["router"]["pidEnabled"] | true;
+  systemMode = config.system()["router"]["mode"] | "AUTO";
   watchdogSeenMs = millis();
 }
 
@@ -91,6 +95,8 @@ void RuntimeState::toJson(JsonObject out, bool includeLogs) {
   out["uptime"] = millis() / 1000;
   out["heapFree"] = ESP.getFreeHeap();
   out["gridPowerW"] = gridPowerW;
+  out["gridPowerRawW"] = gridPowerRawW;
+  out["gridPowerFilteredW"] = gridPowerFilteredW;
   out["gridPowerSource"] = gridPowerSource;
   out["jsyGridPowerW"] = jsyGridPowerW;
   out["ticGridPowerW"] = ticGridPowerW;
@@ -99,6 +105,11 @@ void RuntimeState::toJson(JsonObject out, bool includeLogs) {
   out["gridPowerFactor"] = gridPowerFactor;
   out["gridFrequencyHz"] = gridFrequencyHz;
   out["gridEnergyDirection"] = gridEnergyDirection;
+  out["jsyImportEnergyWh1"] = jsyImportEnergyWh1;
+  out["jsyExportEnergyWh1"] = jsyExportEnergyWh1;
+  out["jsyImportEnergyWh2"] = jsyImportEnergyWh2;
+  out["jsyExportEnergyWh2"] = jsyExportEnergyWh2;
+  out["jsyPollingMs"] = jsyPollingMs;
   out["voltageV1"] = voltageV1;
   out["currentA1"] = currentA1;
   out["activePowerW1"] = activePowerW1;
@@ -141,11 +152,21 @@ void RuntimeState::toJson(JsonObject out, bool includeLogs) {
   out["ssr1PowerPct"] = ssr1PowerPct;
   out["ssr2PowerPct"] = ssr2PowerPct;
   out["robotDynPowerPct"] = robotDynPowerPct;
+  out["heaterPowerW"] = heaterPowerW;
+  out["commandPercent"] = commandPercent;
+  out["pidOutputPercent"] = pidOutputPercent;
+  out["pidEnabled"] = pidEnabled;
+  out["pidErrorW"] = pidErrorW;
+  out["pidStatus"] = pidStatus;
   out["systemMode"] = systemMode;
   out["simulationMode"] = simulationMode;
   out["simulationType"] = simulationType;
   out["simulationScenario"] = simulationScenario;
   out["simulationRemainingMs"] = simulationRemainingMs;
+  out["mqttEnabled"] = mqttEnabled;
+  out["mqttConnected"] = mqttConnected;
+  out["mqttStatus"] = mqttStatus;
+  out["lastMqttPublishAgeMs"] = lastMqttPublishMs ? millis() - lastMqttPublishMs : 4294967295UL;
   out["lastActuatorCommandLog"] = lastActuatorCommandLog;
   out["littleFsOk"] = littleFsOk;
   if (!includeLogs) return;

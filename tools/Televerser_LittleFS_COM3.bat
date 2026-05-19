@@ -1,22 +1,26 @@
 @echo off
-setlocal
+setlocal EnableExtensions
 
 cd /d "%~dp0\.."
 
-set PORT=COM4
-set DATA_DIR=%CD%\data
-set IMAGE=%CD%\RouteurSolaireESP32_LittleFS.bin
-set MKLITTLEFS=C:\Users\andre\AppData\Local\Arduino15\packages\esp32\tools\mklittlefs\4.0.2-db0513a\mklittlefs.exe
-set ESPTOOL=C:\Users\andre\AppData\Local\Arduino15\packages\esp32\tools\esptool_py\5.2.0\esptool.exe
+set "PORT=COM3"
+set "DATA_DIR=%CD%\data"
+set "LITTLEFS_VERSION_FILE=%DATA_DIR%\www\littlefs_version.txt"
+set "BUILD_DIR=%CD%\build"
+set "OTA_DIR=%BUILD_DIR%\ota"
+set "IMAGE=%OTA_DIR%\RouteurSolaireESP32_littlefs.bin"
+set "VERSION_FILE=%OTA_DIR%\latest_version.txt"
+set "MKLITTLEFS=C:\Users\andre\AppData\Local\Arduino15\packages\esp32\tools\mklittlefs\4.0.2-db0513a\mklittlefs.exe"
+set "ESPTOOL=C:\Users\andre\AppData\Local\Arduino15\packages\esp32\tools\esptool_py\5.2.0\esptool.exe"
 
-rem Partition Arduino IDE: "No OTA (2MB APP / 2MB SPIFFS)".
-rem Table ESP32 Arduino 3.3.8 no_ota.csv:
-rem app0   : offset 0x10000, taille 0x200000
-rem spiffs : offset 0x210000, taille 0x1E0000
-set FS_OFFSET=0x210000
-set FS_SIZE=0x1E0000
-set BLOCK_SIZE=4096
-set PAGE_SIZE=256
+rem Partition custom RouteurSolaireESP32:
+rem app0   : offset 0x10000, taille 0x180000
+rem app1   : offset 0x190000, taille 0x180000
+rem spiffs : offset 0x310000, taille 0xF0000
+set "FS_OFFSET=0x310000"
+set "FS_SIZE=0xF0000"
+set "BLOCK_SIZE=4096"
+set "PAGE_SIZE=256"
 
 echo ==================================================
 echo Televersement LittleFS RouteurSolaireESP32
@@ -33,6 +37,22 @@ if not exist "%DATA_DIR%" (
   exit /b 1
 )
 
+if not exist "%BUILD_DIR%" (
+  mkdir "%BUILD_DIR%"
+)
+
+if not exist "%OTA_DIR%" (
+  mkdir "%OTA_DIR%"
+)
+
+if exist "%VERSION_FILE%" (
+  set /p BUILD_VERSION=<"%VERSION_FILE%"
+)
+if not defined BUILD_VERSION (
+  for /f "delims=" %%I in ('%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -Command "Get-Date -Format yyyyMMdd"') do set "BUILD_VERSION=%%I-00"
+)
+set "VERSIONED_IMAGE=%OTA_DIR%\RouteurSolaireESP32_littlefs_%BUILD_VERSION%.bin"
+
 if not exist "%MKLITTLEFS%" (
   echo ERREUR: mklittlefs introuvable:
   echo %MKLITTLEFS%
@@ -40,17 +60,37 @@ if not exist "%MKLITTLEFS%" (
   exit /b 1
 )
 
-if not exist "%ESPTOOL%" (
-  echo ERREUR: esptool introuvable:
-  echo %ESPTOOL%
-  pause
-  exit /b 1
-)
+echo %BUILD_VERSION%>"%LITTLEFS_VERSION_FILE%"
 
 echo Creation image LittleFS...
 "%MKLITTLEFS%" -c "%DATA_DIR%" -p %PAGE_SIZE% -b %BLOCK_SIZE% -s %FS_SIZE% "%IMAGE%"
 if errorlevel 1 (
   echo ERREUR: creation image LittleFS impossible.
+  pause
+  exit /b 1
+)
+copy /Y "%IMAGE%" "%VERSIONED_IMAGE%" >nul
+
+echo.
+echo Image LittleFS generee avec succes:
+echo %IMAGE%
+echo Image LittleFS horodatee:
+echo %VERSIONED_IMAGE%
+echo.
+echo Tu peux utiliser ce fichier pour l'OTA LittleFS depuis la page Secours.
+echo.
+choice /C ON /N /M "Veux-tu aussi televerser maintenant sur %PORT% ? [O/N] "
+if errorlevel 2 (
+  echo.
+  echo Televersement annule. Le fichier .bin est disponible pour l'OTA.
+  echo.
+  pause
+  exit /b 0
+)
+
+if not exist "%ESPTOOL%" (
+  echo ERREUR: esptool introuvable:
+  echo %ESPTOOL%
   pause
   exit /b 1
 )

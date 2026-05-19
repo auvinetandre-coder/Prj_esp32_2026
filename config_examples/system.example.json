@@ -14,11 +14,34 @@
     "keepFallbackApAlwaysOn": true,
     "connectTimeoutMs": 8000
   },
+  "webAuth": {
+    "enabled": true,
+    "username": "admin",
+    "password": "routeur1234"
+  },
   "simulation": {
     "enabled": false,
     "mode": "manual",
     "scenario": "normal",
     "randomUpdateIntervalMs": 2000
+  },
+  "mqtt": {
+    "enabled": false,
+    "host": "192.168.0.48",
+    "port": 1883,
+    "clientId": "RouteurSolaireESP32",
+    "baseTopic": "routeurSolaire",
+    "username": "",
+    "password": "",
+    "publishIntervalMs": 5000,
+    "retain": false,
+    "publishIndividualTopics": true,
+    "topics": {
+      "state": "routeurSolaire/state",
+      "command": "routeurSolaire/command",
+      "actuatorSet": "routeurSolaire/actuator/+/set",
+      "availability": "routeurSolaire/availability"
+    }
   },
   "safety": {
     "enabled": true,
@@ -49,6 +72,6 @@
     "reset": 16,
     "dc": 4,
     "cs": 15,
-    "refreshMs": 1000
+    "refreshMs": 4000
   }
 }
