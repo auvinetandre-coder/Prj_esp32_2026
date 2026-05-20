@@ -7,6 +7,7 @@
 #include <esp_ota_ops.h>
 #include <esp_partition.h>
 #include <esp_system.h>
+#include <time.h>
 #include "../build_info.h"
 
 static const char *ROUTEUR_ACTIVE_FIRMWARE_MARKER = ROUTEUR_FIRMWARE_MARKER;
@@ -277,8 +278,9 @@ void WebUi::routes() {
   });
   server.on("/api/status-lite", HTTP_GET, [this]() { sendStatusLite(); });
   server.on("/api/realtime", HTTP_GET, [this]() {
-    DynamicJsonDocument doc(1024);
+    DynamicJsonDocument doc(2048);
     JsonObject out = doc.to<JsonObject>();
+    JsonObject router = config.system()["router"].as<JsonObject>();
     auto setNumber = [&out](const char *key, float value) {
       if (isnan(value) || isinf(value)) out[key] = nullptr;
       else out[key] = value;
@@ -288,9 +290,22 @@ void WebUi::routes() {
     setNumber("gridPowerFilteredW", state.gridPowerFilteredW);
     setNumber("gridPowerW", state.gridPowerW);
     setNumber("injectionW", state.injectionW);
+    setNumber("consumptionW", state.consumptionW);
+    setNumber("surplusW", state.surplusW);
+    setNumber("targetW", router["gridSetpointW"] | 0.0f);
+    setNumber("deadbandW", router["deadbandW"] | 30.0f);
     setNumber("pidOutputPercent", state.pidOutputPercent);
     setNumber("commandPercent", state.commandPercent);
     setNumber("heaterPowerW", state.heaterPowerW);
+    setNumber("ssr1PowerPct", state.ssr1PowerPct);
+    setNumber("ssr2PowerPct", state.ssr2PowerPct);
+    setNumber("robotDynPowerPct", state.robotDynPowerPct);
+    out["ssr1"] = state.ssr1PowerPct > 0.5f;
+    out["ssr2"] = state.ssr2PowerPct > 0.5f;
+    setNumber("temp1", isnan(state.ds18b20Temps[0]) || isinf(state.ds18b20Temps[0]) ? state.tankTopC : state.ds18b20Temps[0]);
+    setNumber("temp2", isnan(state.ds18b20Temps[1]) || isinf(state.ds18b20Temps[1]) ? state.tankMiddleC : state.ds18b20Temps[1]);
+    setNumber("temp3", isnan(state.ds18b20Temps[2]) || isinf(state.ds18b20Temps[2]) ? state.tankBottomC : state.ds18b20Temps[2]);
+    setNumber("tempSafety", router["tempSafetyMaxC"] | router["tankSafetyC"] | 70.0f);
     out["pidStatus"] = state.pidStatus;
     out["safetyLevel"] = state.safetyLevel;
     sendJson(doc);
@@ -613,6 +628,15 @@ void WebUi::sendStatusLite() {
   out["lastMqttPublishAgeMs"] = state.lastMqttPublishMs ? millis() - state.lastMqttPublishMs : 4294967295UL;
   out["jsyOnline"] = state.jsyOnline;
   out["ticAvailable"] = state.ticAvailable;
+  out["ticStatus"] = state.ticStatus;
+  setNumber("ticApparentPowerVA", state.ticApparentPowerVA);
+  setNumber("ticGridPowerW", state.ticGridPowerW);
+  setNumber("ticCurrentA", state.ticCurrentA);
+  out["ticEnergyWh"] = static_cast<uint32_t>(state.ticEnergyWh);
+  out["ticTariff"] = state.ticTariff;
+  out["ticPeriod"] = state.ticPeriod;
+  out["lastTicReadMs"] = state.lastTicReadMs;
+  out["ticErrorCount"] = state.ticErrorCount;
   out["ds18b20CriticalMissing"] = state.ds18b20CriticalMissing;
   JsonArray dsAvailable = out["ds18b20Available"].to<JsonArray>();
   for (uint8_t i = 0; i < 3; i++) dsAvailable.add(state.ds18b20Available[i]);
@@ -671,6 +695,15 @@ void WebUi::sendStatusLite() {
   setNumber("pidErrorW", state.pidErrorW);
   out["pidEnabled"] = state.pidEnabled;
   out["pidStatus"] = state.pidStatus;
+  JsonObject router = system["router"].as<JsonObject>();
+  setNumber("pidMeasuredW", isnan(state.gridPowerFilteredW) || isinf(state.gridPowerFilteredW) ? state.gridPowerW : state.gridPowerFilteredW);
+  setNumber("gridSetpointW", router["gridSetpointW"] | 0.0f);
+  setNumber("deadbandW", router["deadbandW"] | 30.0f);
+  setNumber("pidKp", router["kp"] | router["pidKp"] | 0.08f);
+  setNumber("pidKi", router["ki"] | router["pidKi"] | 0.01f);
+  setNumber("pidKd", router["kd"] | router["pidKd"] | 0.0f);
+  setNumber("maxOutputRampPercentPerSecond", router["maxOutputRampPercentPerSecond"] | 15.0f);
+  setNumber("heaterMaxPowerW", router["heaterMaxPowerW"] | router["ssr1MaxW"] | 1500.0f);
   out["heapFree"] = ESP.getFreeHeap();
   sendJson(doc);
 }
@@ -726,6 +759,21 @@ void WebUi::sendSystemInfo() {
   out["networkMode"] = state.networkMode.length() ? state.networkMode : "N/A";
   out["stationIp"] = state.stationIp.length() ? state.stationIp : "N/A";
   out["apIp"] = state.apIp.length() ? state.apIp : "N/A";
+  out["ntpEnabled"] = state.ntpEnabled;
+  out["ntpSynced"] = state.ntpSynced;
+  out["ntpStatus"] = state.ntpStatus.length() ? state.ntpStatus : "N/A";
+  if (state.ntpSynced) {
+    struct tm timeinfo;
+    if (getLocalTime(&timeinfo, 20)) {
+      char buffer[24];
+      strftime(buffer, sizeof(buffer), "%d/%m/%Y %H:%M:%S", &timeinfo);
+      out["localDateTime"] = buffer;
+    } else {
+      out["localDateTime"] = "N/A";
+    }
+  } else {
+    out["localDateTime"] = "N/A";
+  }
   out["role"] = RuntimeState::roleToString(state.role);
   out["safetyLevel"] = state.safetyLevel.length() ? state.safetyLevel : "N/A";
   out["safetyReason"] = state.safetyReason.length() ? state.safetyReason : "N/A";
@@ -761,7 +809,7 @@ void WebUi::sendSystemInfo() {
 
   JsonObject services = out["services"].to<JsonObject>();
   services["wifi"] = wifiOk ? "OK" : (state.networkMode == "AP" || state.networkMode == "AP_STA" ? "Attention" : "Erreur");
-  services["ntp"] = "N/A";
+  services["ntp"] = !state.ntpEnabled ? "N/A" : (state.ntpSynced ? "OK" : "Attention");
   JsonObject mqtt = config.system()["mqtt"].as<JsonObject>();
   services["mqtt"] = !mqtt.isNull() && (mqtt["enabled"] | false) ? (state.mqttConnected ? "OK" : "Attention") : "N/A";
   bool anySensorOk = state.jsyOnline || state.ticAvailable;

@@ -20,6 +20,10 @@ void DS18B20Manager::loop(uint32_t now) {
     publishRuntimeState();
     return;
   }
+  if (!conversionPending && hasMissingEnabledSensor() && now - lastAutoScanMs >= 10000UL) {
+    scanBus();
+    lastAutoScanMs = now;
+  }
   if (!conversionPending && now - lastRequestMs >= readIntervalMs) {
     requestTemperatures();
     lastRequestMs = now;
@@ -38,6 +42,7 @@ void DS18B20Manager::scanBus() {
     Serial.println(F("DS18B20 scan ignore: bus OneWire desactive"));
     return;
   }
+  dallas.begin();
   DeviceAddress address;
   uint8_t count = min<uint8_t>(dallas.getDeviceCount(), 8);
   Serial.print(F("DS18B20 detectees: "));
@@ -259,8 +264,9 @@ void DS18B20Manager::reloadConfig() {
   if (oneWireGpio != previousGpio) {
     oneWire.begin(oneWireGpio);
     dallas.begin();
-    detectedCount = 0;
-    conversionPending = false;
+  detectedCount = 0;
+  conversionPending = false;
+  lastAutoScanMs = 0;
     lastRequestMs = 0;
     Serial.print(F("DS18B20 bus OneWire change vers GPIO"));
     Serial.println(oneWireGpio);
@@ -350,4 +356,11 @@ bool DS18B20Manager::validTemperature(float value) {
   if (value <= -126.0f) return false;
   if (abs(value - 85.0f) < 0.01f) return false;
   return value > -55.0f && value < 125.0f;
+}
+
+bool DS18B20Manager::hasMissingEnabledSensor() {
+  for (uint8_t i = 0; i < sensorCount; i++) {
+    if (sensors[i].enabled && !sensors[i].available) return true;
+  }
+  return false;
 }

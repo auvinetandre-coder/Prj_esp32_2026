@@ -18,6 +18,9 @@ private:
   ConfigManager &config;
   RuntimeState &state;
   uint32_t lastStatusMs = 0;
+  uint32_t lastNtpCheckMs = 0;
+  bool ntpStarted = false;
   void startFallbackAp();
   void startLocalAp();
+  void updateNtp(uint32_t now);
 };

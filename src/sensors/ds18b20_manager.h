@@ -54,6 +54,7 @@ private:
   String detectedAddresses[8];
   uint8_t detectedCount = 0;
   uint32_t lastRequestMs = 0;
+  uint32_t lastAutoScanMs = 0;
   bool conversionPending = false;
   uint8_t oneWireGpio = 13;
   uint32_t readIntervalMs = 2000;
@@ -67,4 +68,5 @@ private:
   String addressToString(const DeviceAddress address);
   bool stringToAddress(const String &text, DeviceAddress address);
   bool validTemperature(float value);
+  bool hasMissingEnabledSensor();
 };

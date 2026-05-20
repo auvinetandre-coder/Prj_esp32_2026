@@ -371,6 +371,23 @@ bool ConfigManager::normalizeSystemConfig() {
     wifi["connectTimeoutMs"] = 8000;
     changed = true;
   }
+  JsonObject ntp = root["ntp"].is<JsonObject>() ? root["ntp"].as<JsonObject>() : root["ntp"].to<JsonObject>();
+  if (!ntp["enabled"].is<bool>()) {
+    ntp["enabled"] = true;
+    changed = true;
+  }
+  if (!ntp["server1"].is<const char *>() || isConfigPlaceholder(ntp["server1"] | "")) {
+    ntp["server1"] = "pool.ntp.org";
+    changed = true;
+  }
+  if (!ntp["server2"].is<const char *>() || isConfigPlaceholder(ntp["server2"] | "")) {
+    ntp["server2"] = "time.nist.gov";
+    changed = true;
+  }
+  if (!ntp["timezone"].is<const char *>() || isConfigPlaceholder(ntp["timezone"] | "")) {
+    ntp["timezone"] = "CET-1CEST,M3.5.0/2,M10.5.0/3";
+    changed = true;
+  }
   JsonObject webAuth = root["webAuth"].is<JsonObject>() ? root["webAuth"].as<JsonObject>() : root["webAuth"].to<JsonObject>();
   if (!webAuth["enabled"].is<bool>()) {
     webAuth["enabled"] = true;
@@ -446,6 +463,7 @@ bool ConfigManager::normalizeSystemConfig() {
   JsonObject router = root["router"].is<JsonObject>() ? root["router"].as<JsonObject>() : root["router"].to<JsonObject>();
   if (!router["mode"].is<const char *>()) { router["mode"] = "AUTO"; changed = true; }
   if (!router["gridPowerSource"].is<const char *>()) { router["gridPowerSource"] = "JSY"; changed = true; }
+  if (!router["linkyPowerFactorEstimate"].is<float>() && !router["linkyPowerFactorEstimate"].is<int>()) { router["linkyPowerFactorEstimate"] = 0.95; changed = true; }
   if (!router["pidEnabled"].is<bool>()) { router["pidEnabled"] = true; changed = true; }
   if (!router["gridSetpointW"].is<float>() && !router["gridSetpointW"].is<int>()) { router["gridSetpointW"] = 0; changed = true; }
   if (!router["deadbandW"].is<float>() && !router["deadbandW"].is<int>()) { router["deadbandW"] = 30; changed = true; }
@@ -678,6 +696,11 @@ void ConfigManager::defaultSystem() {
   wifi["password"] = "";
   wifi["keepFallbackApAlwaysOn"] = true;
   wifi["connectTimeoutMs"] = 8000;
+  JsonObject ntp = root["ntp"].to<JsonObject>();
+  ntp["enabled"] = true;
+  ntp["server1"] = "pool.ntp.org";
+  ntp["server2"] = "time.nist.gov";
+  ntp["timezone"] = "CET-1CEST,M3.5.0/2,M10.5.0/3";
   JsonObject ap = root["fallbackAp"].to<JsonObject>();
   ap["ssid"] = DEFAULT_AP_SSID;
   ap["password"] = DEFAULT_AP_PASSWORD;
@@ -705,6 +728,7 @@ void ConfigManager::defaultSystem() {
   JsonObject router = root["router"].to<JsonObject>();
   router["mode"] = "AUTO";
   router["gridPowerSource"] = "JSY";
+  router["linkyPowerFactorEstimate"] = 0.95;
   router["injectionThresholdW"] = -200;
   router["minInjectionStartW"] = 200;
   router["stopBelowInjectionW"] = 80;

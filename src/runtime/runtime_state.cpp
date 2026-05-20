@@ -13,6 +13,8 @@ void RuntimeState::begin(ConfigManager &config) {
   simulationMode = config.system()["simulation"]["enabled"] | config.system()["simulationMode"] | false;
   simulationType = config.system()["simulation"]["mode"] | "manual";
   simulationScenario = config.system()["simulation"]["scenario"] | "normal";
+  ntpEnabled = config.system()["ntp"]["enabled"] | true;
+  ntpStatus = ntpEnabled ? "NTP_WAIT_WIFI" : "NTP_DISABLED";
   mqttEnabled = config.system()["mqtt"]["enabled"] | false;
   mqttStatus = mqttEnabled ? "MQTT_WAIT_WIFI" : "MQTT_DISABLED";
   gridPowerSource = config.system()["router"]["gridPowerSource"] | "JSY";
@@ -81,6 +83,10 @@ void RuntimeState::toJson(JsonObject out, bool includeLogs) {
   out["wifiSsid"] = wifiSsid;
   out["rssi"] = rssi;
   out["wifiConnected"] = wifiConnected;
+  out["ntpEnabled"] = ntpEnabled;
+  out["ntpSynced"] = ntpSynced;
+  out["ntpStatus"] = ntpStatus;
+  out["lastNtpSyncAgeMs"] = lastNtpSyncMs ? millis() - lastNtpSyncMs : 4294967295UL;
   out["espNowReady"] = espNowReady;
   out["isActiveMaster"] = isActiveMaster;
   out["masterAlive"] = masterAlive;

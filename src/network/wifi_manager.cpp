@@ -1,4 +1,5 @@
 #include "wifi_manager.h"
+#include <time.h>
 
 static const char *DEFAULT_AP_SSID = "RouteurSolaire_Config";
 static const char *DEFAULT_AP_PASSWORD = "routeur1234";
@@ -75,6 +76,7 @@ void SolarWiFiManager::loop() {
     state.localIp = state.apIp;
     state.rssi = 0;
   }
+  updateNtp(now);
 }
 
 bool SolarWiFiManager::testConnection(const String &ssid, const String &password, uint32_t timeoutMs) {
@@ -117,6 +119,49 @@ void SolarWiFiManager::startFallbackAp() {
   state.addLog("Fallback AP started: " + state.apIp);
   Serial.print(F("Fallback AP IP: "));
   Serial.println(state.apIp);
+}
+
+void SolarWiFiManager::updateNtp(uint32_t now) {
+  JsonObject ntp = config.system()["ntp"].as<JsonObject>();
+  state.ntpEnabled = ntp.isNull() ? true : (ntp["enabled"] | true);
+  if (!state.ntpEnabled) {
+    state.ntpSynced = false;
+    state.ntpStatus = "NTP_DISABLED";
+    ntpStarted = false;
+    return;
+  }
+  if (!state.wifiConnected || WiFi.status() != WL_CONNECTED) {
+    state.ntpSynced = false;
+    state.ntpStatus = "NTP_WAIT_WIFI";
+    ntpStarted = false;
+    return;
+  }
+
+  if (!ntpStarted) {
+    const char *server1 = ntp["server1"] | "pool.ntp.org";
+    const char *server2 = ntp["server2"] | "time.nist.gov";
+    const char *timezone = ntp["timezone"] | "CET-1CEST,M3.5.0/2,M10.5.0/3";
+    configTzTime(timezone, server1, server2);
+    ntpStarted = true;
+    lastNtpCheckMs = 0;
+    state.ntpStatus = "NTP_SYNCING";
+    Serial.println(F("NTP: synchronisation lancee."));
+  }
+
+  if (now - lastNtpCheckMs < 5000) return;
+  lastNtpCheckMs = now;
+  time_t currentTime = time(nullptr);
+  if (currentTime > 1700000000L) {
+    if (!state.ntpSynced) {
+      state.logEvent("INFO", "NTP_SYNCED", "Heure NTP synchronisee", "WiFi");
+    }
+    state.ntpSynced = true;
+    state.ntpStatus = "OK";
+    state.lastNtpSyncMs = now;
+  } else {
+    state.ntpSynced = false;
+    state.ntpStatus = "NTP_SYNCING";
+  }
 }
 
 void SolarWiFiManager::startLocalAp() {

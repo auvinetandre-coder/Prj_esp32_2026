@@ -24,6 +24,10 @@ struct RuntimeState {
   String wifiSsid = "";
   int32_t rssi = 0;
   bool wifiConnected = false;
+  bool ntpEnabled = true;
+  bool ntpSynced = false;
+  String ntpStatus = "NTP_WAIT_WIFI";
+  uint32_t lastNtpSyncMs = 0;
   bool espNowReady = false;
   bool isActiveMaster = false;
   bool masterAlive = false;
