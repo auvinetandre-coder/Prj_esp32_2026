@@ -58,10 +58,12 @@ private:
   uint32_t timeoutMs = 5000;
   bool frameActive = false;
   bool frameHasValidLine = false;
+  bool lineOverflow = false;
   String lineBuffer = "";
   String frameBuffer = "";
   uint32_t lastByteMs = 0;
   uint32_t lastErrorLogMs = 0;
+  uint32_t lastPeriodicLogMs = 0;
 
   void loadConfig();
   bool validateChecksum(const String &line);
@@ -70,4 +72,5 @@ private:
   void setStatus(LinkyTICStatus status);
   const char *statusText(LinkyTICStatus status) const;
   void logError(const __FlashStringHelper *message, uint32_t now);
+  void logPeriodicValues(uint32_t now);
 };

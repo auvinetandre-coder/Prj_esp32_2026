@@ -1,5 +1,7 @@
 #include "linky_tic_manager.h"
 
+static const uint16_t TIC_MAX_LINE_LENGTH = 192;
+
 void LinkyTICManager::begin() {
   loadConfig();
 
@@ -34,6 +36,7 @@ void LinkyTICManager::loop(uint32_t now) {
     if (c == 0x02) {
       frameActive = true;
       frameHasValidLine = false;
+      lineOverflow = false;
       lineBuffer = "";
       frameBuffer = "";
       continue;
@@ -51,6 +54,7 @@ void LinkyTICManager::loop(uint32_t now) {
       }
       publishRuntime();
       frameActive = false;
+      lineOverflow = false;
       lineBuffer = "";
       continue;
     }
@@ -58,8 +62,15 @@ void LinkyTICManager::loop(uint32_t now) {
     if (!frameActive && c != '\n' && c != '\r') frameActive = true;
 
     if (c == '\n' || c == '\r') {
+      lineOverflow = false;
       if (lineBuffer.length()) {
-        if (parseLine(lineBuffer)) frameHasValidLine = true;
+        if (parseLine(lineBuffer)) {
+          frameHasValidLine = true;
+          reading.available = true;
+          reading.lastValidReadMs = now;
+          setStatus(TIC_OK);
+          publishRuntime();
+        }
         frameBuffer += lineBuffer;
         frameBuffer += '\n';
         lineBuffer = "";
@@ -67,10 +78,14 @@ void LinkyTICManager::loop(uint32_t now) {
       continue;
     }
 
-    if (lineBuffer.length() < 96) {
+    if (lineOverflow) continue;
+    if (c < 0x20 && c != '\t') continue;
+
+    if (lineBuffer.length() < TIC_MAX_LINE_LENGTH) {
       lineBuffer += c;
     } else {
       lineBuffer = "";
+      lineOverflow = true;
       reading.errorCount++;
       setStatus(TIC_FRAME_ERROR);
       logError(F("TIC ligne trop longue"), now);
@@ -83,11 +98,14 @@ void LinkyTICManager::loop(uint32_t now) {
     publishRuntime();
     logError(F("TIC timeout"), now);
   }
+
+  logPeriodicValues(now);
 }
 
 bool LinkyTICManager::parseLine(const String &rawLine) {
   String line = rawLine;
-  line.trim();
+  while (line.length() && (line.charAt(0) == '\r' || line.charAt(0) == '\n')) line.remove(0, 1);
+  while (line.length() && (line.charAt(line.length() - 1) == '\r' || line.charAt(line.length() - 1) == '\n')) line.remove(line.length() - 1);
   if (line.length() < 4) return false;
   if (!validateChecksum(line)) return false;
 
@@ -179,6 +197,7 @@ void LinkyTICManager::reloadConfig() {
   loadConfig();
   frameActive = false;
   frameHasValidLine = false;
+  lineOverflow = false;
   lineBuffer = "";
   frameBuffer = "";
   if (!configured) {
@@ -207,6 +226,7 @@ void LinkyTICManager::stop() {
   configured = false;
   frameActive = false;
   frameHasValidLine = false;
+  lineOverflow = false;
   lineBuffer = "";
   frameBuffer = "";
   Serial1.end();
@@ -262,4 +282,39 @@ void LinkyTICManager::logError(const __FlashStringHelper *message, uint32_t now)
   lastErrorLogMs = now;
   Serial.println(message);
   state.addLog(String(message));
+}
+
+void LinkyTICManager::logPeriodicValues(uint32_t now) {
+  if (now - lastPeriodicLogMs < 60000UL) return;
+  lastPeriodicLogMs = now;
+
+  String line = "TIC valeurs: status=";
+  line += statusText(reading.status);
+  line += " available=";
+  line += reading.available ? "true" : "false";
+  line += " mode=";
+  line += mode;
+  line += " rx=GPIO";
+  line += String(rxPin);
+  line += " baud=";
+  line += String(baudrate);
+  line += " apparentPowerVA=";
+  line += isnan(reading.apparentPowerVA) || isinf(reading.apparentPowerVA) ? "N/A" : String(reading.apparentPowerVA, 0);
+  line += " gridPowerW=";
+  line += isnan(reading.gridPowerW) || isinf(reading.gridPowerW) ? "N/A" : String(reading.gridPowerW, 0);
+  line += " currentA=";
+  line += isnan(reading.currentA) || isinf(reading.currentA) ? "N/A" : String(reading.currentA, 2);
+  line += " energyWh=";
+  line += String(static_cast<uint32_t>(reading.energyWh));
+  line += " tariff=";
+  line += reading.tariff.length() ? reading.tariff : "N/A";
+  line += " period=";
+  line += reading.period.length() ? reading.period : "N/A";
+  line += " lastValidAgeMs=";
+  line += reading.lastValidReadMs ? String(now - reading.lastValidReadMs) : "N/A";
+  line += " errors=";
+  line += String(reading.errorCount);
+
+  Serial.println(line);
+  state.logEvent(reading.available ? "INFO" : "WARNING", "TIC_VALUES", line, "LinkyTIC");
 }

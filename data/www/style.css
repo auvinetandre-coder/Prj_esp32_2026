@@ -633,17 +633,21 @@ main {
 }
 
 .wideChart .sparkline {
-  height: 170px;
+  height: 198px;
   background: #191a1e;
   border-color: #26272b;
 }
 
 .wideChart .energySpark {
-  height: 170px;
+  height: 198px;
 }
 
-.wideChart .energyWithScale .chartScale {
-  min-height: 170px;
+.wideChart .axisYLabels {
+  height: 198px;
+}
+
+.wideChart .chartScale {
+  display: none;
 }
 
 .wideChart .sparkline polyline {
@@ -774,11 +778,80 @@ main {
 }
 
 .miniState {
+  position: relative;
   display: flex;
   justify-content: space-between;
   gap: 10px;
   padding: 8px 0;
   border-bottom: 1px solid #374151;
+}
+
+.miniState.hasTip {
+  cursor: help;
+}
+
+.miniState.hasTip span::after {
+  content: " i";
+  color: #60a5fa;
+  font-weight: 800;
+}
+
+.hoverTip {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% - 4px);
+  left: 0;
+  min-width: min(280px, 82vw);
+  padding: 9px 10px;
+  border: 1px solid #334155;
+  border-radius: 8px;
+  background: linear-gradient(180deg, #0f172a, #0b1220);
+  box-shadow: 0 14px 28px rgba(0,0,0,.35), inset 0 1px 0 rgba(255,255,255,.04);
+  opacity: 0;
+  transform: translateY(-4px);
+  pointer-events: none;
+  transition: opacity .14s ease, transform .14s ease;
+}
+
+.miniState.hasTip:hover .hoverTip,
+.miniState.hasTip:focus-within .hoverTip {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.hoverTip div {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 5px 0;
+  border-bottom: 1px solid rgba(75,85,99,.7);
+}
+
+.hoverTip div:last-child {
+  border-bottom: 0;
+}
+
+.hoverTip span {
+  color: #9ca3af;
+  font-size: 11px;
+}
+
+.hoverTip b {
+  color: #60a5fa;
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.hoverTip b.ok { color: #22c55e; }
+.hoverTip b.warn { color: #fbbf24; }
+.hoverTip b.bad { color: #f87171; }
+.hoverTip b.info { color: #60a5fa; }
+
+.hoverTip em {
+  color: #94a3b8;
+  font-style: normal;
+  font-weight: 650;
 }
 
 .miniState:last-child {
@@ -876,20 +949,67 @@ main {
 
 .chartWithScale {
   display: grid;
-  grid-template-columns: 54px minmax(0, 1fr);
+  grid-template-columns: 58px minmax(0, 1fr);
   gap: 8px;
-  align-items: stretch;
+  align-items: start;
 }
 
 .chartScale {
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
+  display: none;
+}
+
+.axisYLabels {
+  position: relative;
+  height: 142px;
   color: #9ca3af;
   font-size: 10px;
   line-height: 1;
   text-align: right;
-  padding: 4px 0;
+}
+
+.axisYLabels span {
+  position: absolute;
+  right: 0;
+  transform: translateY(-50%);
+  white-space: nowrap;
+}
+
+.axisYLabels span:first-child {
+  transform: translateY(0);
+}
+
+.axisYLabels span:last-child {
+  transform: translateY(-100%);
+}
+
+.axisYLabels .zeroLabel {
+  color: #d1d5db;
+  font-weight: 700;
+}
+
+.chartPlot {
+  position: relative;
+  min-width: 0;
+}
+
+.chartPlot .sparkline {
+  height: 198px;
+}
+
+.axisXLabels {
+  position: relative;
+  height: 18px;
+  margin-top: 3px;
+  color: #7b808a;
+  font-size: 9px;
+  line-height: 1;
+}
+
+.axisXLabels span {
+  position: absolute;
+  top: 0;
+  transform: translateX(-50%);
+  white-space: nowrap;
 }
 
 .sparkline .grid line {
@@ -900,6 +1020,15 @@ main {
 
 .sparkline .grid .tickLine {
   opacity: .2;
+}
+
+.sparkline .grid .timeLine {
+  opacity: .18;
+}
+
+.sparkline .grid .nowLine {
+  stroke: #93c5fd;
+  opacity: .42;
 }
 
 .sparkline .grid .zeroLine {
@@ -935,6 +1064,18 @@ main {
   filter: drop-shadow(0 0 3px currentColor);
 }
 
+.sparkline .timeAxis text {
+  fill: #7b808a;
+  font-size: 4.2px;
+  text-anchor: middle;
+}
+
+.sparkline .yAxis text {
+  fill: #9ca3af;
+  font-size: 5px;
+  text-anchor: start;
+}
+
 .sparkline .chartHoverGuide {
   pointer-events: none;
   stroke: #f9fafb;
@@ -961,14 +1102,6 @@ main {
 .energySpark circle.tempCurve1 { fill: #a78bfa; }
 .energySpark circle.tempCurve2 { fill: #06b6d4; }
 .energySpark circle.tempCurve3 { fill: #f472b6; }
-
-.energySpark {
-  height: 96px;
-}
-
-.energyWithScale .chartScale {
-  min-height: 96px;
-}
 
 .energySpark polyline.solar {
   stroke: #22c55e;
@@ -1313,6 +1446,34 @@ main {
   margin-top: 0;
 }
 
+.graphSettingsGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+  margin: 10px 0;
+}
+
+.graphSettingLabel {
+  display: block;
+  min-height: 44px;
+  padding: 8px 9px;
+  border: 1px solid #26272b;
+  border-radius: 8px;
+  background: #131417;
+  color: #d1d5db;
+  font-size: 12px;
+}
+
+.graphSettingLabel span {
+  display: block;
+  color: #9ca3af;
+  font-size: 11px;
+}
+
+.graphSettingLabel select {
+  margin-top: 5px;
+}
+
 .dashCustom summary {
   cursor: pointer;
   color: #93c5fd;
@@ -1450,6 +1611,164 @@ input, select {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 14px;
   align-items: start;
+  font-size: 13px;
+}
+
+.settingsGrid .panel {
+  padding: 10px;
+  margin-bottom: 10px;
+}
+
+.settingsGrid .panel h2 {
+  margin: 0 0 8px;
+  font-size: 16px;
+}
+
+.settingsGrid label {
+  font-size: 12px;
+  line-height: 1.25;
+}
+
+.settingsGrid input,
+.settingsGrid select {
+  margin-top: 3px;
+  padding: 7px 8px;
+  font-size: 12px;
+  border-radius: 7px;
+}
+
+.settingsGrid .form,
+.settingsGrid .formGrid {
+  gap: 8px;
+}
+
+.settingsGrid .subPanel {
+  padding: 9px;
+}
+
+.settingsGrid .subPanel h3 {
+  margin-bottom: 7px;
+  font-size: 13px;
+}
+
+.settingsGrid .muted,
+.settingsGrid .fieldHelp,
+.settingsGrid .warnBox,
+.settingsGrid .miniState {
+  font-size: 12px;
+}
+
+.settingsGrid .miniState {
+  padding: 6px 0;
+}
+
+.toggleField {
+  min-height: 42px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 42px 48px;
+  gap: 8px;
+  align-items: center;
+  padding: 7px 8px;
+  border: 1px solid #374151;
+  border-radius: 8px;
+  background: #111827;
+}
+
+.toggleField input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.toggleField i {
+  position: relative;
+  width: 38px;
+  height: 20px;
+  border-radius: 999px;
+  background: #374151;
+  border: 1px solid #4b5563;
+}
+
+.toggleField i::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #f9fafb;
+  transition: transform .16s ease;
+}
+
+.toggleField input:checked + i {
+  background: #166534;
+  border-color: #22c55e;
+}
+
+.toggleField input:checked + i::after {
+  transform: translateX(18px);
+}
+
+.toggleField b {
+  color: #9ca3af;
+  font-size: 11px;
+  text-align: right;
+}
+
+.toggleField b::before {
+  content: attr(data-off);
+}
+
+.toggleField input:checked ~ b {
+  color: #22c55e;
+}
+
+.toggleField input:checked ~ b::before {
+  content: attr(data-on);
+}
+
+.solarSettingsPanel {
+  grid-column: 1 / -1;
+}
+
+.solarSettingsGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.pidControls {
+  display: grid;
+  gap: 12px;
+}
+
+.sliderField {
+  display: grid;
+  gap: 7px;
+}
+
+.sliderField > span {
+  color: #d1d5db;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.sliderRow {
+  display: grid;
+  grid-template-columns: minmax(140px, 1fr) 78px;
+  gap: 8px;
+  align-items: center;
+}
+
+.sliderRow input[type="range"] {
+  width: 100%;
+  min-height: 30px;
+}
+
+.sliderRow input[type="number"] {
+  min-width: 0;
+  text-align: right;
 }
 
 .actions {
@@ -1623,7 +1942,8 @@ td, th {
   .energyHead,
   .dashBlocks,
   .chartPanel,
-  .settingsGrid {
+  .settingsGrid,
+  .solarSettingsGrid {
     grid-template-columns: 1fr;
   }
 
