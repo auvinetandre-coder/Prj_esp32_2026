@@ -4,6 +4,7 @@
 #include "../config/config_manager.h"
 #include "../runtime/runtime_state.h"
 #include "../actuators/actuator_manager.h"
+#include "pid_controller.h"
 
 class RuleEngine {
 public:
@@ -22,8 +23,8 @@ public:
     const char *enumValues;
   };
 
-  RuleEngine(ConfigManager &config, RuntimeState &state, ActuatorManager &actuators)
-      : config(config), state(state), actuators(actuators) {}
+  RuleEngine(ConfigManager &config, RuntimeState &state, ActuatorManager &actuators, PIDController &pid)
+      : config(config), state(state), actuators(actuators), pid(pid) {}
   void begin();
   void loop();
   void loop(uint32_t now);
@@ -40,6 +41,7 @@ private:
   ConfigManager &config;
   RuntimeState &state;
   ActuatorManager &actuators;
+  PIDController &pid;
   static const uint8_t MAX_RULES = 24;
   String lastCommandKey[MAX_RULES];
   float lastCommandValue[MAX_RULES] = {NAN};
@@ -55,7 +57,7 @@ private:
   String textMeasureValue(const String &source, const String &measure);
   bool conditionMatches(JsonObject condition);
   bool timeWindowMatches(JsonObject condition);
-  float proportionalSurplusPercent(JsonObject action);
+  float surplusRegulationPercent(JsonObject action);
   void logCommandChange(const String &key, float value, const String &ruleName);
   JsonObject ruleAt(uint8_t index);
 };

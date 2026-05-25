@@ -4,14 +4,17 @@ setlocal EnableExtensions
 cd /d "%~dp0\.."
 
 set "PORT=COM3"
+call "%CD%\tools\Detect_Arduino_Tools.bat"
+if errorlevel 1 (
+  pause
+  exit /b 1
+)
 set "DATA_DIR=%CD%\data"
 set "LITTLEFS_VERSION_FILE=%DATA_DIR%\www\littlefs_version.txt"
 set "BUILD_DIR=%CD%\build"
 set "OTA_DIR=%BUILD_DIR%\ota"
 set "IMAGE=%OTA_DIR%\RouteurSolaireESP32_littlefs.bin"
-set "VERSION_FILE=%OTA_DIR%\latest_version.txt"
-set "MKLITTLEFS=C:\Users\andre\AppData\Local\Arduino15\packages\esp32\tools\mklittlefs\4.0.2-db0513a\mklittlefs.exe"
-set "ESPTOOL=C:\Users\andre\AppData\Local\Arduino15\packages\esp32\tools\esptool_py\5.2.0\esptool.exe"
+set "VERSION_FILE=%OTA_DIR%\latest_littlefs_version.txt"
 
 rem Partition custom RouteurSolaireESP32:
 rem app0   : offset 0x10000, taille 0x180000
@@ -45,12 +48,8 @@ if not exist "%OTA_DIR%" (
   mkdir "%OTA_DIR%"
 )
 
-if exist "%VERSION_FILE%" (
-  set /p BUILD_VERSION=<"%VERSION_FILE%"
-)
-if not defined BUILD_VERSION (
-  for /f "delims=" %%I in ('%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -Command "Get-Date -Format yyyyMMdd"') do set "BUILD_VERSION=%%I-00"
-)
+for /f "delims=" %%I in ('%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$date=Get-Date -Format yyyyMMdd; $ota='%OTA_DIR%'; $max=0; if(Test-Path $ota){ Get-ChildItem $ota -Filter ('RouteurSolaireESP32_littlefs_'+$date+'-*.bin') | ForEach-Object { if($_.BaseName -match '-(\d{2})$'){ $n=[int]$Matches[1]; if($n -gt $max){$max=$n} } } }; '{0}-{1:00}' -f $date, ($max+1)"') do set "BUILD_VERSION=%%I"
+echo %BUILD_VERSION%>"%VERSION_FILE%"
 set "VERSIONED_IMAGE=%OTA_DIR%\RouteurSolaireESP32_littlefs_%BUILD_VERSION%.bin"
 
 if not exist "%MKLITTLEFS%" (

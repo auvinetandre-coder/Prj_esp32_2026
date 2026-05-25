@@ -271,6 +271,10 @@ void WebUi::routes() {
     out["role"] = device["role"] | RuntimeState::roleToString(state.role);
     out["firmwareVersion"] = ROUTEUR_FIRMWARE_VERSION;
     out["buildTimestamp"] = ROUTEUR_BUILD_TIMESTAMP;
+    const unsigned long nowMs = millis();
+    out["uptimeMs"] = nowMs;
+    time_t nowEpoch = time(nullptr);
+    out["currentEpochMs"] = nowEpoch > 1600000000 ? static_cast<uint64_t>(nowEpoch) * 1000ULL + (nowMs % 1000UL) : 0;
     out["simulationMode"] = state.simulationMode;
     out["simulationType"] = system["simulation"]["mode"] | state.simulationType.c_str();
     out["gridPowerSource"] = system["router"]["gridPowerSource"] | state.gridPowerSource.c_str();
@@ -300,6 +304,12 @@ void WebUi::routes() {
     setNumber("ssr1PowerPct", state.ssr1PowerPct);
     setNumber("ssr2PowerPct", state.ssr2PowerPct);
     setNumber("robotDynPowerPct", state.robotDynPowerPct);
+    out["ssr1OutputOn"] = state.ssr1OutputOn;
+    out["ssr2OutputOn"] = state.ssr2OutputOn;
+    out["robotDynOutputOn"] = state.robotDynOutputOn;
+    out["ssr1PinHigh"] = state.ssr1PinHigh;
+    out["ssr2PinHigh"] = state.ssr2PinHigh;
+    out["robotDynPinHigh"] = state.robotDynPinHigh;
     out["ssr1"] = state.ssr1PowerPct > 0.5f;
     out["ssr2"] = state.ssr2PowerPct > 0.5f;
     setNumber("temp1", isnan(state.ds18b20Temps[0]) || isinf(state.ds18b20Temps[0]) ? state.tankTopC : state.ds18b20Temps[0]);
@@ -542,6 +552,34 @@ void WebUi::routes() {
     bool ok = espnow.addPeer(server.arg("mac"));
     server.send(ok ? 200 : 400, "application/json", ok ? "{\"ok\":true}" : "{\"ok\":false}");
   });
+  server.on("/api/espnow/peer/remove", HTTP_POST, [this]() {
+    if (!requireAuth()) return;
+    bool ok = espnow.removePeer(server.arg("mac"));
+    server.send(ok ? 200 : 400, "application/json", ok ? "{\"ok\":true}" : "{\"ok\":false}");
+  });
+  server.on("/api/espnow", HTTP_GET, [this]() {
+    if (!requireAuth()) return;
+    server.send(200, "application/json", espnow.statusJson());
+  });
+  server.on("/api/espnow/config", HTTP_POST, [this]() {
+    if (!requireAuth()) return;
+    JsonObject espnowConfig = config.system()["espnow"].is<JsonObject>()
+                                ? config.system()["espnow"].as<JsonObject>()
+                                : config.system()["espnow"].to<JsonObject>();
+    espnowConfig["debugTransmission"] = server.arg("debugTransmission") == "true" || server.arg("debugTransmission") == "1";
+    espnowConfig["debugReception"] = server.arg("debugReception") == "true" || server.arg("debugReception") == "1";
+    bool ok = config.saveSystem();
+    server.send(ok ? 200 : 500, "application/json", ok ? "{\"ok\":true}" : "{\"ok\":false}");
+  });
+  server.on("/api/espnow/discovery", HTTP_GET, [this]() {
+    if (!requireAuth()) return;
+    server.send(200, "application/json", espnow.discoveredNodesJson());
+  });
+  server.on("/api/espnow/discovery/announce", HTTP_POST, [this]() {
+    if (!requireAuth()) return;
+    bool ok = espnow.sendDiscovery();
+    server.send(ok ? 200 : 400, "application/json", ok ? "{\"ok\":true}" : "{\"ok\":false}");
+  });
   server.on("/api/restart", HTTP_POST, [this]() {
     if (!requireAuth()) return;
     server.send(200, "application/json", "{\"ok\":true}");
@@ -659,6 +697,7 @@ void WebUi::sendStatusLite() {
     item["errorCount"] = state.ds18b20ErrorCount[dsIndex];
     dsIndex++;
   }
+  sensors.remoteSensorsToJson(out["remoteSensors"].to<JsonArray>());
   setNumber("gridPowerW", state.gridPowerW);
   setNumber("gridPowerRawW", state.gridPowerRawW);
   setNumber("gridPowerFilteredW", state.gridPowerFilteredW);
@@ -689,6 +728,12 @@ void WebUi::sendStatusLite() {
   setNumber("ssr1PowerPct", state.ssr1PowerPct);
   setNumber("ssr2PowerPct", state.ssr2PowerPct);
   setNumber("robotDynPowerPct", state.robotDynPowerPct);
+  out["ssr1OutputOn"] = state.ssr1OutputOn;
+  out["ssr2OutputOn"] = state.ssr2OutputOn;
+  out["robotDynOutputOn"] = state.robotDynOutputOn;
+  out["ssr1PinHigh"] = state.ssr1PinHigh;
+  out["ssr2PinHigh"] = state.ssr2PinHigh;
+  out["robotDynPinHigh"] = state.robotDynPinHigh;
   setNumber("heaterPowerW", state.heaterPowerW);
   setNumber("commandPercent", state.commandPercent);
   setNumber("pidOutputPercent", state.pidOutputPercent);
@@ -699,10 +744,10 @@ void WebUi::sendStatusLite() {
   setNumber("pidMeasuredW", isnan(state.gridPowerFilteredW) || isinf(state.gridPowerFilteredW) ? state.gridPowerW : state.gridPowerFilteredW);
   setNumber("gridSetpointW", router["gridSetpointW"] | 0.0f);
   setNumber("deadbandW", router["deadbandW"] | 30.0f);
-  setNumber("pidKp", router["kp"] | router["pidKp"] | 0.08f);
-  setNumber("pidKi", router["ki"] | router["pidKi"] | 0.01f);
+  setNumber("pidKp", router["kp"] | router["pidKp"] | 0.02f);
+  setNumber("pidKi", router["ki"] | router["pidKi"] | 0.002f);
   setNumber("pidKd", router["kd"] | router["pidKd"] | 0.0f);
-  setNumber("maxOutputRampPercentPerSecond", router["maxOutputRampPercentPerSecond"] | 15.0f);
+  setNumber("maxOutputRampPercentPerSecond", router["maxOutputRampPercentPerSecond"] | 5.0f);
   setNumber("heaterMaxPowerW", router["heaterMaxPowerW"] | router["ssr1MaxW"] | 1500.0f);
   out["heapFree"] = ESP.getFreeHeap();
   sendJson(doc);

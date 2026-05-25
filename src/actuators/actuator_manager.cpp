@@ -17,11 +17,11 @@ void ActuatorManager::begin() {
 
     if (channel->gpio >= 0) {
       pinMode(channel->gpio, OUTPUT);
-      digitalWrite(channel->gpio, LOW);
+      digitalWrite(channel->gpio, channel->activeHigh ? LOW : HIGH);
     }
     if (channel->gpioControl >= 0) {
       pinMode(channel->gpioControl, OUTPUT);
-      digitalWrite(channel->gpioControl, LOW);
+      digitalWrite(channel->gpioControl, channel->activeHigh ? LOW : HIGH);
     }
     if (String(channel->type) == "RobotDyn Triac") setupRobotDyn(actuator);
   }
@@ -60,11 +60,14 @@ void ActuatorManager::loop(uint32_t now) {
 
     if (!channel->enabled) {
       channel->commandPercent = 0;
+      publishPower(channel->id, 0);
       applyLocal(actuator, now);
       continue;
     }
 
-    if (channel->commandPercent > 0 && channel->lastCommandMs && now - channel->lastCommandMs > commandTimeoutMs) {
+    const uint32_t timeoutNow = millis();
+    if (channel->commandPercent > 0 && channel->lastCommandMs && timeoutNow >= channel->lastCommandMs &&
+        timeoutNow - channel->lastCommandMs > commandTimeoutMs) {
       channel->commandPercent = 0;
       publishPower(channel->id, 0);
       state.addLog(String("Timeout commande actionneur ") + channel->id);
@@ -85,14 +88,20 @@ void ActuatorManager::allOff() {
   for (JsonObject actuator : config.actuators()) {
     int pin = actuator.containsKey("gpio") ? actuator["gpio"].as<int>() : -1;
     int control = actuator.containsKey("control") ? actuator["control"].as<int>() : -1;
+    bool activeHigh = actuator["activeHigh"] | true;
+    String id = actuator["id"] | "";
+    bool offPinHigh = !activeHigh;
     if (pin >= 0) {
       pinMode(pin, OUTPUT);
-      digitalWrite(pin, LOW);
+      digitalWrite(pin, offPinHigh ? HIGH : LOW);
     }
     if (control >= 0) {
       pinMode(control, OUTPUT);
-      digitalWrite(control, LOW);
+      digitalWrite(control, offPinHigh ? HIGH : LOW);
     }
+    if (id == "ssr1_water_heater") state.ssr1PinHigh = offPinHigh;
+    if (id == "ssr2_aux") state.ssr2PinHigh = offPinHigh;
+    if (id == "robotdyn_triac") state.robotDynPinHigh = offPinHigh;
   }
 
   for (uint8_t i = 0; i < channelCount; i++) {
@@ -108,6 +117,9 @@ void ActuatorManager::allOff() {
   publishPower("ssr1_water_heater", 0);
   publishPower("ssr2_aux", 0);
   publishPower("robotdyn_triac", 0);
+  state.ssr1OutputOn = false;
+  state.ssr2OutputOn = false;
+  state.robotDynOutputOn = false;
 }
 
 bool ActuatorManager::command(const String &actuatorId, const String &cmd, float value) {
@@ -146,7 +158,11 @@ void ActuatorManager::setPower(const String &actuatorId, float percent) {
 void ActuatorManager::setCommandPercent(const String &id, float percent) {
   percent = constrain(percent, 0.0f, 100.0f);
   JsonObject actuator;
-  if (!findActuator(id, actuator) || !actuator["enabled"]) return;
+  if (!findActuator(id, actuator)) return;
+  if (!actuator["enabled"]) {
+    publishPower(id, 0);
+    return;
+  }
 
   String type = actuator["type"] | "";
   String mode = normalizeMode(actuator["mode"] | "OFF", type);
@@ -332,6 +348,7 @@ void ActuatorManager::syncChannelFromConfig(Actuator *channel, JsonObject actuat
   channel->gpioZeroCross = actuator["zeroCross"] | -1;
   channel->gpioControl = actuator.containsKey("control") ? actuator["control"].as<int>() : channel->gpio;
   channel->enabled = actuator["enabled"] | false;
+  channel->activeHigh = actuator["activeHigh"] | true;
   channel->maxPowerW = actuator["maxPowerW"] | 1000.0f;
   channel->cycleMs = configuredCycleMs(actuator);
   channel->safetyLocked = safetyLocked || (actuator["critical"] && state.safetyTripped);
@@ -345,9 +362,17 @@ void ActuatorManager::applyLocal(JsonObject actuator, uint32_t now) {
 }
 
 void ActuatorManager::setOutput(Actuator *channel, int pin, bool on) {
-  if (!channel || channel->currentState == on) return;
+  if (!channel) return;
   channel->currentState = on;
-  if (!simulationMode) digitalWrite(pin, on ? HIGH : LOW);
+  String id = channel->id;
+  bool pinHigh = on ? channel->activeHigh : !channel->activeHigh;
+  if (id == "ssr1_water_heater") state.ssr1OutputOn = on;
+  if (id == "ssr2_aux") state.ssr2OutputOn = on;
+  if (id == "robotdyn_triac") state.robotDynOutputOn = on;
+  if (id == "ssr1_water_heater") state.ssr1PinHigh = pinHigh;
+  if (id == "ssr2_aux") state.ssr2PinHigh = pinHigh;
+  if (id == "robotdyn_triac") state.robotDynPinHigh = pinHigh;
+  if (!simulationMode) digitalWrite(pin, pinHigh ? HIGH : LOW);
 }
 
 uint32_t ActuatorManager::configuredCycleMs(JsonObject actuator) {

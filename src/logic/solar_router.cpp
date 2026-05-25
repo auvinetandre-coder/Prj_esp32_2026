@@ -20,6 +20,8 @@ void SolarRouter::loop(uint32_t now) {
   } else if (state.gridPowerW > hysteresis) {
     integral = 0;
     actuators.setPower("ssr1_water_heater", max(0.0f, state.ssr1PowerPct - 5.0f));
+  } else if (state.ssr1PowerPct > 0.0f) {
+    actuators.setPower("ssr1_water_heater", state.ssr1PowerPct);
   }
   previousError = error;
 }

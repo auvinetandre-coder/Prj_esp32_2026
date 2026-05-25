@@ -1,16 +1,10 @@
 @echo off
-setlocal
-set ARDUINO_CLI=C:\Program Files\Arduino IDE\resources\app\lib\backend\resources\arduino-cli.exe
-set ESPTOOL=C:\Users\andre\AppData\Local\Arduino15\packages\esp32\tools\esptool_py\5.2.0\esptool.exe
-
-if not exist "%ARDUINO_CLI%" (
-  echo arduino-cli introuvable: %ARDUINO_CLI%
+setlocal EnableExtensions
+cd /d "%~dp0\.."
+call "%CD%\tools\Detect_Arduino_Tools.bat"
+if errorlevel 1 (
   pause
   exit /b 1
-)
-
-if not exist "%ESPTOOL%" (
-  set ESPTOOL=C:\Users\andre\AppData\Local\Arduino15\packages\esp32\tools\esptool_py\4.5.1\esptool.exe
 )
 
 if not exist "%ESPTOOL%" (

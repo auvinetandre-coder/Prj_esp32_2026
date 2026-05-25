@@ -30,6 +30,7 @@
         {
           "actuatorId": "ssr1_water_heater",
           "command": "setPowerFromSurplus",
+          "regulation": "PID",
           "maxHeaterPowerW": 1500
         }
       ]

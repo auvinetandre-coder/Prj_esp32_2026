@@ -37,6 +37,7 @@ private:
     int gpioZeroCross = -1;
     int gpioControl = -1;
     bool enabled = false;
+    bool activeHigh = true;
     char mode[24];
     float commandPercent = 0;
     bool currentState = false;

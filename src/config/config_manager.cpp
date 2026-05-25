@@ -2,6 +2,7 @@
 #include <LittleFS.h>
 #include <Preferences.h>
 #include "../build_info.h"
+#include "../communication/espnow_protocol.h"
 
 static const char *DEVICE_PATH = "/config/device.json";
 static const char *SYSTEM_PATH = "/config/system.json";
@@ -468,13 +469,57 @@ bool ConfigManager::normalizeSystemConfig() {
   if (!router["gridSetpointW"].is<float>() && !router["gridSetpointW"].is<int>()) { router["gridSetpointW"] = 0; changed = true; }
   if (!router["deadbandW"].is<float>() && !router["deadbandW"].is<int>()) { router["deadbandW"] = 30; changed = true; }
   if (!router["alphaFilter"].is<float>() && !router["alphaFilter"].is<int>()) { router["alphaFilter"] = 0.25; changed = true; }
-  if (!router["maxOutputRampPercentPerSecond"].is<float>() && !router["maxOutputRampPercentPerSecond"].is<int>()) { router["maxOutputRampPercentPerSecond"] = 15; changed = true; }
+  if (!router["maxOutputRampPercentPerSecond"].is<float>() && !router["maxOutputRampPercentPerSecond"].is<int>()) { router["maxOutputRampPercentPerSecond"] = 5; changed = true; }
+  else if (fabs((router["maxOutputRampPercentPerSecond"] | 5.0f) - 15.0f) < 0.001f) { router["maxOutputRampPercentPerSecond"] = 5; changed = true; }
   if (!router["heaterMaxPowerW"].is<float>() && !router["heaterMaxPowerW"].is<int>()) { router["heaterMaxPowerW"] = router["ssr1MaxW"] | 1500; changed = true; }
+  if (!router["kp"].is<float>() && !router["kp"].is<int>()) { router["kp"] = 0.02; changed = true; }
+  else if (fabs((router["kp"] | 0.02f) - 0.08f) < 0.0001f) { router["kp"] = 0.02; changed = true; }
+  if (!router["ki"].is<float>() && !router["ki"].is<int>()) { router["ki"] = 0.002; changed = true; }
+  else if (fabs((router["ki"] | 0.002f) - 0.01f) < 0.0001f) { router["ki"] = 0.002; changed = true; }
+  if (!router["kd"].is<float>() && !router["kd"].is<int>()) { router["kd"] = 0.0; changed = true; }
   if (!router["jsyReadIntervalMs"].is<uint32_t>()) { router["jsyReadIntervalMs"] = 100; changed = true; }
   if (!router["voltageMinV"].is<float>() && !router["voltageMinV"].is<int>()) { router["voltageMinV"] = 180; changed = true; }
   if (!router["voltageMaxV"].is<float>() && !router["voltageMaxV"].is<int>()) { router["voltageMaxV"] = 260; changed = true; }
   if (!router["frequencyMinHz"].is<float>() && !router["frequencyMinHz"].is<int>()) { router["frequencyMinHz"] = 47; changed = true; }
   if (!router["frequencyMaxHz"].is<float>() && !router["frequencyMaxHz"].is<int>()) { router["frequencyMaxHz"] = 53; changed = true; }
+  JsonObject espnow = root["espnow"].is<JsonObject>() ? root["espnow"].as<JsonObject>() : root["espnow"].to<JsonObject>();
+  if (!espnow["sensorDiscoveryIntervalMs"].is<uint32_t>()) { espnow["sensorDiscoveryIntervalMs"] = 30000; changed = true; }
+  if (!espnow["diagnosticIntervalMs"].is<uint32_t>()) { espnow["diagnosticIntervalMs"] = 10000; changed = true; }
+  if (!espnow["debugTransmission"].is<bool>()) { espnow["debugTransmission"] = false; changed = true; }
+  if (!espnow["debugReception"].is<bool>()) { espnow["debugReception"] = false; changed = true; }
+  JsonArray exports = espnow["exports"].is<JsonArray>() ? espnow["exports"].as<JsonArray>() : espnow["exports"].to<JsonArray>();
+  if (exports.size() == 0) {
+    JsonObject linkyExport = exports.add<JsonObject>();
+    linkyExport["sensorId"] = SENSOR_LINKY;
+    linkyExport["sensorName"] = "Linky";
+    linkyExport["sensorType"] = SENSOR_LINKY;
+    linkyExport["exportEnabled"] = true;
+    linkyExport["exportIntervalMs"] = 1000;
+    linkyExport["priority"] = PRIORITY_NORMAL;
+    linkyExport["sendOnChange"] = true;
+    linkyExport["minDelta"] = 10.0;
+    JsonObject jsyExport = exports.add<JsonObject>();
+    jsyExport["sensorId"] = SENSOR_JSY;
+    jsyExport["sensorName"] = "JSY";
+    jsyExport["sensorType"] = SENSOR_JSY;
+    jsyExport["exportEnabled"] = false;
+    jsyExport["exportIntervalMs"] = 200;
+    jsyExport["priority"] = PRIORITY_CRITICAL;
+    jsyExport["sendOnChange"] = true;
+    jsyExport["minDelta"] = 5.0;
+    for (uint8_t i = 0; i < 3; i++) {
+      JsonObject tempExport = exports.add<JsonObject>();
+      tempExport["sensorId"] = 20 + i;
+      tempExport["sensorName"] = i == 0 ? "Sonde 1" : (i == 1 ? "Sonde 2" : "Sonde 3");
+      tempExport["sensorType"] = SENSOR_DS18B20;
+      tempExport["exportEnabled"] = false;
+      tempExport["exportIntervalMs"] = 10000;
+      tempExport["priority"] = PRIORITY_LOW;
+      tempExport["sendOnChange"] = true;
+      tempExport["minDelta"] = 0.2;
+    }
+    changed = true;
+  }
   return changed;
 }
 
@@ -587,6 +632,39 @@ bool ConfigManager::normalizeSensorsConfig() {
         sensor["timeoutMs"] = 5000;
         changed = true;
       }
+      if (!sensor["debug"].is<bool>()) {
+        sensor["debug"] = false;
+        changed = true;
+      }
+    }
+    if (!sensor["source"].as<String>().equalsIgnoreCase("espnow") && !sensor["espNowExportEnabled"].is<bool>()) {
+      sensor["espNowExportEnabled"] = false;
+      sensor["espNowSendOnChange"] = true;
+      if (strcmp(id, "jsy_grid") == 0 || strcmp(type, "JSY-MK-194T") == 0) {
+        sensor["espNowExportIntervalMs"] = 200;
+        sensor["espNowExportPriority"] = PRIORITY_CRITICAL;
+        sensor["espNowMinDelta"] = 5.0;
+      } else if (strcmp(id, "tic_linky") == 0 || strcmp(type, "TIC Linky") == 0) {
+        sensor["espNowExportIntervalMs"] = 1000;
+        sensor["espNowExportPriority"] = PRIORITY_NORMAL;
+        sensor["espNowMinDelta"] = 10.0;
+      } else {
+        sensor["espNowExportIntervalMs"] = 1000;
+        sensor["espNowExportPriority"] = PRIORITY_NORMAL;
+        sensor["espNowMinDelta"] = 10.0;
+      }
+      changed = true;
+    }
+  }
+  JsonArray ds = root["ds18b20"].as<JsonArray>();
+  for (JsonObject sensor : ds) {
+    if (!sensor["espNowExportEnabled"].is<bool>()) {
+      sensor["espNowExportEnabled"] = false;
+      sensor["espNowExportIntervalMs"] = 10000;
+      sensor["espNowExportPriority"] = PRIORITY_LOW;
+      sensor["espNowSendOnChange"] = true;
+      sensor["espNowMinDelta"] = 0.2;
+      changed = true;
     }
   }
   return changed;
@@ -599,6 +677,15 @@ bool ConfigManager::normalizeActuatorsConfig() {
     changed = true;
   }
   JsonArray arr = actuatorsConfig["actuators"].as<JsonArray>();
+
+  for (int i = static_cast<int>(arr.size()) - 1; i >= 0; i--) {
+    JsonObject actuator = arr[i];
+    String type = actuator["type"] | "SSR";
+    if (type != "SSR") {
+      arr.remove(i);
+      changed = true;
+    }
+  }
 
   for (JsonObject actuator : arr) {
     String id = actuator["id"] | "";
@@ -615,15 +702,10 @@ bool ConfigManager::normalizeActuatorsConfig() {
         actuator["gpio"] = 17;
         changed = true;
       }
-    } else if (id == "robotdyn_triac") {
-      int zc = actuator["zeroCross"] | -1;
-      // Ancien defaut en conflit avec le TX JSY sur GPIO27. On desactive
-      // le triac tant que ses vraies broches PCB ne sont pas renseignees.
-      if (zc == 27) {
-        actuator["zeroCross"] = -1;
-        actuator["enabled"] = false;
-        changed = true;
-      }
+    }
+    if (!actuator["activeHigh"].is<bool>()) {
+      actuator["activeHigh"] = true;
+      changed = true;
     }
   }
   return changed;
@@ -747,15 +829,15 @@ void ConfigManager::defaultSystem() {
   router["gridSetpointW"] = 0;
   router["deadbandW"] = 30;
   router["alphaFilter"] = 0.25;
-  router["maxOutputRampPercentPerSecond"] = 15;
+  router["maxOutputRampPercentPerSecond"] = 5;
   router["heaterMaxPowerW"] = 1500;
   router["jsyReadIntervalMs"] = 100;
   router["voltageMinV"] = 180;
   router["voltageMaxV"] = 260;
   router["frequencyMinHz"] = 47;
   router["frequencyMaxHz"] = 53;
-  router["kp"] = 0.08;
-  router["ki"] = 0.01;
+  router["kp"] = 0.02;
+  router["ki"] = 0.002;
   router["kd"] = 0.0;
   JsonObject display = root["display"].to<JsonObject>();
   display["enabled"] = true;
@@ -768,6 +850,41 @@ void ConfigManager::defaultSystem() {
   display["refreshMs"] = 4000;
   root["debug"] = true;
   root["peers"].to<JsonArray>();
+  JsonObject espnow = root["espnow"].to<JsonObject>();
+  espnow["sensorDiscoveryIntervalMs"] = 30000;
+  espnow["diagnosticIntervalMs"] = 10000;
+  espnow["debugTransmission"] = false;
+  espnow["debugReception"] = false;
+  JsonArray exports = espnow["exports"].to<JsonArray>();
+  JsonObject linkyExport = exports.add<JsonObject>();
+  linkyExport["sensorId"] = SENSOR_LINKY;
+  linkyExport["sensorName"] = "Linky";
+  linkyExport["sensorType"] = SENSOR_LINKY;
+  linkyExport["exportEnabled"] = true;
+  linkyExport["exportIntervalMs"] = 1000;
+  linkyExport["priority"] = PRIORITY_NORMAL;
+  linkyExport["sendOnChange"] = true;
+  linkyExport["minDelta"] = 10.0;
+  JsonObject jsyExport = exports.add<JsonObject>();
+  jsyExport["sensorId"] = SENSOR_JSY;
+  jsyExport["sensorName"] = "JSY";
+  jsyExport["sensorType"] = SENSOR_JSY;
+  jsyExport["exportEnabled"] = false;
+  jsyExport["exportIntervalMs"] = 200;
+  jsyExport["priority"] = PRIORITY_CRITICAL;
+  jsyExport["sendOnChange"] = true;
+  jsyExport["minDelta"] = 5.0;
+  for (uint8_t i = 0; i < 3; i++) {
+    JsonObject tempExport = exports.add<JsonObject>();
+    tempExport["sensorId"] = 20 + i;
+    tempExport["sensorName"] = i == 0 ? "Sonde 1" : (i == 1 ? "Sonde 2" : "Sonde 3");
+    tempExport["sensorType"] = SENSOR_DS18B20;
+    tempExport["exportEnabled"] = false;
+    tempExport["exportIntervalMs"] = 10000;
+    tempExport["priority"] = PRIORITY_LOW;
+    tempExport["sendOnChange"] = true;
+    tempExport["minDelta"] = 0.2;
+  }
 }
 
 void ConfigManager::defaultSensors() {
@@ -783,6 +900,7 @@ void ConfigManager::defaultSensors() {
   s["id"] = "jsy_grid"; s["name"] = "JSY reseau"; s["type"] = "JSY-MK-194T"; s["source"] = "local";
   s["serial"] = "Serial2"; s["rx"] = 26; s["tx"] = 27; s["baudrate"] = 4800; s["modbusAddress"] = 1;
   s["readIntervalMs"] = 100; s["timeoutMs"] = 300; s["rs485DirPin"] = -1;
+  s["espNowExportEnabled"] = false; s["espNowExportIntervalMs"] = 200; s["espNowExportPriority"] = PRIORITY_CRITICAL; s["espNowSendOnChange"] = true; s["espNowMinDelta"] = 5.0;
   s["role"] = "mesure reseau principal"; s["enabled"] = true;
   JsonArray channels = s["channels"].to<JsonArray>();
   JsonObject ch1 = channels.add<JsonObject>();
@@ -792,6 +910,8 @@ void ConfigManager::defaultSensors() {
   JsonObject t = arr.add<JsonObject>();
   t["id"] = "tic_linky"; t["name"] = "TIC Linky"; t["type"] = "TIC Linky"; t["source"] = "local";
   t["serial"] = "Serial1"; t["rx"] = 26; t["tx"] = 27; t["mode"] = "historique"; t["baudrate"] = 1200; t["timeoutMs"] = 5000;
+  t["debug"] = false;
+  t["espNowExportEnabled"] = false; t["espNowExportIntervalMs"] = 1000; t["espNowExportPriority"] = PRIORITY_NORMAL; t["espNowSendOnChange"] = true; t["espNowMinDelta"] = 10.0;
   t["role"] = "compteur officiel / puissance reseau"; t["enabled"] = true;
   JsonArray ds = sensorsConfig["ds18b20"].to<JsonArray>();
   const char *ids[] = {"sonde1", "sonde2", "sonde3"};
@@ -810,6 +930,11 @@ void ConfigManager::defaultSensors() {
     d["available"] = false;
     d["lastReadMs"] = 0;
     d["errorCount"] = 0;
+    d["espNowExportEnabled"] = false;
+    d["espNowExportIntervalMs"] = 10000;
+    d["espNowExportPriority"] = PRIORITY_LOW;
+    d["espNowSendOnChange"] = true;
+    d["espNowMinDelta"] = 0.2;
   }
 }
 
@@ -819,13 +944,10 @@ void ConfigManager::defaultActuators() {
   JsonArray arr = actuatorsConfig["actuators"].to<JsonArray>();
   JsonObject a = arr.add<JsonObject>();
   a["id"] = "ssr1_water_heater"; a["name"] = "SSR1 chauffe-eau principal"; a["type"] = "SSR"; a["source"] = "local";
-  a["gpio"] = 5; a["mode"] = "BURST_FIRE"; a["maxPowerW"] = 1500; a["cycleMs"] = 1000; a["critical"] = true; a["enabled"] = true;
+  a["gpio"] = 5; a["mode"] = "BURST_FIRE"; a["activeHigh"] = true; a["maxPowerW"] = 1500; a["cycleMs"] = 1000; a["critical"] = true; a["enabled"] = true;
   JsonObject b = arr.add<JsonObject>();
   b["id"] = "ssr2_aux"; b["name"] = "SSR2 auxiliaire"; b["type"] = "SSR"; b["source"] = "local";
-  b["gpio"] = 17; b["mode"] = "BURST_FIRE"; b["maxPowerW"] = 1000; b["cycleMs"] = 1000; b["critical"] = true; b["enabled"] = true;
-  JsonObject c = arr.add<JsonObject>();
-  c["id"] = "robotdyn_triac"; c["name"] = "RobotDyn Triac"; c["type"] = "RobotDyn Triac"; c["source"] = "local";
-  c["zeroCross"] = -1; c["control"] = 33; c["mode"] = "PHASE_ANGLE"; c["maxPowerW"] = 1000; c["critical"] = true; c["enabled"] = false;
+  b["gpio"] = 17; b["mode"] = "BURST_FIRE"; b["activeHigh"] = true; b["maxPowerW"] = 1000; b["cycleMs"] = 1000; b["critical"] = true; b["enabled"] = true;
 }
 
 void ConfigManager::defaultRules() {
@@ -841,7 +963,7 @@ void ConfigManager::defaultRules() {
   JsonObject c4 = c.add<JsonObject>(); c4["id"] = "cond_sonde3_temp"; c4["source"] = "sonde3"; c4["measure"] = "temperatureC"; c4["type"] = "number"; c4["operator"] = "<"; c4["value"] = 65; c4["unit"] = "C";
   JsonObject c5 = c.add<JsonObject>(); c5["id"] = "cond_safety_ok"; c5["source"] = "Securite"; c5["measure"] = "safetyLevel"; c5["type"] = "enum"; c5["operator"] = "=="; c5["value"] = "OK";
   JsonArray a = r["actions"].to<JsonArray>();
-  JsonObject a1 = a.add<JsonObject>(); a1["actuatorId"] = "ssr1_water_heater"; a1["command"] = "setPowerFromSurplus"; a1["maxHeaterPowerW"] = 1500;
+  JsonObject a1 = a.add<JsonObject>(); a1["actuatorId"] = "ssr1_water_heater"; a1["command"] = "setPowerFromSurplus"; a1["regulation"] = "PID"; a1["maxHeaterPowerW"] = 1500;
 
   JsonObject s = arr.add<JsonObject>();
   s["id"] = "tank_temperature_safety"; s["name"] = "Securite temperature ballon"; s["enabled"] = true; s["priority"] = 100; s["logic"] = "OR";
@@ -852,6 +974,5 @@ void ConfigManager::defaultRules() {
   JsonArray sa = s["actions"].to<JsonArray>();
   JsonObject sa1 = sa.add<JsonObject>(); sa1["actuatorId"] = "ssr1_water_heater"; sa1["command"] = "stop"; sa1["value"] = 0;
   JsonObject sa2 = sa.add<JsonObject>(); sa2["actuatorId"] = "ssr2_aux"; sa2["command"] = "stop"; sa2["value"] = 0;
-  JsonObject sa3 = sa.add<JsonObject>(); sa3["actuatorId"] = "robotdyn_triac"; sa3["command"] = "stop"; sa3["value"] = 0;
   JsonObject sa4 = sa.add<JsonObject>(); sa4["command"] = "setSafetyWarning"; sa4["message"] = "Temperature ballon depassee";
 }

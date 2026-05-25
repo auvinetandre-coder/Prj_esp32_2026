@@ -82,7 +82,10 @@ void RuleEngine::evaluate(uint32_t now) {
 }
 
 void RuleEngine::evaluateRules(uint32_t now) {
-  if (state.safetyTripped) return;
+  if (state.safetyTripped) {
+    pid.reset();
+    return;
+  }
   uint8_t count = 0;
   uint8_t order[MAX_RULES];
   for (JsonObject rule : config.rules()) {
@@ -101,6 +104,7 @@ void RuleEngine::evaluateRules(uint32_t now) {
     }
   }
 
+  bool surplusRegulationActive = false;
   for (uint8_t idx = 0; idx < count; idx++) {
     JsonObject rule = ruleAt(order[idx]);
     if (!rule["enabled"]) continue;
@@ -117,9 +121,12 @@ void RuleEngine::evaluateRules(uint32_t now) {
     }
     if (!matched) continue;
     for (JsonObject action : rule["actions"].as<JsonArray>()) {
+      String command = action["command"] | "";
+      if (command == "setPowerFromSurplus" || command == "setActuatorPercentFromSurplus") surplusRegulationActive = true;
       executeAction(action, rule["name"] | rule["id"] | "regle");
     }
   }
+  if (!surplusRegulationActive) pid.reset();
 }
 
 bool RuleEngine::evaluateCondition(JsonObject condition) {
@@ -157,7 +164,7 @@ void RuleEngine::executeAction(JsonObject action, const String &ruleName) {
   }
 
   if (command == "setPowerFromSurplus" || command == "setActuatorPercentFromSurplus") {
-    value = proportionalSurplusPercent(action);
+    value = surplusRegulationPercent(action);
     command = "setPower";
   }
 
@@ -374,8 +381,19 @@ float RuleEngine::numericMeasureValue(const String &source, const String &measur
     if (measure == "available") return isnan(state.tankBottomC) ? 0 : 1;
     if (measure == "lastValidReadAgeMs") return isnan(state.tankBottomC) ? 4294967295.0f : 0;
   }
+  if (source == "battery") {
+    if (measure == "voltageV") return state.batteryVoltageV;
+    if (measure == "currentA") return state.batteryCurrentA;
+    if (measure == "powerW") return state.batteryPowerW;
+    if (measure == "socPct") return state.batterySocPct;
+    if (measure == "available") return state.batteryOnline ? 1 : 0;
+  }
+  if (source == "solar") {
+    if (measure == "powerW") return state.productionW;
+    if (measure == "available") return isnan(state.productionW) ? 0 : 1;
+  }
   if (source == "Systeme") {
-    if (measure == "simulationMode") return 0;
+    if (measure == "simulationMode") return state.simulationMode ? 1 : 0;
     if (measure == "uptimeMs") return millis();
     if (measure == "freeHeap") return ESP.getFreeHeap();
   }
@@ -405,10 +423,15 @@ String RuleEngine::textMeasureValue(const String &source, const String &measure)
   return "";
 }
 
-float RuleEngine::proportionalSurplusPercent(JsonObject action) {
-  float maxPowerW = action["maxHeaterPowerW"] | action["maxPowerW"] | config.system()["router"]["ssr1MaxW"] | 1500.0f;
-  if (maxPowerW <= 1.0f) maxPowerW = 1500.0f;
-  return constrain((state.surplusW / maxPowerW) * 100.0f, 0.0f, 100.0f);
+float RuleEngine::surplusRegulationPercent(JsonObject action) {
+  String regulation = action["regulation"] | "PID";
+  regulation.toUpperCase();
+  if (regulation == "PROPORTIONAL") {
+    float maxPowerW = action["maxHeaterPowerW"] | action["maxPowerW"] | config.system()["router"]["ssr1MaxW"] | 1500.0f;
+    if (maxPowerW <= 1.0f) maxPowerW = 1500.0f;
+    return constrain((state.surplusW / maxPowerW) * 100.0f, 0.0f, 100.0f);
+  }
+  return pid.computeSurplusPercent(action, millis());
 }
 
 void RuleEngine::logCommandChange(const String &key, float value, const String &ruleName) {

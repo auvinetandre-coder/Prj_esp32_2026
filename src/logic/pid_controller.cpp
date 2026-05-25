@@ -12,47 +12,59 @@ void PIDController::reset() {
   outputPercent = 0.0f;
   state.pidOutputPercent = 0.0f;
   state.commandPercent = 0.0f;
+  state.heaterPowerW = 0.0f;
   state.pidStatus = "IDLE";
 }
 
 void PIDController::update(uint32_t now) {
+  computeSurplusPercent(JsonObject(), now);
+}
+
+float PIDController::computeSurplusPercent(JsonObject action, uint32_t now) {
   JsonObject router = config.system()["router"];
   String mode = router["mode"] | "AUTO";
   mode.toUpperCase();
   state.systemMode = mode;
   state.pidEnabled = router["pidEnabled"] | true;
 
-  const float heaterMaxW = router["heaterMaxPowerW"] | router["ssr1MaxW"] | 1500.0f;
-  const uint32_t elapsedMs = lastUpdateMs ? now - lastUpdateMs : 100;
+  float heaterMaxW = action["maxHeaterPowerW"] | action["maxPowerW"] | router["heaterMaxPowerW"] | router["ssr1MaxW"] | 1500.0f;
+  if (heaterMaxW <= 1.0f) heaterMaxW = 1500.0f;
+  const uint32_t rawElapsedMs = lastUpdateMs ? now - lastUpdateMs : 250;
+  const uint32_t elapsedMs = constrain(rawElapsedMs, 100UL, 250UL);
   lastUpdateMs = now;
 
   if (state.safetyTripped || mode == "OFF" || !state.pidEnabled) {
     reset();
     state.pidStatus = state.safetyTripped ? "SAFETY" : (mode == "OFF" ? "OFF" : "PID_OFF");
-    actuators.setPower("ssr1_water_heater", 0);
-    return;
+    return 0.0f;
   }
 
   if (mode == "FORCED" || mode == "FORCE" || mode == "FORCE_") {
     const float forced = constrain(router["forcedPercent"] | 0.0f, 0.0f, 100.0f);
-    outputPercent = rampLimit(forced, router["maxOutputRampPercentPerSecond"] | 15.0f, elapsedMs);
+    outputPercent = rampLimit(forced, router["maxOutputRampPercentPerSecond"] | 5.0f, elapsedMs);
     state.pidStatus = "FORCED";
     state.pidOutputPercent = outputPercent;
     state.commandPercent = outputPercent;
     state.heaterPowerW = heaterMaxW * outputPercent / 100.0f;
-    actuators.setPower("ssr1_water_heater", outputPercent);
-    return;
+    return outputPercent;
   }
 
-  if (mode != "AUTO") return;
+  if (mode != "AUTO") {
+    state.pidStatus = mode;
+    return outputPercent;
+  }
 
+  return computeAutoPercent(heaterMaxW, elapsedMs, router);
+}
+
+float PIDController::computeAutoPercent(float heaterMaxW, uint32_t elapsedMs, JsonObject router) {
   const float measured = isnan(state.gridPowerFilteredW) ? state.gridPowerW : state.gridPowerFilteredW;
   const float setpoint = router["gridSetpointW"] | 0.0f;
   const float deadband = max(0.0f, router["deadbandW"] | 30.0f);
-  const float kp = router["kp"] | 0.08f;
-  const float ki = router["ki"] | 0.01f;
+  const float kp = router["kp"] | 0.02f;
+  const float ki = router["ki"] | 0.002f;
   const float kd = router["kd"] | 0.0f;
-  const float maxRamp = router["maxOutputRampPercentPerSecond"] | 15.0f;
+  const float maxRamp = router["maxOutputRampPercentPerSecond"] | 5.0f;
 
   float error = setpoint - measured;
   state.pidErrorW = error;
@@ -61,9 +73,8 @@ void PIDController::update(uint32_t now) {
     state.pidOutputPercent = outputPercent;
     state.commandPercent = outputPercent;
     state.heaterPowerW = heaterMaxW * outputPercent / 100.0f;
-    actuators.setPower("ssr1_water_heater", outputPercent);
     previousError = error;
-    return;
+    return outputPercent;
   }
 
   const float dt = max(0.02f, elapsedMs / 1000.0f);
@@ -80,7 +91,7 @@ void PIDController::update(uint32_t now) {
   state.pidOutputPercent = outputPercent;
   state.commandPercent = outputPercent;
   state.heaterPowerW = heaterMaxW * outputPercent / 100.0f;
-  actuators.setPower("ssr1_water_heater", outputPercent);
+  return outputPercent;
 }
 
 float PIDController::rampLimit(float target, float maxRampPercentPerSecond, uint32_t elapsedMs) {

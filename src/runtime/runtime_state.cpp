@@ -88,6 +88,7 @@ void RuntimeState::toJson(JsonObject out, bool includeLogs) {
   out["ntpStatus"] = ntpStatus;
   out["lastNtpSyncAgeMs"] = lastNtpSyncMs ? millis() - lastNtpSyncMs : 4294967295UL;
   out["espNowReady"] = espNowReady;
+  out["lastEspNowSensorReceiveMs"] = lastEspNowSensorReceiveMs;
   out["isActiveMaster"] = isActiveMaster;
   out["masterAlive"] = masterAlive;
   out["activeMasterId"] = activeMasterId;
@@ -140,6 +141,12 @@ void RuntimeState::toJson(JsonObject out, bool includeLogs) {
   out["injectionW"] = injectionW;
   out["consumptionW"] = consumptionW;
   out["productionW"] = productionW;
+  out["batteryVoltageV"] = batteryVoltageV;
+  out["batteryCurrentA"] = batteryCurrentA;
+  out["batteryPowerW"] = batteryPowerW;
+  out["batterySocPct"] = batterySocPct;
+  out["batteryOnline"] = batteryOnline;
+  out["lastBatteryReadMs"] = lastBatteryReadMs;
   out["surplusW"] = surplusW;
   out["tankTopC"] = tankTopC;
   out["tankMiddleC"] = tankMiddleC;
@@ -158,6 +165,12 @@ void RuntimeState::toJson(JsonObject out, bool includeLogs) {
   out["ssr1PowerPct"] = ssr1PowerPct;
   out["ssr2PowerPct"] = ssr2PowerPct;
   out["robotDynPowerPct"] = robotDynPowerPct;
+  out["ssr1OutputOn"] = ssr1OutputOn;
+  out["ssr2OutputOn"] = ssr2OutputOn;
+  out["robotDynOutputOn"] = robotDynOutputOn;
+  out["ssr1PinHigh"] = ssr1PinHigh;
+  out["ssr2PinHigh"] = ssr2PinHigh;
+  out["robotDynPinHigh"] = robotDynPinHigh;
   out["heaterPowerW"] = heaterPowerW;
   out["commandPercent"] = commandPercent;
   out["pidOutputPercent"] = pidOutputPercent;

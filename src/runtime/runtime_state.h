@@ -29,6 +29,7 @@ struct RuntimeState {
   String ntpStatus = "NTP_WAIT_WIFI";
   uint32_t lastNtpSyncMs = 0;
   bool espNowReady = false;
+  uint32_t lastEspNowSensorReceiveMs = 0;
   bool isActiveMaster = false;
   bool masterAlive = false;
   String activeMasterId = "";
@@ -81,6 +82,12 @@ struct RuntimeState {
   float injectionW = 0;
   float consumptionW = 0;
   float productionW = 0;
+  float batteryVoltageV = NAN;
+  float batteryCurrentA = NAN;
+  float batteryPowerW = NAN;
+  float batterySocPct = NAN;
+  bool batteryOnline = false;
+  uint32_t lastBatteryReadMs = 0;
   float surplusW = 0;
   float tankTopC = NAN;
   float tankMiddleC = NAN;
@@ -94,6 +101,12 @@ struct RuntimeState {
   float ssr1PowerPct = 0;
   float ssr2PowerPct = 0;
   float robotDynPowerPct = 0;
+  bool ssr1OutputOn = false;
+  bool ssr2OutputOn = false;
+  bool robotDynOutputOn = false;
+  bool ssr1PinHigh = false;
+  bool ssr2PinHigh = false;
+  bool robotDynPinHigh = false;
   float heaterPowerW = 0;
   float commandPercent = 0;
   float pidOutputPercent = 0;

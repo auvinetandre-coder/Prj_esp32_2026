@@ -28,9 +28,9 @@ RedundancyManager redundancyManager(configManager, runtimeState, espNowManager);
 SensorManager sensorManager(configManager, runtimeState);
 ActuatorManager actuatorManager(configManager, runtimeState, espNowManager);
 MqttManager mqttManager(configManager, runtimeState, actuatorManager);
-RuleEngine ruleEngine(configManager, runtimeState, actuatorManager);
 SolarRouter solarRouter(configManager, runtimeState, actuatorManager);
 PIDController pidController(configManager, runtimeState, actuatorManager);
+RuleEngine ruleEngine(configManager, runtimeState, actuatorManager, pidController);
 SafetyManager safetyManager(configManager, runtimeState, actuatorManager);
 SimulationManager simulationManager(configManager, runtimeState);
 WebUi webUi(configManager, runtimeState, solarWiFi, espNowManager, redundancyManager, sensorManager, actuatorManager, ruleEngine, safetyManager, simulationManager);
@@ -39,7 +39,6 @@ DisplayManager displayManager(configManager, runtimeState);
 
 static uint32_t lastSensorTick = 0;
 static uint32_t lastLogicTick = 0;
-static uint32_t lastPidTick = 0;
 static uint32_t lastSafetyTick = 0;
 static uint32_t lastWatchdogTick = 0;
 
@@ -76,6 +75,7 @@ void setup() {
   safetyManager.begin();
   Serial.println(F("Starting sensors..."));
   sensorManager.begin();
+  espNowManager.setSensorManager(&sensorManager);
   Serial.println(F("Starting WiFi manager..."));
   solarWiFi.begin();
   Serial.println(F("Starting ESP-NOW..."));
@@ -123,11 +123,6 @@ void loop() {
   if (now - lastSafetyTick >= 100) {
     lastSafetyTick = now;
     safetyManager.evaluate(now);
-  }
-
-  if (now - lastPidTick >= 100) {
-    lastPidTick = now;
-    pidController.update(now);
   }
 
   if (now - lastLogicTick >= 250) {

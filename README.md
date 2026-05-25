@@ -73,6 +73,7 @@ Modules principaux :
 - `SafetyManager` : securites globales.
 - `SimulationManager` : simulation sans capteurs ni charge 230 V.
 - `EspNowManager` : communication ESP-NOW.
+- `EspNowNode` : brique ESP-NOW generique pour decouverte et trames capteurs multi-noeuds.
 - `MqttManager` : publication et reception MQTT pour Jeedom.
 - `RedundancyManager` : MASTER/BACKUP.
 - `WebUi` : API REST et interface Web.
@@ -349,11 +350,11 @@ Parametres principaux dans `system.json` :
     "gridSetpointW": 0,
     "deadbandW": 30,
     "alphaFilter": 0.25,
-    "maxOutputRampPercentPerSecond": 15,
+    "maxOutputRampPercentPerSecond": 5,
     "heaterMaxPowerW": 1500,
     "jsyReadIntervalMs": 100,
-    "kp": 0.08,
-    "ki": 0.01,
+    "kp": 0.02,
+    "ki": 0.002,
     "kd": 0.0
   }
 }
@@ -682,7 +683,378 @@ Les anciennes sorties LED de simulation ont ete supprimees. La simulation reste 
 
 ## ESP-NOW
 
-Messages supportes :
+Le projet contient deux couches ESP-NOW :
+
+- `EspNowManager` : couche historique utilisee par la redondance MASTER/BACKUP et les commandes d'actionneurs.
+- `EspNowNode` : brique generique evolutive pour des ESP32 producteurs et/ou consommateurs de donnees capteurs.
+
+La brique generique se trouve dans :
+
+```text
+src/communication/espnow_protocol.h
+src/communication/espnow_node.h
+src/communication/espnow_node.cpp
+examples/EspNowSensorSender/EspNowSensorSender.ino
+```
+
+### Noeud ESP-NOW generique
+
+Un ESP32 n'est pas limite a un role source ou destination. Il peut combiner plusieurs roles :
+
+- `ESPNOW_ROLE_PRODUCER` : produit des valeurs capteur.
+- `ESPNOW_ROLE_CONSUMER` : recoit des valeurs d'autres ESP.
+- `ESPNOW_ROLE_ROUTER` : routeur principal ou noeud de decision.
+- `ESPNOW_ROLE_ACTUATOR` : noeud capable d'agir sur une sortie.
+
+Les capacites declarent ce qu'un noeud sait produire ou traiter :
+
+- `ESPNOW_CAP_LINKY`
+- `ESPNOW_CAP_JSY`
+- `ESPNOW_CAP_TEMP`
+- `ESPNOW_CAP_BATTERY`
+- `ESPNOW_CAP_SOLAR`
+- `ESPNOW_CAP_ROUTER`
+- `ESPNOW_CAP_ACTUATOR`
+
+Au demarrage, chaque noeud :
+
+1. passe le Wi-Fi en `WIFI_STA` ;
+2. initialise ESP-NOW ;
+3. ajoute le peer broadcast `FF:FF:FF:FF:FF:FF` ;
+4. annonce periodiquement son identite ;
+5. ecoute les annonces des autres noeuds ;
+6. maintient une table locale des ESP detectes.
+
+La decouverte ne donne pas encore le droit d'injecter des donnees critiques. Elle sert a afficher les ESP visibles et leurs capacites. L'autorisation explicite et le mapping vers `RuntimeState` seront ajoutes dans une etape ulterieure.
+
+### Trame de decouverte
+
+`EspNowDiscoveryPacket` contient :
+
+- version de protocole ;
+- type de trame `ESPNOW_PACKET_DISCOVERY` ;
+- `nodeId` ;
+- `nodeName` ;
+- roles ;
+- capacites ;
+- type capteur principal ;
+- MAC source ;
+- sequence ;
+- uptime ;
+- checksum.
+
+### Protocole capteurs v3
+
+Les capteurs ESP-NOW utilisent un protocole separe en trois familles. ESP-NOW reste uniquement le transport ; `SensorManager` normalise ensuite les valeurs et met a jour le `RuntimeState`.
+
+```text
+ESP-NOW transporte
+SensorManager normalise
+State global expose
+PID / dashboard / regles consomment sans connaitre ESP-NOW
+```
+
+Types de trames :
+
+- `ESPNOW_PACKET_FAST_DATA` : valeurs compactes frequentes, sans noms ni unites.
+- `ESPNOW_PACKET_SENSOR_DISCOVERY` : metadonnees capteur, noms, unites, types de valeurs.
+- `ESPNOW_PACKET_DIAGNOSTIC` : qualite radio et diagnostic noeud.
+- `ESPNOW_PACKET_DISCOVERY` : presence generale du noeud, roles et capacites.
+
+La trame rapide compacte contient uniquement :
+
+```cpp
+typedef struct __attribute__((packed)) {
+  uint8_t valueType;
+  float value;
+} EspNowCompactSensorValue;
+
+typedef struct __attribute__((packed)) {
+  uint8_t version;
+  uint8_t packetType;
+  uint8_t nodeId;
+  uint8_t sensorId;
+  uint8_t sensorType;
+  uint32_t sequence;
+  uint32_t timestampMs;
+  bool sensorOk;
+  uint8_t valueCount;
+  EspNowCompactSensorValue values[6];
+  uint16_t checksum;
+} EspNowFastSensorPacket;
+```
+
+Elle ne contient pas `nodeName`, `sensorName`, `key`, `unit` ni description. Ces informations sont envoyees par `EspNowSensorDiscoveryPacket`, au demarrage puis periodiquement.
+
+La trame de decouverte capteur contient :
+
+- `nodeId`, `nodeName` ;
+- `sensorId`, `sensorName`, `sensorRole`, `sensorType` ;
+- version firmware ;
+- liste des `valueType`, `key`, `unit` disponibles ;
+- checksum.
+
+`sensorRole` transporte le role metier du capteur source. Pour une sonde temperature, par exemple, la destination peut reprendre automatiquement `ballon_haut`, `depart_eau_chaude`, `ambiance` ou tout autre role configure cote source.
+
+La trame diagnostic contient :
+
+- uptime ;
+- heap libre ;
+- RSSI ;
+- compteurs d'envoi/reception ;
+- paquets perdus ;
+- derniere erreur ;
+- checksum.
+
+La taille de chaque structure est verifiee a la compilation pour rester sous la limite ESP-NOW de 250 octets.
+
+### Types de capteurs
+
+```text
+SENSOR_UNKNOWN = 0
+SENSOR_LINKY = 1
+SENSOR_JSY = 2
+SENSOR_DS18B20 = 3
+SENSOR_TEMP_HUM = 4
+SENSOR_BATTERY = 5
+SENSOR_SOLAR = 6
+SENSOR_RELAY_STATUS = 7
+SENSOR_ROUTER = 8
+SENSOR_CUSTOM = 255
+```
+
+### Types de valeurs
+
+```text
+VALUE_POWER_W = 1
+VALUE_GRID_POWER_W = 2
+VALUE_VOLTAGE_V = 3
+VALUE_CURRENT_A = 4
+VALUE_APPARENT_POWER_VA = 5
+VALUE_POWER_FACTOR = 6
+VALUE_FREQUENCY_HZ = 7
+VALUE_TEMPERATURE_C = 8
+VALUE_HUMIDITY_PERCENT = 9
+VALUE_ENERGY_KWH = 10
+VALUE_BATTERY_VOLTAGE_V = 11
+VALUE_BATTERY_CURRENT_A = 12
+VALUE_BATTERY_SOC_PERCENT = 13
+VALUE_STATE_BOOL = 14
+VALUE_RSSI_DBM = 15
+```
+
+### Cles de valeurs reservees
+
+Linky :
+
+- `PAPP` en `VA`
+- `IINST` en `A`
+- `SINSTS` en `VA`
+- `GRID` en `W`
+- `BASE` en `Wh`
+
+JSY-MK-194T :
+
+- `VOLT` en `V`
+- `CURR` en `A`
+- `POWER` en `W`
+- `PF` sans unite
+- `FREQ` en `Hz`
+- `ENERGY` en `kWh`
+
+Temperature :
+
+- `TEMP` en `C`
+- `HUM` en `%`
+
+Batterie :
+
+- `BATV` en `V`
+- `BATA` en `A`
+- `SOC` en `%`
+- `BATP` en `W`
+
+Convention obligatoire pour le routeur solaire :
+
+```text
+GRID > 0 : achat reseau
+GRID < 0 : injection reseau / surplus
+GRID = 0 : equilibre
+```
+
+### Exemple autonome
+
+Le sketch `examples/EspNowSensorSender/EspNowSensorSender.ino` montre un noeud Linky simule :
+
+- annonce broadcast toutes les 3 s ;
+- reception et affichage des noeuds detectes ;
+- envoi d'une trame Linky simulee toutes les 500 ms vers `receiverMac` ;
+- logs serie complets sur sequence, valeurs, taille de trame, checksum et resultat d'envoi.
+
+Pour transformer l'exemple Linky en JSY, temperature ou batterie :
+
+1. changer `NODE_ID` ;
+2. changer `NODE_NAME` ;
+3. changer `SENSOR_TYPE` ;
+4. changer `capabilityFlags` ;
+5. appeler `buildJsyPacket()`, `buildTemperaturePacket()` ou `buildBatteryPacket()` dans `loop()`.
+
+### Validation terrain minimale
+
+1. Flasher la source et la destination avec le meme protocole ESP-NOW, actuellement `ESPNOW_PROTOCOL_VERSION = 3`.
+2. Ouvrir les deux moniteurs serie a 115200 bauds.
+3. Verifier que chaque ESP affiche sa MAC source.
+4. Verifier que chaque ESP affiche au moins un `ESP-NOW discovery RX`.
+5. Verifier que l'emetteur affiche des trames `FAST_DATA`.
+6. Verifier que le callback d'envoi affiche `resultat=OK`.
+7. Eloigner progressivement les ESP pour valider la robustesse radio.
+8. Couper un ESP et verifier que l'autre continue sans blocage.
+
+### Frequences et priorites
+
+L'export ESP-NOW cote source est volontaire : un capteur local n'est envoye que si sa fiche capteur contient `espNowExportEnabled = true`. Dans la page `Capteurs`, cette option apparait dans le bloc `Export ESP-NOW`, sous forme de case a cocher. Cela evite qu'un ESP source publie automatiquement tous ses capteurs locaux.
+
+Exemple dans `/config/sensors.json` pour un capteur local :
+
+```json
+{
+  "id": "tic_linky",
+  "name": "TIC Linky",
+  "type": "TIC Linky",
+  "source": "local",
+  "espNowExportEnabled": true,
+  "espNowExportIntervalMs": 1000,
+  "espNowExportPriority": 1,
+  "espNowSendOnChange": true,
+  "espNowMinDelta": 10.0
+}
+```
+
+Pour une sonde DS18B20, les memes champs sont portes directement par l'objet de la sonde dans `ds18b20`.
+
+L'ancien bloc `system.espnow.exports` reste pris en compte comme compatibilite si la fiche capteur ne contient pas encore `espNowExportEnabled`.
+
+Exemple dans `/config/system.json` :
+
+```json
+"espnow": {
+  "sensorDiscoveryIntervalMs": 30000,
+  "diagnosticIntervalMs": 10000,
+  "exports": [
+    {
+      "sensorId": 1,
+      "sensorName": "Linky",
+      "sensorType": 1,
+      "exportEnabled": true,
+      "exportIntervalMs": 1000,
+      "priority": 1,
+      "sendOnChange": true,
+      "minDelta": 10.0
+    },
+    {
+      "sensorId": 2,
+      "sensorName": "JSY",
+      "sensorType": 2,
+      "exportEnabled": false,
+      "exportIntervalMs": 200,
+      "priority": 3,
+      "sendOnChange": true,
+      "minDelta": 5.0
+    },
+    {
+      "sensorId": 20,
+      "sensorName": "Ballon",
+      "sensorType": 3,
+      "exportEnabled": true,
+      "exportIntervalMs": 10000,
+      "priority": 0,
+      "sendOnChange": true,
+      "minDelta": 0.2
+    }
+  ]
+}
+```
+
+Champs importants :
+
+- `sensorId` identifie le capteur local exporte. Convention actuelle : `1` Linky, `2` JSY, `20..22` DS18B20, `30` batterie, `31` solaire.
+- `sensorName` est envoye dans la trame `SENSOR_DISCOVERY`.
+- `sensorType` suit l'enum ESP-NOW : Linky `1`, JSY `2`, DS18B20 `3`, batterie `5`, solaire `6`.
+- `exportEnabled = false` garde le capteur local uniquement.
+- `exportIntervalMs` fixe la periode maximale entre deux trames rapides.
+- `sendOnChange` + `minDelta` permettent d'envoyer plus vite si la valeur principale varie assez.
+- `priority` reste une information de politique d'envoi : `0` bas, `1` normal, `2` haut, `3` critique.
+
+Les valeurs ne sont donc plus toutes envoyees a la meme frequence :
+
+- JSY / puissance reseau : trame rapide, typiquement 200 a 500 ms.
+- Linky : trame rapide, typiquement 500 a 1000 ms.
+- DS18B20 : trame rapide seulement quand disponible ; la periode peut etre augmentee ensuite vers 5 a 30 s.
+- Batterie : 5 a 15 s vise a terme.
+- Diagnostic : 10 s par defaut.
+- Decouverte capteur : 30 s par defaut.
+
+Les pertes de paquets sont calculees par `nodeId + sensorId` a partir du compteur `sequence`. Le premier paquet n'est pas considere comme une perte. Les timeouts sont geres par type dans `SensorManager` :
+
+- JSY : 1000 ms ;
+- Linky : 3000 ms ;
+- temperature : 30000 ms ;
+- batterie : 15000 ms ;
+- defaut : 2000 ms.
+
+Si un capteur distant expire, il est marque `ok = false`. Les modules metier continuent a lire uniquement `SensorManager` ou `RuntimeState`.
+
+### API Web ESP-NOW
+
+L'interface Web principale expose une page dediee `ESP-NOW`, placee dans le menu de gauche sous `MQTT`.
+
+Endpoints disponibles :
+
+- `GET /api/espnow` : etat local ESP-NOW, MAC locale, roles, capacites, peers autorises et noeuds detectes.
+- `GET /api/espnow/discovery` : liste brute des noeuds ESP-NOW detectes.
+- `POST /api/espnow/discovery/announce` : force une annonce de presence immediate.
+- `POST /api/espnow/peer` avec `mac=AA:BB:CC:DD:EE:FF` : ajoute un peer autorise.
+- `POST /api/espnow/peer/remove` avec `mac=AA:BB:CC:DD:EE:FF` : retire un peer autorise.
+
+La page Web affiche :
+
+- l'etat local ESP-NOW ;
+- la MAC locale ;
+- les roles et capacites declares ;
+- les ESP detectes par broadcast ;
+- les peers autorises ;
+- les options de debug transport, separees entre transmission et reception.
+
+Dans la page `Capteurs`, les trames `SENSOR_DISCOVERY` recues font apparaitre une section `Capteurs ESP-NOW disponibles`. Un bouton `Ajouter` cree automatiquement la configuration locale du capteur distant avec :
+
+- `source = espnow` ;
+- la MAC source ;
+- le `sensorId` distant ;
+- le type metier deduit de `sensorType` ;
+- le role metier repris depuis `sensorRole` ;
+- `remoteKey = ALL`.
+
+Le capteur distant est ensuite vu par `SensorManager` comme un capteur local virtuel. Pour un Linky ESP-NOW, `remoteKey = ALL` importe :
+
+- `GRID` vers la puissance reseau TIC ;
+- `PAPP` ou `SINSTS` vers la puissance apparente ;
+- `IINST` vers le courant ;
+- `BASE` vers l'index energie.
+
+Les autres profils suivent la meme logique :
+
+- `JSY-MK-194T` : `VOLT`, `CURR`, `POWER`, `GRID`, `PF`, `FREQ`, `ENERGY` si disponible ;
+- `DS18B20` / temperature : `TEMP`, `HUM` ; le role envoye par la source indique comment `TEMP` est utilisee ;
+- `Battery` : `BATV`, `BATA`, `BATP`, `SOC` ;
+- `Solar` : `POWER`, `ENERGY`, `VOLT`, `CURR`.
+
+Il reste possible de choisir une seule valeur distante en remplacant `ALL` par une cle precise comme `GRID`, `TEMP`, `VOLT` ou `POWER`. L'option `Debug trames ESP-NOW` est commune a tous les profils : elle ajoute dans les evenements une ligne decodee avec la sequence, le type et toutes les valeurs de chaque trame recue depuis la MAC configuree.
+
+Important : seules les trames provenant d'un peer autorise sont appliquees. Cette separation evite qu'un ESP inconnu ou mal configure puisse modifier directement `state.gridPowerW` ou les variables utilisees par la regulation.
+
+### Messages historiques EspNowManager
+
+Messages supportes par la couche historique :
 
 - `SENSOR_VALUE`
 - `ACTUATOR_COMMAND`

@@ -196,14 +196,12 @@ bool SafetyManager::masterLost(uint32_t now, uint32_t takeoverTimeoutMs) {
 bool SafetyManager::configError() {
   bool hasSsr1 = false;
   bool hasSsr2 = false;
-  bool hasRobotDyn = false;
   for (JsonObject actuator : config.actuators()) {
     String id = actuator["id"] | "";
     hasSsr1 |= id == "ssr1_water_heater";
     hasSsr2 |= id == "ssr2_aux";
-    hasRobotDyn |= id == "robotdyn_triac";
   }
-  return !hasSsr1 || !hasSsr2 || !hasRobotDyn;
+  return !hasSsr1 || !hasSsr2;
 }
 
 const char *SafetyManager::levelText(SafetyLevel value) {

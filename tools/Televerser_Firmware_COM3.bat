@@ -3,21 +3,18 @@ setlocal EnableExtensions
 cd /d "%~dp0\.."
 
 set "PORT=COM3"
-set "ARDUINO_CLI=C:\Program Files\Arduino IDE\resources\app\lib\backend\resources\arduino-cli.exe"
+call "%CD%\tools\Detect_Arduino_Tools.bat"
+if errorlevel 1 (
+  pause
+  exit /b 1
+)
 set "PARTITION_NAME=partitions_ota_1m5app_960k_littlefs"
 set "PARTITION_FILE=%CD%\%PARTITION_NAME%.csv"
-set "CORE_PARTITIONS=%LOCALAPPDATA%\Arduino15\packages\esp32\hardware\esp32\3.3.8\tools\partitions"
 set "MAX_APP_SIZE=1572864"
 set "BUILD_DIR=%CD%\build\esp32.esp32.esp32"
 set "OTA_DIR=%CD%\build\ota"
 set "FIRMWARE_BIN=%BUILD_DIR%\RouteurSolaireESP32.ino.bin"
 set "OTA_FIRMWARE_BIN=%OTA_DIR%\RouteurSolaireESP32_firmware.bin"
-
-if not exist "%ARDUINO_CLI%" (
-  echo arduino-cli introuvable: %ARDUINO_CLI%
-  pause
-  exit /b 1
-)
 
 if not exist "%PARTITION_FILE%" (
   echo Partition custom introuvable:

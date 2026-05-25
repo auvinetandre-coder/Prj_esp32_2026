@@ -42,6 +42,7 @@ void SimulationManager::loop(uint32_t now) {
     if (mode == "random") randomize();
     else applyScenario(state.simulationScenario);
   }
+  applyRoutedPower();
 }
 
 bool SimulationManager::enabled() {
@@ -64,8 +65,17 @@ void SimulationManager::disable() {
   runtimeEnabled = false;
   enabledAtMs = 0;
   expiresAtMs = 0;
+  simulatedBaseGridPowerW = 0.0f;
+  simulatedMeterAvailable = false;
   state.simulationMode = false;
   state.simulationRemainingMs = 0;
+  state.heaterPowerW = 0.0f;
+  state.pidOutputPercent = 0.0f;
+  state.commandPercent = 0.0f;
+  state.ssr1PowerPct = 0.0f;
+  state.ssr2PowerPct = 0.0f;
+  state.robotDynPowerPct = 0.0f;
+  state.pidStatus = "IDLE";
   state.logEvent("WARNING", "ACTUATOR_FORCED_OFF", "Mode simulation desactive", "SimulationManager");
 }
 
@@ -256,7 +266,21 @@ float SimulationManager::randomFloat(float minValue, float maxValue) {
 }
 
 void SimulationManager::applyPower(float gridPowerW) {
+  simulatedBaseGridPowerW = gridPowerW;
+  simulatedMeterAvailable = true;
+  applyRoutedPower();
+}
+
+void SimulationManager::applyRoutedPower() {
+  if (!simulatedMeterAvailable) return;
+  const float routedW = max(0.0f, state.heaterPowerW);
+  const float gridPowerW = simulatedBaseGridPowerW + routedW;
   state.gridPowerW = gridPowerW;
+  state.gridPowerRawW = gridPowerW;
+  state.gridPowerFilteredW = gridPowerW;
+  state.gridPowerSource = "SIM";
+  state.activePowerW1 = gridPowerW;
+  state.energyDirection1 = gridPowerW < 0 ? "injection" : "consumption";
   state.injectionW = gridPowerW < 0 ? -gridPowerW : 0;
   state.consumptionW = gridPowerW > 0 ? gridPowerW : 0;
   state.surplusW = state.injectionW;

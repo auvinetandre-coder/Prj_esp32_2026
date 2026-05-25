@@ -381,11 +381,18 @@ main {
 }
 
 .dashBlockPanel.energy,
-.dashBlockPanel.sensors {
+.dashBlockPanel.routing {
   grid-column: span 1;
 }
 
-.dashBlockPanel.esp {
+.dashBlockPanel.safety.bad {
+  border-color: rgba(244,67,54,.65);
+  box-shadow: 0 0 0 1px rgba(244,67,54,.12), 0 12px 28px rgba(244,67,54,.08);
+}
+
+.dashBlockPanel.esp,
+.dashBlockPanel.sensors,
+.dashBlockPanel.pid {
   grid-column: 1 / -1;
 }
 
@@ -423,6 +430,7 @@ main {
 }
 
 .blockMetric {
+  position: relative;
   min-height: 48px;
   padding: 8px 9px;
   border: 1px solid #26272b;
@@ -431,11 +439,31 @@ main {
   box-sizing: border-box;
 }
 
+.blockMetric.hasTip {
+  cursor: help;
+  outline: none;
+}
+
 .blockMetric span {
   display: block;
   color: #9ca3af;
   font-size: 10px;
   line-height: 1.2;
+}
+
+.infoMark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 13px;
+  height: 13px;
+  margin-left: 5px;
+  border: 1px solid #334155;
+  border-radius: 999px;
+  color: #93c5fd;
+  font-size: 9px;
+  font-style: normal;
+  font-weight: 800;
 }
 
 .blockMetric b {
@@ -473,10 +501,17 @@ main {
 .blockMetric.bad b,
 .blockState b.bad { color: #ff6b7a; }
 .blockMetric.solar b { color: #22c55e; }
-.blockMetric.consume b { color: #ff9800; }
-.blockMetric.sun b { color: #ffc107; }
+.blockMetric.consume b { color: #2196f3; }
+.blockMetric.sun b { color: #4caf50; }
 .blockMetric.muted b,
 .blockState b.muted { color: #9ca3af; }
+
+.blockMetric.hasTip:hover .hoverTip,
+.blockMetric.hasTip:focus .hoverTip,
+.blockMetric.hasTip:focus-within .hoverTip {
+  opacity: 1;
+  transform: translateY(0);
+}
 
 .miniGrid {
   display: grid;
@@ -634,7 +669,7 @@ main {
 
 .wideChart .sparkline {
   height: 198px;
-  background: #191a1e;
+  background: #15161a;
   border-color: #26272b;
 }
 
@@ -813,6 +848,12 @@ main {
   transition: opacity .14s ease, transform .14s ease;
 }
 
+.simpleTip {
+  color: #d1d5db;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
 .miniState.hasTip:hover .hoverTip,
 .miniState.hasTip:focus-within .hoverTip {
   opacity: 1;
@@ -868,13 +909,13 @@ main {
 .bad { color: #f44336; }
 .muted { color: #9ca3af; }
 .solar { color: #22c55e; }
-.consume { color: #ff9800; }
-.sun { color: #ffc107; }
-.heat { color: #f44336; }
-.gridCurve { color: #60a5fa; }
-.injectionCurve { color: #22c55e; }
-.consumptionCurve { color: #ff9800; }
-.surplusCurve { color: #ffc107; }
+.consume { color: #2196f3; }
+.sun { color: #4caf50; }
+.heat { color: #ff9800; }
+.gridCurve { color: #f44336; }
+.injectionCurve { color: #8b5cf6; }
+.consumptionCurve { color: #2196f3; }
+.surplusCurve { color: #4caf50; }
 .tempCurve1 { color: #a78bfa; }
 .tempCurve2 { color: #06b6d4; }
 .tempCurve3 { color: #f472b6; }
@@ -942,8 +983,8 @@ main {
   width: 100%;
   height: 52px;
   display: block;
-  background: #0b1220;
-  border: 1px solid #374151;
+  background: #111217;
+  border: 1px solid #2b2d34;
   border-radius: 8px;
 }
 
@@ -1013,43 +1054,43 @@ main {
 }
 
 .sparkline .grid line {
-  stroke: #374151;
+  stroke: #4b5563;
   stroke-width: .45;
-  opacity: .24;
+  opacity: .18;
 }
 
 .sparkline .grid .tickLine {
-  opacity: .2;
+  opacity: .16;
 }
 
 .sparkline .grid .timeLine {
-  opacity: .18;
+  opacity: .12;
 }
 
 .sparkline .grid .nowLine {
   stroke: #93c5fd;
-  opacity: .42;
+  opacity: .28;
 }
 
 .sparkline .grid .zeroLine {
   stroke: #f9fafb;
-  opacity: .48;
+  opacity: .38;
 }
 
 .sparkline polyline,
 .sparkline .chartLine {
   fill: none;
   stroke: currentColor;
-  stroke-width: 1.2;
+  stroke-width: 1.35;
   stroke-linecap: round;
   stroke-linejoin: round;
   vector-effect: non-scaling-stroke;
 }
 
 .sparkline .chartFill {
-  fill: currentColor;
-  opacity: .12;
+  opacity: 1;
   stroke: none;
+  pointer-events: none;
 }
 
 .sparkline circle {
@@ -1090,15 +1131,15 @@ main {
 }
 
 .energySpark circle.solar { fill: #22c55e; }
-.energySpark circle.consume { fill: #ff9800; }
-.energySpark circle.sun { fill: #ffc107; }
-.energySpark circle.heat { fill: #f44336; }
+.energySpark circle.consume { fill: #2196f3; }
+.energySpark circle.sun { fill: #4caf50; }
+.energySpark circle.heat { fill: #ff9800; }
 .energySpark circle.info { fill: #2196f3; }
 .energySpark circle.warn { fill: #ff9800; }
-.energySpark circle.gridCurve { fill: #60a5fa; }
-.energySpark circle.injectionCurve { fill: #22c55e; }
-.energySpark circle.consumptionCurve { fill: #ff9800; }
-.energySpark circle.surplusCurve { fill: #ffc107; }
+.energySpark circle.gridCurve { fill: #f44336; }
+.energySpark circle.injectionCurve { fill: #8b5cf6; }
+.energySpark circle.consumptionCurve { fill: #2196f3; }
+.energySpark circle.surplusCurve { fill: #4caf50; }
 .energySpark circle.tempCurve1 { fill: #a78bfa; }
 .energySpark circle.tempCurve2 { fill: #06b6d4; }
 .energySpark circle.tempCurve3 { fill: #f472b6; }
@@ -1112,23 +1153,23 @@ main {
 }
 
 .energySpark polyline.consume {
-  stroke: #ff9800;
+  stroke: #2196f3;
 }
 
 .energySpark .chartLine.consume {
-  stroke: #ff9800;
+  stroke: #2196f3;
 }
 
 .energySpark polyline.sun {
-  stroke: #ffc107;
+  stroke: #4caf50;
 }
 
 .energySpark .chartLine.sun {
-  stroke: #ffc107;
+  stroke: #4caf50;
 }
 
 .energySpark .chartLine.heat {
-  stroke: #f44336;
+  stroke: #ff9800;
 }
 
 .energySpark .chartLine.info {
@@ -1140,19 +1181,29 @@ main {
 }
 
 .energySpark .chartLine.gridCurve {
-  stroke: #60a5fa;
+  stroke: #f44336;
+}
+
+.sparkline .chartLine.gridConsume,
+.energySpark .chartLine.gridConsume {
+  stroke: #f44336;
+}
+
+.sparkline .chartLine.gridInject,
+.energySpark .chartLine.gridInject {
+  stroke: #4caf50;
 }
 
 .energySpark .chartLine.injectionCurve {
-  stroke: #22c55e;
+  stroke: #8b5cf6;
 }
 
 .energySpark .chartLine.consumptionCurve {
-  stroke: #ff9800;
+  stroke: #2196f3;
 }
 
 .energySpark .chartLine.surplusCurve {
-  stroke: #ffc107;
+  stroke: #4caf50;
 }
 
 .energySpark .chartLine.tempCurve1 {
@@ -1180,6 +1231,111 @@ main {
   margin-top: 6px;
   color: #9ca3af;
   font-size: 11px;
+}
+
+.supervisionPanel {
+  background: #191a1e;
+  border: 1px solid #26272b;
+  border-radius: 8px;
+  padding: 13px 15px;
+  margin-bottom: 14px;
+}
+
+.supervisionTable {
+  display: grid;
+  gap: 0;
+  border: 1px solid #26272b;
+  border-radius: 8px;
+  overflow: visible;
+  background: #131417;
+}
+
+.supervisionHeader,
+.supervisionRow {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) minmax(110px, .8fr) minmax(110px, .8fr) minmax(220px, 1.5fr) minmax(95px, .7fr);
+  gap: 0;
+  align-items: center;
+}
+
+.supervisionHeader {
+  background: #101115;
+  color: #7b808a;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0;
+}
+
+.supervisionHeader span,
+.supervisionRow > div {
+  min-width: 0;
+  padding: 10px 12px;
+  border-bottom: 1px solid #26272b;
+}
+
+.supervisionRow:last-child > div {
+  border-bottom: 0;
+}
+
+.supervisionZone strong {
+  color: #f9fafb;
+  font-size: 13px;
+}
+
+.supervisionValue b {
+  display: inline-block;
+  color: #f9fafb;
+  font-size: 17px;
+  line-height: 1.05;
+}
+
+.supervisionValue b.ok { color: #22c55e; }
+.supervisionValue b.warn { color: #ff9800; }
+.supervisionValue b.bad { color: #ff6b7a; }
+.supervisionValue b.solar,
+.supervisionValue b.sun { color: #4caf50; }
+.supervisionValue b.consume { color: #2196f3; }
+.supervisionValue b.heat { color: #ff9800; }
+.supervisionValue b.info { color: #74c7f0; }
+.supervisionValue b.muted { color: #9ca3af; }
+
+.supervisionValue em {
+  color: #9ca3af;
+  font-size: 11px;
+  font-style: normal;
+}
+
+.supervisionDetail,
+.supervisionTrend {
+  color: #9ca3af;
+  font-size: 11px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.supervisionTrend {
+  color: #7b808a;
+}
+
+.tipWrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  outline: none;
+}
+
+.tipWrap.hasTip {
+  cursor: help;
+}
+
+.tipWrap.hasTip:hover .hoverTip,
+.tipWrap.hasTip:focus .hoverTip,
+.tipWrap.hasTip:focus-within .hoverTip {
+  opacity: 1;
+  transform: translateY(0);
 }
 
 .chartTooltip {
@@ -1251,19 +1407,21 @@ main {
   white-space: nowrap;
 }
 
-.chartTooltip .tipLine i.gridCurve { background: #60a5fa; }
-.chartTooltip .tipLine i.injectionCurve { background: #22c55e; }
-.chartTooltip .tipLine i.consumptionCurve { background: #ff9800; }
-.chartTooltip .tipLine i.surplusCurve { background: #ffc107; }
+.chartTooltip .tipLine i.gridCurve { background: #f44336; }
+.chartTooltip .tipLine i.injectionCurve { background: #8b5cf6; }
+.chartTooltip .tipLine i.consumptionCurve { background: #2196f3; }
+.chartTooltip .tipLine i.surplusCurve { background: #4caf50; }
 .chartTooltip .tipLine i.tempCurve1 { background: #a78bfa; }
 .chartTooltip .tipLine i.tempCurve2 { background: #06b6d4; }
 .chartTooltip .tipLine i.tempCurve3 { background: #f472b6; }
-.chartTooltip .tipLine i.heat { background: #f44336; }
+.chartTooltip .tipLine i.heat { background: #ff9800; }
 .chartTooltip .tipLine i.info { background: #2196f3; }
 .chartTooltip .tipLine i.warn { background: #ff9800; }
 .chartTooltip .tipLine i.solar { background: #22c55e; }
-.chartTooltip .tipLine i.consume { background: #ff9800; }
-.chartTooltip .tipLine i.sun { background: #ffc107; }
+.chartTooltip .tipLine i.consume { background: #2196f3; }
+.chartTooltip .tipLine i.sun { background: #4caf50; }
+.chartTooltip .tipLine i.gridConsume { background: #f44336; }
+.chartTooltip .tipLine i.gridInject { background: #4caf50; }
 
 .sparkline.muted {
   color: #9ca3af;
@@ -1291,16 +1449,203 @@ main {
   color: #f9fafb;
 }
 
+.valuePopup {
+  position: relative;
+  display: inline-block;
+  margin-left: 8px;
+}
+
+.valuePopup summary {
+  list-style: none;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 3px 8px;
+  border: 1px solid #374151;
+  border-radius: 999px;
+  background: #111827;
+  color: #bfdbfe;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.valuePopup summary::-webkit-details-marker {
+  display: none;
+}
+
+.valuePopupBody {
+  position: absolute;
+  z-index: 25;
+  top: calc(100% + 7px);
+  left: 0;
+  min-width: 260px;
+  max-width: min(440px, 82vw);
+  padding: 10px;
+  border: 1px solid #374151;
+  border-radius: 8px;
+  background: #0b1220;
+  box-shadow: 0 14px 32px rgba(0, 0, 0, .42);
+}
+
+.valuePopupBody .channelGrid {
+  margin-top: 0;
+}
+
+.statusTip {
+  position: relative;
+  display: inline-block;
+  cursor: help;
+}
+
+.statusTip:hover .hoverTip,
+.statusTip:focus .hoverTip,
+.statusTip:focus-within .hoverTip {
+  opacity: 1;
+  transform: translateY(0);
+}
+
 .subPanel {
   border: 1px solid #374151;
   background: #111827;
   border-radius: 8px;
   padding: 10px;
+  display: grid;
+  gap: 10px;
+  align-content: start;
 }
 
 .subPanel h3 {
   margin: 0 0 8px;
   font-size: 14px;
+}
+
+.subPanel .formGrid,
+.subPanel .form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 10px;
+  align-items: end;
+}
+
+.form > .subPanel {
+  grid-column: 1 / -1;
+}
+
+.espNowConfigPanel .formGrid {
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  align-items: stretch;
+}
+
+.espNowConfigPanel .toggleField {
+  max-width: 420px;
+}
+
+.formActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.sensorWizard {
+  display: grid;
+  gap: 12px;
+}
+
+.wizardSteps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.wizardSteps span {
+  padding: 6px 10px;
+  border: 1px solid #374151;
+  border-radius: 999px;
+  color: #9ca3af;
+  background: #111827;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.wizardSteps span.active {
+  color: #93c5fd;
+  border-color: #2563eb;
+  background: #0f1f3a;
+}
+
+.sensorTypeGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 10px;
+}
+
+.sensorTypeCard {
+  min-height: 132px;
+  display: grid;
+  gap: 6px;
+  align-content: start;
+  text-align: left;
+  border: 1px solid #374151;
+  border-radius: 8px;
+  padding: 12px;
+  background: #111827;
+  color: #e5e7eb;
+}
+
+.sensorTypeCard:hover,
+.sensorTypeCard.selected {
+  border-color: #2563eb;
+  background: #0f1f3a;
+}
+
+.sensorTypeCard b {
+  width: fit-content;
+  padding: 3px 7px;
+  border-radius: 6px;
+  background: #1f2937;
+  color: #93c5fd;
+  font-size: 11px;
+}
+
+.sensorTypeCard strong {
+  font-size: 15px;
+}
+
+.sensorTypeCard span,
+.sensorTypeCard small {
+  color: #9ca3af;
+  font-size: 12px;
+}
+
+.wizardActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.sensorSummary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 10px;
+}
+
+.sensorSummary div {
+  border: 1px solid #374151;
+  border-radius: 8px;
+  padding: 10px;
+  background: #111827;
+}
+
+.sensorSummary span {
+  display: block;
+  color: #9ca3af;
+  font-size: 12px;
+}
+
+.sensorSummary b {
+  display: block;
+  margin-top: 4px;
 }
 
 .advancedField {
@@ -1385,25 +1730,50 @@ main {
   flex-wrap: wrap;
 }
 
-.helpBox {
-  margin: 0 0 14px;
-  background: #0b1220;
-  border: 1px solid #374151;
-  border-radius: 8px;
-  padding: 10px 12px;
+.helpPopup {
+  position: relative;
+  display: inline-block;
+  margin: -4px 0 10px;
 }
 
-.helpBox summary {
+.helpPopup summary {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   cursor: pointer;
+  list-style: none;
+  border: 1px solid #374151;
+  border-radius: 999px;
+  background: #111827;
   color: #93c5fd;
-  font-weight: 700;
+  font-weight: 800;
+}
+
+.helpPopup summary::-webkit-details-marker {
+  display: none;
+}
+
+.helpPopup[open] summary {
+  border-color: #2563eb;
+  background: #0f1f3a;
 }
 
 .helpGrid {
+  position: absolute;
+  z-index: 30;
+  left: 0;
+  top: 36px;
+  width: min(680px, calc(100vw - 48px));
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: 10px;
-  margin-top: 10px;
+  padding: 10px;
+  background: #0b1220;
+  border: 1px solid #374151;
+  border-radius: 8px;
+  box-shadow: 0 18px 40px rgba(0,0,0,.35);
 }
 
 .helpGrid div {
@@ -1486,8 +1856,21 @@ main {
   color: #ffc107;
 }
 
+.dashCustom h3 {
+  margin: 0;
+  font-size: 13px;
+  color: #dbeafe;
+}
+
 .customSection {
   margin-top: 14px;
+}
+
+.graphGroupGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px;
+  margin-top: 10px;
 }
 
 .customGrid {
@@ -1543,17 +1926,17 @@ main {
 }
 
 .curveDot.solar { background: #22c55e; }
-.curveDot.consume { background: #ff9800; }
-.curveDot.sun { background: #ffc107; }
-.curveDot.heat { background: #f44336; }
+.curveDot.consume { background: #2196f3; }
+.curveDot.sun { background: #4caf50; }
+.curveDot.heat { background: #ff9800; }
 .curveDot.info { background: #2196f3; }
 .curveDot.warn { background: #ff9800; }
 .curveDot.ok { background: #22c55e; }
 .curveDot.bad { background: #f44336; }
-.curveDot.gridCurve { background: #60a5fa; }
-.curveDot.injectionCurve { background: #22c55e; }
-.curveDot.consumptionCurve { background: #ff9800; }
-.curveDot.surplusCurve { background: #ffc107; }
+.curveDot.gridCurve { background: #f44336; }
+.curveDot.injectionCurve { background: #8b5cf6; }
+.curveDot.consumptionCurve { background: #2196f3; }
+.curveDot.surplusCurve { background: #4caf50; }
 .curveDot.tempCurve1 { background: #a78bfa; }
 .curveDot.tempCurve2 { background: #06b6d4; }
 .curveDot.tempCurve3 { background: #f472b6; }
@@ -1589,6 +1972,353 @@ input, select {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 10px;
+}
+
+.compactPanelHead {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+summary.compactPanelHead {
+  cursor: pointer;
+  list-style: none;
+  position: relative;
+  padding-left: 34px;
+}
+
+summary.compactPanelHead::-webkit-details-marker {
+  display: none;
+}
+
+summary.compactPanelHead::before {
+  content: "▸";
+  position: absolute;
+  left: 13px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: #93c5fd;
+  font-size: 14px;
+  font-weight: 900;
+  transition: transform .15s ease;
+}
+
+details[open] > summary.compactPanelHead::before {
+  transform: translateY(-50%) rotate(90deg);
+}
+
+.compactPanelTitle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.compactPanelHead h2,
+.compactPanelHead p {
+  margin: 0;
+}
+
+.compactPanelHead h2 {
+  font-size: 17px;
+  line-height: 1.2;
+}
+
+.compactPanelHead p {
+  color: #9ca3af;
+  font-size: 12px;
+}
+
+.compactForm {
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+}
+
+.compactPanelActions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.compactPanelActions .fieldHelp {
+  margin-top: 0;
+}
+
+.inlineHelp {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  border: 1px solid #2563eb;
+  border-radius: 999px;
+  background: #0f1f3a;
+  color: #bfdbfe;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: help;
+}
+
+.inlineHelp > span {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 8px);
+  left: 0;
+  width: min(300px, 82vw);
+  padding: 9px 10px;
+  border: 1px solid #374151;
+  border-radius: 8px;
+  background: #0b1220;
+  color: #cbd5e1;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, .35);
+  font-size: 12px;
+  line-height: 1.35;
+  font-weight: 500;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-4px);
+  transition: opacity .14s ease, transform .14s ease;
+}
+
+.inlineHelp:hover > span,
+.inlineHelp:focus > span,
+.inlineHelp:focus-within > span {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.oneWirePanel {
+  padding: 0;
+  overflow: visible;
+}
+
+.oneWirePanel .compactPanelHead {
+  margin: 0;
+  padding: 12px;
+}
+
+.oneWirePanel .oneWireSettingsGrid,
+.oneWirePanel .compactPanelActions {
+  margin-left: 12px;
+  margin-right: 12px;
+}
+
+.oneWirePanel .compactPanelActions {
+  margin-bottom: 12px;
+}
+
+.remoteSensorsPanel {
+  padding: 0;
+  overflow: visible;
+}
+
+.remoteSensorsPanel .compactPanelHead {
+  margin: 0;
+  padding: 12px;
+}
+
+.remoteSensorsPanel table {
+  margin: 0 12px 12px;
+  width: calc(100% - 24px);
+}
+
+.groupRow td {
+  background: #0f172a;
+  color: #dbeafe;
+  font-size: 12px;
+  font-weight: 800;
+  text-transform: none;
+}
+
+.remoteSensorsPanel tr.muted td {
+  opacity: .58;
+}
+
+.remoteSensorsPanel tr.muted .badge {
+  opacity: 1;
+}
+
+.espNodeTip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  cursor: help;
+  outline: none;
+}
+
+.espNodeTip > b {
+  color: #f9fafb;
+}
+
+.espNodeTip > b::after {
+  content: " i";
+  color: #60a5fa;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.espNodeTip:hover .hoverTip,
+.espNodeTip:focus .hoverTip,
+.espNodeTip:focus-within .hoverTip {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.espNodeHover {
+  min-width: min(360px, 86vw);
+  max-width: min(520px, 92vw);
+  top: calc(100% + 6px);
+  display: grid;
+  gap: 8px;
+}
+
+.espNodeTipHead {
+  display: block;
+  padding: 2px 0 4px;
+  border-bottom: 1px solid rgba(75,85,99,.7);
+}
+
+.espNodeTipHead strong {
+  display: block;
+  color: #f9fafb;
+  font-size: 13px;
+}
+
+.espNodeTipHead span {
+  display: block;
+  margin-top: 2px;
+  color: #94a3b8;
+  font-size: 10px;
+}
+
+.espSensorCard {
+  display: grid;
+  gap: 6px;
+  padding: 9px;
+  border: 1px solid #334155;
+  border-radius: 8px;
+  background: #111827;
+}
+
+.espSensorCard.empty {
+  color: #cbd5e1;
+}
+
+.espSensorCardTop {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: center;
+  border-bottom: 0;
+  padding: 0;
+}
+
+.espSensorCard strong {
+  color: #f9fafb;
+  font-size: 12px;
+}
+
+.espSensorCard p {
+  margin: 0;
+  color: #94a3b8;
+  font-size: 11px;
+}
+
+.espSensorCard small {
+  color: #94a3b8;
+}
+
+.espSensorValues {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  border-bottom: 0;
+  padding: 0;
+}
+
+.espSensorValues i {
+  padding: 3px 6px;
+  border: 1px solid #334155;
+  border-radius: 999px;
+  background: #0b1220;
+  color: #bfdbfe;
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 800;
+}
+
+.espSensorValues em {
+  color: #94a3b8;
+  font-style: normal;
+  font-weight: 650;
+}
+
+.oneWireSettingsGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(165px, 1fr));
+  gap: 8px;
+}
+
+.settingTile {
+  min-height: 76px;
+  display: grid;
+  align-content: space-between;
+  gap: 7px;
+  margin: 0;
+  padding: 9px;
+  border: 1px solid #374151;
+  border-radius: 8px;
+  background: #111827;
+  box-sizing: border-box;
+}
+
+.settingTile span {
+  color: #d1d5db;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.settingTile input,
+.settingTile select {
+  margin-top: 0;
+}
+
+.settingTile small {
+  color: #9ca3af;
+  font-size: 10px;
+}
+
+.toggleSetting input {
+  display: none;
+}
+
+.toggleSetting b {
+  width: fit-content;
+  min-width: 72px;
+  padding: 7px 10px;
+  border-radius: 999px;
+  background: #374151;
+  color: #d1d5db;
+  font-size: 12px;
+}
+
+.toggleSetting input:checked + b {
+  background: #14532d;
+  color: #bbf7d0;
+}
+
+.toggleSetting b::after {
+  content: attr(data-off);
+}
+
+.toggleSetting input:checked + b::after {
+  content: attr(data-on);
 }
 
 .toolbar {
@@ -1968,5 +2698,74 @@ td, th {
 
   .dashBlockPanel.esp {
     grid-column: auto;
+  }
+
+  .supervisionPanel {
+    padding: 11px 10px;
+  }
+
+  .supervisionHeader {
+    display: none;
+  }
+
+  .supervisionRow {
+    grid-template-columns: 1fr;
+    padding: 10px 0;
+    border-bottom: 1px solid #26272b;
+  }
+
+  .supervisionRow:last-child {
+    border-bottom: 0;
+  }
+
+  .supervisionRow > div {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 4px 10px;
+    border-bottom: 0;
+  }
+
+  .supervisionState::before { content: "Etat"; color: #7b808a; font-size: 10px; }
+  .supervisionValue::before { content: "Valeur"; color: #7b808a; font-size: 10px; }
+  .supervisionDetail::before { content: "Detail"; color: #7b808a; font-size: 10px; }
+  .supervisionTrend::before { content: "Tendance"; color: #7b808a; font-size: 10px; }
+
+  .supervisionZone {
+    padding-top: 8px;
+  }
+
+  .supervisionValue b {
+    font-size: 15px;
+  }
+
+  .wideChart {
+    padding: 11px 10px;
+  }
+
+  .wideChartHead {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 3px;
+  }
+
+  .chartWithScale {
+    grid-template-columns: 44px minmax(0, 1fr);
+    gap: 6px;
+  }
+
+  .wideChart .sparkline,
+  .wideChart .energySpark,
+  .wideChart .axisYLabels,
+  .chartPlot .sparkline {
+    height: 168px;
+  }
+
+  .axisYLabels {
+    font-size: 9px;
+  }
+
+  .axisXLabels {
+    font-size: 8px;
   }
 }

@@ -56,6 +56,7 @@ private:
   int8_t txPin = 27;
   uint32_t baudrate = 1200;
   uint32_t timeoutMs = 5000;
+  bool debugEnabled = false;
   bool frameActive = false;
   bool frameHasValidLine = false;
   bool lineOverflow = false;
@@ -63,14 +64,20 @@ private:
   String frameBuffer = "";
   uint32_t lastByteMs = 0;
   uint32_t lastErrorLogMs = 0;
+  uint32_t lastInvalidLineLogMs = 0;
   uint32_t lastPeriodicLogMs = 0;
+  uint32_t lastLabelTraceLogMs = 0;
+  String decodedTrace = "";
 
   void loadConfig();
   bool validateChecksum(const String &line);
   void applyLabelValue(const String &label, const String &value);
+  void traceDecodedLabel(const String &label, const String &value, const String &timestamp);
+  void flushDecodedTrace(uint32_t now, bool force = false);
   void publishRuntime();
   void setStatus(LinkyTICStatus status);
   const char *statusText(LinkyTICStatus status) const;
   void logError(const __FlashStringHelper *message, uint32_t now);
+  void logInvalidLine(const String &line);
   void logPeriodicValues(uint32_t now);
 };

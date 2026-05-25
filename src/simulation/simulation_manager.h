@@ -27,6 +27,8 @@ private:
   uint32_t lastUpdateMs = 0;
   uint32_t enabledAtMs = 0;
   uint32_t expiresAtMs = 0;
+  float simulatedBaseGridPowerW = 0.0f;
+  bool simulatedMeterAvailable = false;
   bool runtimeEnabled = false;
   static const uint32_t SIMULATION_TIMEOUT_MS = 300000UL;
 
@@ -35,6 +37,7 @@ private:
   void markEnabled();
   float randomFloat(float minValue, float maxValue);
   void applyPower(float gridPowerW);
+  void applyRoutedPower();
   void applyNormalAvailability();
   void applyTemperatures(float t1, float t2, float t3, bool a1 = true, bool a2 = true, bool a3 = true);
   void applyJsy(bool available, float gridPowerW, float voltageV, float currentA, float powerFactor, float frequencyHz, float activePowerW2 = NAN, float currentA2 = NAN);
