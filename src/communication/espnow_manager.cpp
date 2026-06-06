@@ -1,9 +1,23 @@
 #include "espnow_manager.h"
 #include "../sensors/sensor_manager.h"
+#include "../build_info.h"
+#include <LittleFS.h>
 #include <math.h>
+
+static uint8_t espNowRoleFlagsFromRole(DeviceRole role);
 
 static EspNowManager *gEspNow = nullptr;
 static const uint8_t ESPNOW_BROADCAST_MAC[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+
+static String espNowLocalLittlefsVersion() {
+  if (!LittleFS.exists("/www/littlefs_version.txt")) return "N/A";
+  File file = LittleFS.open("/www/littlefs_version.txt", "r");
+  if (!file) return "N/A";
+  String value = file.readString();
+  file.close();
+  value.trim();
+  return value.length() ? value : "N/A";
+}
 
 static const char *espNowValueTypeText(uint8_t valueType) {
   switch (valueType) {
@@ -194,10 +208,16 @@ void EspNowManager::handleReceive(const uint8_t *mac, const uint8_t *data, int l
       handleSensorDiscoveryPacket(mac, data, len);
       return;
     }
+    if (data[1] == ESPNOW_PACKET_ACTUATOR_DISCOVERY) {
+      handleActuatorDiscoveryPacket(mac, data, len);
+      return;
+    }
     if (data[1] == ESPNOW_PACKET_DIAGNOSTIC) {
       handleDiagnosticPacket(mac, data, len);
       return;
     }
+    state.addLog(String("ESP-NOW RX paquet inconnu type=") + String(data[1]) + " len=" + String(len) + " peer=" + peer);
+    return;
   }
 
   if (len != sizeof(EspNowMessage)) {
@@ -217,6 +237,13 @@ void EspNowManager::handleReceive(const uint8_t *mac, const uint8_t *data, int l
   if (!checksumValid(msg)) {
     state.addLog("ESP-NOW RX checksum invalide: " + peer);
     return;
+  }
+
+  if (EspNowDiscoveredNode *node = findOrCreateDiscoveredNode(mac, fallbackNodeIdFromMac(mac), strlen(msg.senderId) ? msg.senderId : nullptr, false)) {
+    node->roleFlags |= espNowRoleFlagsFromRole(static_cast<DeviceRole>(msg.role));
+    node->lastFrameMs = millis();
+    node->lastSeenMs = millis();
+    if (msg.messageType == MSG_HEARTBEAT) node->lastHeartbeatMs = millis();
   }
 
   if (millis() - lastRxLogMs > 1000) {
@@ -282,12 +309,76 @@ String EspNowManager::peersJson() {
   return out;
 }
 
+static const char *espNowRedundancyRoleText(DeviceRole role) {
+  if (role == ROLE_MASTER) return "MASTER";
+  if (role == ROLE_BACKUP) return "BACKUP";
+  return "STANDALONE";
+}
+
+static const char *espNowRedundancyRoleText(uint8_t role) {
+  if (role == ESPNOW_REDUNDANCY_MASTER) return "MASTER";
+  if (role == ESPNOW_REDUNDANCY_BACKUP) return "BACKUP";
+  return "STANDALONE";
+}
+
+static const char *espNowFunctionalRoleText(uint8_t roleFlags) {
+  const bool sensor = roleFlags & ESPNOW_ROLE_PRODUCER;
+  const bool actuator = roleFlags & ESPNOW_ROLE_ACTUATOR;
+  const bool router = roleFlags & ESPNOW_ROLE_ROUTER;
+  if ((sensor && actuator) || (router && (sensor || actuator))) return "MIXED";
+  if (router) return "MASTER";
+  if (actuator) return "ACTUATOR";
+  if (sensor) return "SENSOR";
+  return "UNKNOWN";
+}
+
+static uint8_t espNowRoleFlagsFromRole(DeviceRole role) {
+  switch (role) {
+    case ROLE_MASTER:
+    case ROLE_BACKUP:
+      return ESPNOW_ROLE_ROUTER | ESPNOW_ROLE_CONSUMER;
+    case ROLE_NODE_SENSOR:
+      return ESPNOW_ROLE_PRODUCER;
+    case ROLE_NODE_ACTUATOR:
+      return ESPNOW_ROLE_ACTUATOR | ESPNOW_ROLE_CONSUMER;
+    case ROLE_NODE_MIXED:
+      return ESPNOW_ROLE_PRODUCER | ESPNOW_ROLE_CONSUMER | ESPNOW_ROLE_ACTUATOR;
+    default:
+      return ESPNOW_ROLE_NONE;
+  }
+}
+
+static const char *espNowPacketTypeText(uint8_t packetType) {
+  switch (packetType) {
+    case ESPNOW_PACKET_DISCOVERY: return "DISCOVERY";
+    case ESPNOW_PACKET_SENSOR_DATA: return "SENSOR_DATA";
+    case ESPNOW_PACKET_FAST_DATA: return "FAST_DATA";
+    case ESPNOW_PACKET_DIAGNOSTIC: return "DIAGNOSTIC";
+    case ESPNOW_PACKET_SENSOR_DISCOVERY: return "SENSOR_DISCOVERY";
+    case ESPNOW_PACKET_ACTUATOR_DISCOVERY: return "ACTUATOR_DISCOVERY";
+    default: return "UNKNOWN";
+  }
+}
+
+void EspNowManager::markDiscoveredNodeFrame(EspNowDiscoveredNode &node, uint8_t frameType, uint32_t now) {
+  node.lastFrameType = frameType;
+  node.lastFrameMs = now;
+  node.lastSeenMs = now;
+  if (frameType == ESPNOW_PACKET_DISCOVERY || frameType == ESPNOW_PACKET_DIAGNOSTIC) node.lastHeartbeatMs = now;
+}
+
 String EspNowManager::statusJson() {
-  DynamicJsonDocument doc(6144);
+  DynamicJsonDocument doc(24576);
   JsonObject out = doc.to<JsonObject>();
   out["ready"] = state.espNowReady;
   out["mac"] = WiFi.macAddress();
+  out["nodeId"] = localNodeId();
+  out["nodeName"] = state.moduleName;
+  out["firmwareVersion"] = ROUTEUR_FIRMWARE_VERSION;
+  out["littlefsVersion"] = espNowLocalLittlefsVersion();
   out["roleFlags"] = localRoleFlags();
+  out["functionalRole"] = espNowFunctionalRoleText(localRoleFlags());
+  out["redundancyRole"] = espNowRedundancyRoleText(state.role);
   out["capabilityFlags"] = localCapabilityFlags();
   out["discoveryIntervalMs"] = config.system()["espnow"]["discoveryIntervalMs"] | ESPNOW_DEFAULT_ANNOUNCE_INTERVAL_MS;
   out["sensorDiscoveryIntervalMs"] = config.system()["espnow"]["sensorDiscoveryIntervalMs"] | 30000UL;
@@ -315,6 +406,23 @@ String EspNowManager::statusJson() {
     item["lastSentMs"] = slot >= 0 ? exportLastSentMs[slot] : 0;
     item["ageMs"] = slot >= 0 && exportLastSentMs[slot] ? millis() - exportLastSentMs[slot] : 0;
   }
+  JsonArray actuatorExports = out["actuatorExports"].to<JsonArray>();
+  for (JsonObject actuator : config.actuators()) {
+    String source = actuator["source"] | "local";
+    if (source.equalsIgnoreCase("espnow")) continue;
+    JsonObject item = actuatorExports.add<JsonObject>();
+    item["id"] = actuator["id"] | "";
+    item["name"] = actuator["espNowExportName"] | actuator["name"] | actuator["id"] | "";
+    item["role"] = actuator["espNowExportRole"] | actuator["role"] | actuator["usage"] | "";
+    item["type"] = actuator["type"] | "";
+    item["typeText"] = espNowActuatorTypeText(espNowActuatorTypeFor(item["type"].as<String>()));
+    item["exportEnabled"] = actuator["espNowExportEnabled"] | false;
+    item["enabled"] = actuator["enabled"] | false;
+    item["mode"] = actuator["mode"] | "";
+    item["maxPowerW"] = actuator["maxPowerW"] | 0;
+    item["critical"] = actuator["critical"] | false;
+    item["debug"] = actuator["espNowDebug"] | actuator["debug"] | false;
+  }
   JsonArray peers = out["peers"].to<JsonArray>();
   for (JsonVariant peer : config.system()["peers"].as<JsonArray>()) peers.add(peer.as<String>());
   JsonArray nodes = out["discoveredNodes"].to<JsonArray>();
@@ -326,13 +434,58 @@ String EspNowManager::statusJson() {
     node["nodeId"] = discoveredNodes[i].nodeId;
     node["nodeName"] = discoveredNodes[i].nodeName;
     node["roleFlags"] = discoveredNodes[i].roleFlags;
+    node["functionalRole"] = espNowFunctionalRoleText(discoveredNodes[i].roleFlags);
+    node["redundancyRole"] = espNowRedundancyRoleText(discoveredNodes[i].redundancyRole);
     node["capabilityFlags"] = discoveredNodes[i].capabilityFlags;
     node["primarySensorType"] = discoveredNodes[i].primarySensorType;
     node["primarySensorText"] = espNowSensorTypeText(discoveredNodes[i].primarySensorType);
+    node["firmwareVersion"] = discoveredNodes[i].firmwareVersion;
+    node["littlefsVersion"] = discoveredNodes[i].littlefsVersion;
+    node["uptimeMs"] = discoveredNodes[i].uptimeMs;
+    node["freeHeap"] = discoveredNodes[i].freeHeap;
+    node["rssiDbm"] = discoveredNodes[i].rssiDbm;
     node["lastSeenMs"] = discoveredNodes[i].lastSeenMs;
     node["ageMs"] = now >= discoveredNodes[i].lastSeenMs ? now - discoveredNodes[i].lastSeenMs : 0;
+    node["lastFrameAgeMs"] = discoveredNodes[i].lastFrameMs ? (now >= discoveredNodes[i].lastFrameMs ? now - discoveredNodes[i].lastFrameMs : 0) : 4294967295UL;
+    node["lastHeartbeatAgeMs"] = discoveredNodes[i].lastHeartbeatMs ? (now >= discoveredNodes[i].lastHeartbeatMs ? now - discoveredNodes[i].lastHeartbeatMs : 0) : 4294967295UL;
+    node["lastFrameType"] = espNowPacketTypeText(discoveredNodes[i].lastFrameType);
+    const bool nodeOk = discoveredNodes[i].lastSeenMs && now >= discoveredNodes[i].lastSeenMs && (now - discoveredNodes[i].lastSeenMs) <= 30000UL;
+    node["ok"] = nodeOk;
+    node["lost"] = !nodeOk;
     node["lastSequence"] = discoveredNodes[i].lastSequence;
+    node["sendOkCount"] = discoveredNodes[i].sendOkCount;
+    node["sendFailCount"] = discoveredNodes[i].sendFailCount;
+    node["receivedCount"] = discoveredNodes[i].receivedCount;
+    node["lostPackets"] = discoveredNodes[i].lostPackets;
+    node["lastError"] = discoveredNodes[i].lastError;
     node["peerKnown"] = isPeerKnown(node["mac"].as<String>());
+  }
+  JsonArray remoteActuators = out["remoteActuators"].to<JsonArray>();
+  for (uint8_t i = 0; i < MAX_DISCOVERED_ACTUATORS; i++) {
+    if (!discoveredActuators[i].used) continue;
+    JsonObject item = remoteActuators.add<JsonObject>();
+    item["mac"] = macToString(discoveredActuators[i].mac);
+    item["nodeId"] = discoveredActuators[i].nodeId;
+    item["nodeName"] = discoveredActuators[i].nodeName;
+    item["actuatorId"] = discoveredActuators[i].actuatorId;
+    item["actuatorName"] = discoveredActuators[i].actuatorName;
+    item["actuatorRole"] = discoveredActuators[i].actuatorRole;
+    item["actuatorType"] = discoveredActuators[i].actuatorType;
+    item["actuatorTypeText"] = espNowActuatorTypeText(discoveredActuators[i].actuatorType);
+    item["electricalMode"] = discoveredActuators[i].electricalMode;
+    item["maxPowerW"] = discoveredActuators[i].maxPowerW;
+    item["enabled"] = discoveredActuators[i].enabled;
+    item["critical"] = discoveredActuators[i].critical;
+    item["commandTimeoutMs"] = discoveredActuators[i].commandTimeoutMs;
+    item["firmwareVersion"] = discoveredActuators[i].firmwareVersion;
+    item["littlefsVersion"] = discoveredActuators[i].littlefsVersion;
+    item["ageMs"] = discoveredActuators[i].lastSeenMs && now >= discoveredActuators[i].lastSeenMs ? now - discoveredActuators[i].lastSeenMs : 4294967295UL;
+    item["ok"] = discoveredActuators[i].lastSeenMs && now >= discoveredActuators[i].lastSeenMs && (now - discoveredActuators[i].lastSeenMs) <= 30000UL;
+  }
+  if (sensorManager) sensorManager->remoteSensorsToJson(out["remoteSensors"].to<JsonArray>(), false);
+  if (doc.overflowed()) {
+    state.addLog("ESP-NOW status JSON tronque: memoire insuffisante");
+    out["jsonOverflow"] = true;
   }
   String outText;
   serializeJson(doc, outText);
@@ -350,9 +503,12 @@ String EspNowManager::discoveredNodesJson() {
     node["nodeId"] = discoveredNodes[i].nodeId;
     node["nodeName"] = discoveredNodes[i].nodeName;
     node["roleFlags"] = discoveredNodes[i].roleFlags;
+    node["functionalRole"] = espNowFunctionalRoleText(discoveredNodes[i].roleFlags);
+    node["redundancyRole"] = espNowRedundancyRoleText(discoveredNodes[i].redundancyRole);
     node["capabilityFlags"] = discoveredNodes[i].capabilityFlags;
     node["primarySensorType"] = discoveredNodes[i].primarySensorType;
     node["primarySensorText"] = espNowSensorTypeText(discoveredNodes[i].primarySensorType);
+    node["lastFrameType"] = espNowPacketTypeText(discoveredNodes[i].lastFrameType);
     node["ageMs"] = now >= discoveredNodes[i].lastSeenMs ? now - discoveredNodes[i].lastSeenMs : 0;
     node["peerKnown"] = isPeerKnown(node["mac"].as<String>());
   }
@@ -368,16 +524,20 @@ bool EspNowManager::sendDiscovery() {
   EspNowDiscoveryPacket packet{};
   packet.version = ESPNOW_PROTOCOL_VERSION;
   packet.packetType = ESPNOW_PACKET_DISCOVERY;
-  packet.nodeId = static_cast<uint8_t>(state.role);
+  packet.nodeId = localNodeId();
   String nodeName = state.moduleName;
   if (!nodeName.length()) nodeName = config.device()["deviceName"] | config.device()["name"] | "RouteurSolaire";
   espNowCopyFixedText(packet.nodeName, sizeof(packet.nodeName), nodeName.c_str());
   packet.roleFlags = localRoleFlags();
+  packet.redundancyRole = localRedundancyRole();
   packet.capabilityFlags = localCapabilityFlags();
   packet.primarySensorType = SENSOR_ROUTER;
   WiFi.macAddress(packet.mac);
   packet.sequence = ++discoverySequenceCounter;
   packet.uptimeMs = millis();
+  espNowCopyFixedText(packet.firmwareVersion, sizeof(packet.firmwareVersion), ROUTEUR_FIRMWARE_VERSION);
+  String littlefs = espNowLocalLittlefsVersion();
+  espNowCopyFixedText(packet.littlefsVersion, sizeof(packet.littlefsVersion), littlefs.c_str());
   packet.checksum = espNowCalculateChecksum(packet);
   lastDiscoverySentMs = packet.uptimeMs;
 
@@ -448,6 +608,7 @@ void EspNowManager::handleDiscoveryPacket(const uint8_t *mac, const uint8_t *dat
     state.addLog("ESP-NOW discovery table pleine");
     return;
   }
+  markDiscoveredNodeFrame(*node, ESPNOW_PACKET_DISCOVERY, millis());
   if (millis() - lastRxLogMs > 1000) {
     lastRxLogMs = millis();
     state.addLog(String("ESP-NOW noeud detecte: ") + node->nodeName + " " + macToString(node->mac));
@@ -477,6 +638,11 @@ void EspNowManager::handleSensorPacket(const uint8_t *mac, const uint8_t *data, 
   bool matched = false;
   const String sourceMac = macToString(mac);
   state.lastEspNowSensorReceiveMs = millis();
+  if (EspNowDiscoveredNode *node = findOrCreateDiscoveredNode(mac, packet.nodeId, packet.nodeName)) {
+    node->roleFlags |= ESPNOW_ROLE_PRODUCER;
+    node->primarySensorType = packet.sensorType;
+    markDiscoveredNodeFrame(*node, ESPNOW_PACKET_SENSOR_DATA, millis());
+  }
   logDebugSensorPacketIfNeeded(sourceMac, packet);
   if (sensorManager) matched = sensorManager->updateRemoteSensor(sourceMac, packet);
   if (millis() - lastSensorRxSummaryLogMs > 5000UL) {
@@ -509,6 +675,11 @@ void EspNowManager::handleFastSensorPacket(const uint8_t *mac, const uint8_t *da
     return;
   }
   state.lastEspNowSensorReceiveMs = millis();
+  if (EspNowDiscoveredNode *node = findOrCreateDiscoveredNode(mac, packet.nodeId, nullptr)) {
+    node->roleFlags |= ESPNOW_ROLE_PRODUCER;
+    node->primarySensorType = packet.sensorType;
+    markDiscoveredNodeFrame(*node, ESPNOW_PACKET_FAST_DATA, millis());
+  }
   logDebugFastSensorPacketIfNeeded(sourceMac, packet, len);
   bool matched = false;
   if (sensorManager) matched = sensorManager->updateRemoteSensorFast(sourceMac, packet);
@@ -530,8 +701,66 @@ void EspNowManager::handleSensorDiscoveryPacket(const uint8_t *mac, const uint8_
     state.addLog(String("ESP-NOW SENSOR_DISCOVERY invalide mac=") + sourceMac + " nodeId=" + String(packet.nodeId) + " sensorId=" + String(packet.sensorId) + " values=" + String(packet.valueCount) + " checksum=" + String(packet.checksum) + "/" + String(espNowCalculateChecksum(packet)));
     return;
   }
+  if (EspNowDiscoveredNode *node = findOrCreateDiscoveredNode(mac, packet.nodeId, packet.nodeName)) {
+    node->roleFlags |= ESPNOW_ROLE_PRODUCER;
+    if (!node->firmwareVersion[0]) espNowCopyFixedText(node->firmwareVersion, sizeof(node->firmwareVersion), packet.firmwareVersion);
+    if (!node->littlefsVersion[0]) espNowCopyFixedText(node->littlefsVersion, sizeof(node->littlefsVersion), packet.littlefsVersion);
+    node->primarySensorType = packet.sensorType;
+    markDiscoveredNodeFrame(*node, ESPNOW_PACKET_SENSOR_DISCOVERY, millis());
+  }
   logDebugSensorDiscoveryPacketIfNeeded(sourceMac, packet, len);
   if (sensorManager) sensorManager->updateRemoteSensorDiscovery(sourceMac, packet);
+}
+
+void EspNowManager::handleActuatorDiscoveryPacket(const uint8_t *mac, const uint8_t *data, int len) {
+  const String sourceMac = macToString(mac);
+  if (len != static_cast<int>(sizeof(EspNowActuatorDiscoveryPacket))) {
+    state.addLog(String("ESP-NOW ACTUATOR_DISCOVERY taille invalide mac=") + sourceMac + " len=" + String(len) + " attendu=" + String(sizeof(EspNowActuatorDiscoveryPacket)));
+    return;
+  }
+  EspNowActuatorDiscoveryPacket packet{};
+  memcpy(&packet, data, sizeof(packet));
+  if (!espNowChecksumValid(packet)) {
+    state.addLog(String("ESP-NOW ACTUATOR_DISCOVERY invalide mac=") + sourceMac + " checksum=" + String(packet.checksum) + "/" + String(espNowCalculateChecksum(packet)));
+    return;
+  }
+  if (EspNowDiscoveredNode *node = findOrCreateDiscoveredNode(mac, packet.nodeId, packet.nodeName)) {
+    node->roleFlags |= ESPNOW_ROLE_ACTUATOR | ESPNOW_ROLE_CONSUMER;
+    node->capabilityFlags |= ESPNOW_CAP_ACTUATOR;
+    if (!node->firmwareVersion[0]) espNowCopyFixedText(node->firmwareVersion, sizeof(node->firmwareVersion), packet.firmwareVersion);
+    if (!node->littlefsVersion[0]) espNowCopyFixedText(node->littlefsVersion, sizeof(node->littlefsVersion), packet.littlefsVersion);
+    markDiscoveredNodeFrame(*node, ESPNOW_PACKET_ACTUATOR_DISCOVERY, millis());
+  }
+
+  EspNowDiscoveredActuator *slot = nullptr;
+  for (uint8_t i = 0; i < MAX_DISCOVERED_ACTUATORS; i++) {
+    if (discoveredActuators[i].used && memcmp(discoveredActuators[i].mac, mac, 6) == 0 && strncmp(discoveredActuators[i].actuatorId, packet.actuatorId, sizeof(discoveredActuators[i].actuatorId)) == 0) {
+      slot = &discoveredActuators[i];
+      break;
+    }
+    if (!discoveredActuators[i].used && !slot) slot = &discoveredActuators[i];
+  }
+  if (!slot) {
+    state.addLog("ESP-NOW actionneur discovery ignore: table pleine");
+    return;
+  }
+  slot->used = true;
+  memcpy(slot->mac, mac, 6);
+  slot->nodeId = packet.nodeId;
+  espNowCopyFixedText(slot->nodeName, sizeof(slot->nodeName), packet.nodeName);
+  espNowCopyFixedText(slot->actuatorId, sizeof(slot->actuatorId), packet.actuatorId);
+  espNowCopyFixedText(slot->actuatorName, sizeof(slot->actuatorName), packet.actuatorName);
+  espNowCopyFixedText(slot->actuatorRole, sizeof(slot->actuatorRole), packet.actuatorRole);
+  slot->actuatorType = packet.actuatorType;
+  espNowCopyFixedText(slot->electricalMode, sizeof(slot->electricalMode), packet.electricalMode);
+  slot->maxPowerW = packet.maxPowerW;
+  slot->enabled = packet.enabled;
+  slot->critical = packet.critical;
+  slot->commandTimeoutMs = packet.commandTimeoutMs;
+  espNowCopyFixedText(slot->firmwareVersion, sizeof(slot->firmwareVersion), packet.firmwareVersion);
+  espNowCopyFixedText(slot->littlefsVersion, sizeof(slot->littlefsVersion), packet.littlefsVersion);
+  slot->lastSeenMs = millis();
+  logDebugActuatorDiscoveryPacketIfNeeded(sourceMac, packet, len);
 }
 
 void EspNowManager::handleDiagnosticPacket(const uint8_t *mac, const uint8_t *data, int len) {
@@ -545,6 +774,17 @@ void EspNowManager::handleDiagnosticPacket(const uint8_t *mac, const uint8_t *da
   if (!espNowChecksumValid(packet)) {
     state.addLog(String("ESP-NOW DIAGNOSTIC checksum invalide mac=") + sourceMac + " checksum=" + String(packet.checksum) + "/" + String(espNowCalculateChecksum(packet)));
     return;
+  }
+  if (EspNowDiscoveredNode *node = findOrCreateDiscoveredNode(mac, packet.nodeId, nullptr)) {
+    node->uptimeMs = packet.uptimeMs;
+    node->freeHeap = packet.freeHeap;
+    node->rssiDbm = packet.rssiDbm;
+    node->sendOkCount = packet.sendOkCount;
+    node->sendFailCount = packet.sendFailCount;
+    node->receivedCount = packet.receivedCount;
+    node->lostPackets = packet.lostPackets;
+    node->lastError = packet.lastError;
+    markDiscoveredNodeFrame(*node, ESPNOW_PACKET_DIAGNOSTIC, millis());
   }
   logDebugDiagnosticPacketIfNeeded(sourceMac, packet, len);
   if (sensorManager) sensorManager->updateRemoteDiagnostic(sourceMac, packet);
@@ -565,10 +805,34 @@ EspNowDiscoveredNode *EspNowManager::rememberDiscoveredNode(const uint8_t *mac, 
   slot->nodeId = packet.nodeId;
   espNowCopyFixedText(slot->nodeName, sizeof(slot->nodeName), packet.nodeName);
   slot->roleFlags = packet.roleFlags;
+  slot->redundancyRole = packet.redundancyRole;
   slot->capabilityFlags = packet.capabilityFlags;
   slot->primarySensorType = packet.primarySensorType;
-  slot->lastSeenMs = millis();
+  espNowCopyFixedText(slot->firmwareVersion, sizeof(slot->firmwareVersion), packet.firmwareVersion);
+  espNowCopyFixedText(slot->littlefsVersion, sizeof(slot->littlefsVersion), packet.littlefsVersion);
+  slot->uptimeMs = packet.uptimeMs;
   slot->lastSequence = packet.sequence;
+  return slot;
+}
+
+EspNowDiscoveredNode *EspNowManager::findOrCreateDiscoveredNode(const uint8_t *mac, uint8_t nodeId, const char *nodeName, bool updateNodeId) {
+  EspNowDiscoveredNode *slot = nullptr;
+  bool created = false;
+  for (uint8_t i = 0; i < ESPNOW_MAX_DISCOVERED_NODES; i++) {
+    if (discoveredNodes[i].used && memcmp(discoveredNodes[i].mac, mac, 6) == 0) {
+      slot = &discoveredNodes[i];
+      break;
+    }
+    if (!discoveredNodes[i].used && !slot) slot = &discoveredNodes[i];
+  }
+  if (!slot) return nullptr;
+  created = !slot->used;
+  slot->used = true;
+  memcpy(slot->mac, mac, 6);
+  if (created || updateNodeId || slot->nodeId == 0) slot->nodeId = nodeId;
+  if (slot->roleFlags == ESPNOW_ROLE_NONE) slot->roleFlags = ESPNOW_ROLE_NONE;
+  if (nodeName && nodeName[0]) espNowCopyFixedText(slot->nodeName, sizeof(slot->nodeName), nodeName);
+  else if (!slot->nodeName[0]) espNowCopyFixedText(slot->nodeName, sizeof(slot->nodeName), "ESP-NOW");
   return slot;
 }
 
@@ -641,25 +905,6 @@ EspNowExportConfig EspNowManager::exportConfigFor(uint8_t sensorId, const char *
       out.sendOnChange = sensor["espNowSendOnChange"] | false;
       out.minDelta = sensor["espNowMinDelta"] | 0.0f;
       out.timeoutMs = sensor["espNowTimeoutMs"] | 0UL;
-      return out;
-    }
-  }
-
-  JsonArray exports = config.system()["espnow"]["exports"].as<JsonArray>();
-  if (!exports.isNull()) {
-    for (JsonObject item : exports) {
-      if ((item["sensorId"] | 0) != sensorId) continue;
-      const char *name = item["sensorName"] | out.sensorName;
-      const char *role = item["sensorRole"] | "";
-      espNowCopyFixedText(out.sensorName, sizeof(out.sensorName), name);
-      espNowCopyFixedText(out.sensorRole, sizeof(out.sensorRole), role);
-      out.sensorType = item["sensorType"] | out.sensorType;
-      out.exportEnabled = item["exportEnabled"] | false;
-      out.exportIntervalMs = item["exportIntervalMs"] | out.exportIntervalMs;
-      out.priority = item["priority"] | out.priority;
-      out.sendOnChange = item["sendOnChange"] | false;
-      out.minDelta = item["minDelta"] | 0.0f;
-      out.timeoutMs = item["timeoutMs"] | 0UL;
       return out;
     }
   }
@@ -757,7 +1002,7 @@ bool EspNowManager::buildFastPacketForSensor(uint8_t sensorId, EspNowFastSensorP
   packet = {};
   packet.version = ESPNOW_PROTOCOL_VERSION;
   packet.packetType = ESPNOW_PACKET_FAST_DATA;
-  packet.nodeId = static_cast<uint8_t>(state.role);
+  packet.nodeId = localNodeId();
   packet.sensorId = sensorId;
   packet.sensorType = cfg.sensorType;
   packet.sequence = ++sequenceCounter;
@@ -772,13 +1017,7 @@ bool EspNowManager::buildFastPacketForSensor(uint8_t sensorId, EspNowFastSensorP
     return packet.valueCount > 0;
   }
   if (sensorId == SENSOR_JSY) {
-    if (!state.jsyOnline) return false;
-    addFastPacketValue(packet, VALUE_GRID_POWER_W, state.jsyGridPowerW);
-    addFastPacketValue(packet, VALUE_VOLTAGE_V, state.gridVoltageV);
-    addFastPacketValue(packet, VALUE_CURRENT_A, state.gridCurrentA);
-    addFastPacketValue(packet, VALUE_POWER_FACTOR, state.gridPowerFactor);
-    addFastPacketValue(packet, VALUE_FREQUENCY_HZ, state.gridFrequencyHz);
-    return packet.valueCount > 0;
+    return false;
   }
   if (sensorId >= 20 && sensorId <= 22) {
     uint8_t index = sensorId - 20;
@@ -820,19 +1059,20 @@ bool EspNowManager::buildDiscoveryPacketForSensor(uint8_t sensorId, EspNowSensor
 
   String nodeName = state.moduleName;
   if (!nodeName.length()) nodeName = config.device()["deviceName"] | config.device()["name"] | "RouteurSolaire";
-  String firmware = config.device()["firmwareVersion"] | "";
-  if (!firmware.length()) firmware = "v3";
+  String firmware = ROUTEUR_FIRMWARE_VERSION;
+  String littlefs = espNowLocalLittlefsVersion();
 
   packet = {};
   packet.version = ESPNOW_PROTOCOL_VERSION;
   packet.packetType = ESPNOW_PACKET_SENSOR_DISCOVERY;
-  packet.nodeId = static_cast<uint8_t>(state.role);
+  packet.nodeId = localNodeId();
   espNowCopyFixedText(packet.nodeName, sizeof(packet.nodeName), nodeName.c_str());
   packet.sensorId = sensorId;
   espNowCopyFixedText(packet.sensorName, sizeof(packet.sensorName), cfg.sensorName);
   espNowCopyFixedText(packet.sensorRole, sizeof(packet.sensorRole), cfg.sensorRole);
   packet.sensorType = cfg.sensorType;
   espNowCopyFixedText(packet.firmwareVersion, sizeof(packet.firmwareVersion), firmware.c_str());
+  espNowCopyFixedText(packet.littlefsVersion, sizeof(packet.littlefsVersion), littlefs.c_str());
 
   if (sensorId == SENSOR_LINKY) {
     addSensorDiscoveryValue(packet, VALUE_GRID_POWER_W, "GRID", "W");
@@ -857,10 +1097,176 @@ bool EspNowManager::buildDiscoveryPacketForSensor(uint8_t sensorId, EspNowSensor
   return packet.valueCount > 0;
 }
 
+bool EspNowManager::buildActuatorDiscoveryPacket(JsonObject actuator, EspNowActuatorDiscoveryPacket &packet) {
+  String source = actuator["source"] | "local";
+  if (source.equalsIgnoreCase("espnow")) return false;
+  if (!(actuator["espNowExportEnabled"] | false)) return false;
+
+  String id = actuator["id"] | "";
+  if (!id.length()) return false;
+  String nodeName = state.moduleName;
+  if (!nodeName.length()) nodeName = config.device()["deviceName"] | config.device()["name"] | "RouteurSolaire";
+  String firmware = ROUTEUR_FIRMWARE_VERSION;
+  String littlefs = espNowLocalLittlefsVersion();
+  String type = actuator["type"] | "SSR";
+  String mode = actuator["mode"] | "OFF";
+  String name = actuator["espNowExportName"] | actuator["name"] | id.c_str();
+  String role = actuator["espNowExportRole"] | actuator["role"] | actuator["usage"] | "actuator";
+  uint32_t maxPowerW = actuator["maxPowerW"] | 0UL;
+
+  packet = {};
+  packet.version = ESPNOW_PROTOCOL_VERSION;
+  packet.packetType = ESPNOW_PACKET_ACTUATOR_DISCOVERY;
+  packet.nodeId = localNodeId();
+  espNowCopyFixedText(packet.nodeName, sizeof(packet.nodeName), nodeName.c_str());
+  espNowCopyFixedText(packet.actuatorId, sizeof(packet.actuatorId), id.c_str());
+  espNowCopyFixedText(packet.actuatorName, sizeof(packet.actuatorName), name.c_str());
+  espNowCopyFixedText(packet.actuatorRole, sizeof(packet.actuatorRole), role.c_str());
+  packet.actuatorType = espNowActuatorTypeFor(type);
+  espNowCopyFixedText(packet.electricalMode, sizeof(packet.electricalMode), mode.c_str());
+  packet.maxPowerW = static_cast<uint16_t>(constrain(maxPowerW, 0UL, 65535UL));
+  packet.enabled = actuator["enabled"] | true;
+  packet.critical = actuator["critical"] | false;
+  packet.commandTimeoutMs = actuator["espNowCommandTimeoutMs"] | actuator["ttlMs"] | 1000UL;
+  espNowCopyFixedText(packet.firmwareVersion, sizeof(packet.firmwareVersion), firmware.c_str());
+  espNowCopyFixedText(packet.littlefsVersion, sizeof(packet.littlefsVersion), littlefs.c_str());
+  return true;
+}
+
+bool EspNowManager::sendJsySensorDataChunks(uint32_t now) {
+  EspNowExportConfig cfg = exportConfigFor(SENSOR_JSY);
+  if (!cfg.exportEnabled || !state.jsyOnline) return false;
+
+  String nodeName = state.moduleName;
+  if (!nodeName.length()) nodeName = config.device()["deviceName"] | config.device()["name"] | "RouteurSolaire";
+
+  EspNowSensorPacket packet1{};
+  packet1.version = ESPNOW_PROTOCOL_VERSION;
+  packet1.packetType = ESPNOW_PACKET_SENSOR_DATA;
+  packet1.nodeId = localNodeId();
+  espNowCopyFixedText(packet1.nodeName, sizeof(packet1.nodeName), nodeName.c_str());
+  packet1.sensorId = SENSOR_JSY;
+  espNowCopyFixedText(packet1.sensorName, sizeof(packet1.sensorName), cfg.sensorName);
+  packet1.sensorType = SENSOR_JSY;
+  packet1.sequence = ++sequenceCounter;
+  packet1.timestampMs = now;
+  packet1.sensorOk = true;
+
+  addSensorPacketValue(packet1, VALUE_VOLTAGE_V, "VOLT", state.gridVoltageV, "V");
+  addSensorPacketValue(packet1, VALUE_FREQUENCY_HZ, "FREQ", state.gridFrequencyHz, "Hz");
+  addSensorPacketValue(packet1, VALUE_CURRENT_A, "CH1_CURR", state.currentA1, "A");
+  addSensorPacketValue(packet1, VALUE_POWER_W, "CH1_POWER", state.activePowerW1, "W");
+  addSensorPacketValue(packet1, VALUE_POWER_FACTOR, "CH1_PF", state.powerFactor1, "");
+  addSensorPacketValue(packet1, VALUE_ENERGY_KWH, "CH1_EPOS", state.jsyImportEnergyWh1, "Wh");
+  addSensorPacketValue(packet1, VALUE_ENERGY_KWH, "CH1_ENEG", state.jsyExportEnergyWh1, "Wh");
+  addSensorPacketValue(packet1, VALUE_STATE_BOOL, "CH1_DIR", state.energyDirection1 == "injection" ? -1.0f : 1.0f, "");
+
+  EspNowSensorPacket packet2{};
+  packet2.version = ESPNOW_PROTOCOL_VERSION;
+  packet2.packetType = ESPNOW_PACKET_SENSOR_DATA;
+  packet2.nodeId = localNodeId();
+  espNowCopyFixedText(packet2.nodeName, sizeof(packet2.nodeName), nodeName.c_str());
+  packet2.sensorId = SENSOR_JSY;
+  espNowCopyFixedText(packet2.sensorName, sizeof(packet2.sensorName), cfg.sensorName);
+  packet2.sensorType = SENSOR_JSY;
+  packet2.sequence = ++sequenceCounter;
+  packet2.timestampMs = now;
+  packet2.sensorOk = true;
+
+  addSensorPacketValue(packet2, VALUE_CURRENT_A, "CH2_CURR", state.currentA2, "A");
+  addSensorPacketValue(packet2, VALUE_POWER_W, "CH2_POWER", state.activePowerW2, "W");
+  addSensorPacketValue(packet2, VALUE_POWER_FACTOR, "CH2_PF", state.powerFactor2, "");
+  addSensorPacketValue(packet2, VALUE_ENERGY_KWH, "CH2_EPOS", state.jsyImportEnergyWh2, "Wh");
+  addSensorPacketValue(packet2, VALUE_ENERGY_KWH, "CH2_ENEG", state.jsyExportEnergyWh2, "Wh");
+  addSensorPacketValue(packet2, VALUE_STATE_BOOL, "CH2_DIR", state.energyDirection2 == "injection" ? -1.0f : 1.0f, "");
+
+  bool sent = false;
+  if (packet1.valueCount) sent = sendSensorPacketToPeers(packet1) || sent;
+  if (packet2.valueCount) sent = sendSensorPacketToPeers(packet2) || sent;
+  return sent;
+}
+
+bool EspNowManager::sendJsyDiscoveryChunks() {
+  EspNowExportConfig cfg = exportConfigFor(SENSOR_JSY);
+  if (!cfg.exportEnabled) return false;
+
+  String nodeName = state.moduleName;
+  if (!nodeName.length()) nodeName = config.device()["deviceName"] | config.device()["name"] | "RouteurSolaire";
+  String firmware = ROUTEUR_FIRMWARE_VERSION;
+  String littlefs = espNowLocalLittlefsVersion();
+
+  EspNowSensorDiscoveryPacket packet1{};
+  packet1.version = ESPNOW_PROTOCOL_VERSION;
+  packet1.packetType = ESPNOW_PACKET_SENSOR_DISCOVERY;
+  packet1.nodeId = localNodeId();
+  espNowCopyFixedText(packet1.nodeName, sizeof(packet1.nodeName), nodeName.c_str());
+  packet1.sensorId = SENSOR_JSY;
+  espNowCopyFixedText(packet1.sensorName, sizeof(packet1.sensorName), cfg.sensorName);
+  espNowCopyFixedText(packet1.sensorRole, sizeof(packet1.sensorRole), cfg.sensorRole);
+  packet1.sensorType = SENSOR_JSY;
+  espNowCopyFixedText(packet1.firmwareVersion, sizeof(packet1.firmwareVersion), firmware.c_str());
+  espNowCopyFixedText(packet1.littlefsVersion, sizeof(packet1.littlefsVersion), littlefs.c_str());
+  addSensorDiscoveryValue(packet1, VALUE_VOLTAGE_V, "VOLT", "V");
+  addSensorDiscoveryValue(packet1, VALUE_FREQUENCY_HZ, "FREQ", "Hz");
+  addSensorDiscoveryValue(packet1, VALUE_CURRENT_A, "CH1_CURR", "A");
+  addSensorDiscoveryValue(packet1, VALUE_POWER_W, "CH1_POWER", "W");
+  addSensorDiscoveryValue(packet1, VALUE_POWER_FACTOR, "CH1_PF", "");
+  addSensorDiscoveryValue(packet1, VALUE_ENERGY_KWH, "CH1_EPOS", "Wh");
+
+  EspNowSensorDiscoveryPacket packet2{};
+  packet2.version = ESPNOW_PROTOCOL_VERSION;
+  packet2.packetType = ESPNOW_PACKET_SENSOR_DISCOVERY;
+  packet2.nodeId = localNodeId();
+  espNowCopyFixedText(packet2.nodeName, sizeof(packet2.nodeName), nodeName.c_str());
+  packet2.sensorId = SENSOR_JSY;
+  espNowCopyFixedText(packet2.sensorName, sizeof(packet2.sensorName), cfg.sensorName);
+  espNowCopyFixedText(packet2.sensorRole, sizeof(packet2.sensorRole), cfg.sensorRole);
+  packet2.sensorType = SENSOR_JSY;
+  espNowCopyFixedText(packet2.firmwareVersion, sizeof(packet2.firmwareVersion), firmware.c_str());
+  espNowCopyFixedText(packet2.littlefsVersion, sizeof(packet2.littlefsVersion), littlefs.c_str());
+  addSensorDiscoveryValue(packet2, VALUE_ENERGY_KWH, "CH1_ENEG", "Wh");
+  addSensorDiscoveryValue(packet2, VALUE_STATE_BOOL, "CH1_DIR", "");
+  addSensorDiscoveryValue(packet2, VALUE_CURRENT_A, "CH2_CURR", "A");
+  addSensorDiscoveryValue(packet2, VALUE_POWER_W, "CH2_POWER", "W");
+  addSensorDiscoveryValue(packet2, VALUE_POWER_FACTOR, "CH2_PF", "");
+  addSensorDiscoveryValue(packet2, VALUE_ENERGY_KWH, "CH2_EPOS", "Wh");
+
+  EspNowSensorDiscoveryPacket packet3{};
+  packet3.version = ESPNOW_PROTOCOL_VERSION;
+  packet3.packetType = ESPNOW_PACKET_SENSOR_DISCOVERY;
+  packet3.nodeId = localNodeId();
+  espNowCopyFixedText(packet3.nodeName, sizeof(packet3.nodeName), nodeName.c_str());
+  packet3.sensorId = SENSOR_JSY;
+  espNowCopyFixedText(packet3.sensorName, sizeof(packet3.sensorName), cfg.sensorName);
+  espNowCopyFixedText(packet3.sensorRole, sizeof(packet3.sensorRole), cfg.sensorRole);
+  packet3.sensorType = SENSOR_JSY;
+  espNowCopyFixedText(packet3.firmwareVersion, sizeof(packet3.firmwareVersion), firmware.c_str());
+  espNowCopyFixedText(packet3.littlefsVersion, sizeof(packet3.littlefsVersion), littlefs.c_str());
+  addSensorDiscoveryValue(packet3, VALUE_ENERGY_KWH, "CH2_ENEG", "Wh");
+  addSensorDiscoveryValue(packet3, VALUE_STATE_BOOL, "CH2_DIR", "");
+
+  bool sent = false;
+  sent = sendSensorDiscoveryToPeers(packet1) || sent;
+  sent = sendSensorDiscoveryToPeers(packet2) || sent;
+  sent = sendSensorDiscoveryToPeers(packet3) || sent;
+  return sent;
+}
+
 void EspNowManager::exportSensorIfNeeded(uint8_t sensorId) {
   float currentValue = 0.0f;
   if (!currentExportValue(sensorId, currentValue)) return;
   if (!shouldExportSensor(sensorId, currentValue)) return;
+
+  if (sensorId == SENSOR_JSY) {
+    if (!sendJsySensorDataChunks(currentLoopNowMs)) return;
+    int8_t slot = ensureExportRuntimeIndex(sensorId);
+    if (slot >= 0) {
+      exportLastSentMs[slot] = currentLoopNowMs;
+      exportLastValues[slot] = currentValue;
+      exportLastValueValid[slot] = true;
+    }
+    return;
+  }
 
   EspNowFastSensorPacket packet{};
   if (!buildFastPacketForSensor(sensorId, packet, currentLoopNowMs)) return;
@@ -878,6 +1284,16 @@ void EspNowManager::sendSensorFastData(uint8_t sensorId) {
   float currentValue = 0.0f;
   if (!currentExportValue(sensorId, currentValue)) return;
   uint32_t now = millis();
+  if (sensorId == SENSOR_JSY) {
+    if (!sendJsySensorDataChunks(now)) return;
+    int8_t slot = ensureExportRuntimeIndex(sensorId);
+    if (slot >= 0) {
+      exportLastSentMs[slot] = now;
+      exportLastValues[slot] = currentValue;
+      exportLastValueValid[slot] = true;
+    }
+    return;
+  }
   EspNowFastSensorPacket packet{};
   if (!buildFastPacketForSensor(sensorId, packet, now)) return;
   if (!sendFastPacketToPeers(packet)) return;
@@ -890,6 +1306,10 @@ void EspNowManager::sendSensorFastData(uint8_t sensorId) {
 }
 
 void EspNowManager::sendSensorDiscovery(uint8_t sensorId) {
+  if (sensorId == SENSOR_JSY) {
+    sendJsyDiscoveryChunks();
+    return;
+  }
   EspNowSensorDiscoveryPacket packet{};
   if (buildDiscoveryPacketForSensor(sensorId, packet)) sendSensorDiscoveryToPeers(packet);
 }
@@ -899,7 +1319,7 @@ void EspNowManager::sendSensorDiagnostic(uint8_t sensorId) {
   EspNowDiagnosticPacket packet{};
   packet.version = ESPNOW_PROTOCOL_VERSION;
   packet.packetType = ESPNOW_PACKET_DIAGNOSTIC;
-  packet.nodeId = static_cast<uint8_t>(state.role);
+  packet.nodeId = localNodeId();
   packet.uptimeMs = millis();
   packet.freeHeap = ESP.getFreeHeap();
   packet.rssiDbm = static_cast<int8_t>(constrain(state.rssi, -128, 127));
@@ -924,6 +1344,11 @@ void EspNowManager::publishLocalSensorDiscoveryIfNeeded(uint32_t now) {
   if (now - lastSensorDiscoveryPublishMs < intervalMs) return;
   lastSensorDiscoveryPublishMs = now;
 
+  sendAllSensorDiscovery();
+  sendAllActuatorDiscovery();
+}
+
+void EspNowManager::sendAllSensorDiscovery() {
   sendSensorDiscovery(SENSOR_LINKY);
   sendSensorDiscovery(SENSOR_JSY);
 
@@ -936,6 +1361,22 @@ void EspNowManager::publishLocalSensorDiscoveryIfNeeded(uint32_t now) {
   sendSensorDiscovery(31);
 }
 
+void EspNowManager::sendAllActuatorDiscovery() {
+  uint8_t exportedCount = 0;
+  for (JsonObject actuator : config.actuators()) {
+    String source = actuator["source"] | "local";
+    if (source.equalsIgnoreCase("espnow")) continue;
+    if (!(actuator["espNowExportEnabled"] | false)) continue;
+    if (!(actuator["enabled"] | true)) continue;
+    EspNowActuatorDiscoveryPacket packet{};
+    if (buildActuatorDiscoveryPacket(actuator, packet)) {
+      exportedCount++;
+      sendActuatorDiscoveryToPeers(packet);
+    }
+  }
+  if (espNowDebugTransmissionEnabled() && exportedCount == 0) state.addLog("ESP-NOW TX ACTUATOR_DISCOVERY aucun actionneur exporte");
+}
+
 void EspNowManager::publishDiagnosticIfNeeded(uint32_t now) {
   uint32_t intervalMs = config.system()["espnow"]["diagnosticIntervalMs"] | 10000UL;
   intervalMs = constrain(intervalMs, 5000UL, 60000UL);
@@ -945,7 +1386,7 @@ void EspNowManager::publishDiagnosticIfNeeded(uint32_t now) {
   EspNowDiagnosticPacket packet{};
   packet.version = ESPNOW_PROTOCOL_VERSION;
   packet.packetType = ESPNOW_PACKET_DIAGNOSTIC;
-  packet.nodeId = static_cast<uint8_t>(state.role);
+  packet.nodeId = localNodeId();
   packet.uptimeMs = now;
   packet.freeHeap = ESP.getFreeHeap();
   packet.rssiDbm = static_cast<int8_t>(constrain(state.rssi, -128, 127));
@@ -1020,9 +1461,40 @@ bool EspNowManager::sendSensorDiscoveryToPeers(EspNowSensorDiscoveryPacket &pack
       queuedCount++;
     }
   }
-  if (espNowDebugTransmissionEnabled() && millis() - lastDiscoveryTxSummaryLogMs > 10000UL) {
-    lastDiscoveryTxSummaryLogMs = millis();
+  if (espNowDebugTransmissionEnabled()) {
     state.addLog(String("ESP-NOW TX SENSOR_DISCOVERY sensorId=") + String(packet.sensorId) + " type=" + espNowSensorTypeText(packet.sensorType) + " values=" + String(packet.valueCount) + " len=" + String(sizeof(EspNowSensorDiscoveryPacket)) + " peersQueued=" + String(queuedCount) + "/" + String(peerCount));
+  }
+  return sent;
+}
+
+bool EspNowManager::sendActuatorDiscoveryToPeers(EspNowActuatorDiscoveryPacket &packet) {
+  packet.checksum = espNowCalculateChecksum(packet);
+  bool sent = false;
+  uint8_t queuedCount = 0;
+  uint8_t peerCount = 0;
+  for (JsonVariant peer : config.system()["peers"].as<JsonArray>()) {
+    uint8_t addr[6];
+    String mac = peer.as<String>();
+    if (!parseMac(mac, addr)) continue;
+    peerCount++;
+    if (!esp_now_is_peer_exist(addr)) addPeer(mac);
+    if (esp_now_send(addr, reinterpret_cast<const uint8_t *>(&packet), sizeof(packet)) == ESP_OK) {
+      sent = true;
+      queuedCount++;
+    }
+  }
+  if (espNowDebugTransmissionEnabled() || debugEnabledForLocalActuatorExport(packet.actuatorId)) {
+    String line = String("ESP-NOW TX ACTUATOR_DISCOVERY id=") + packet.actuatorId +
+      " name=" + packet.actuatorName +
+      " type=" + espNowActuatorTypeText(packet.actuatorType) +
+      " role=" + packet.actuatorRole +
+      " mode=" + packet.electricalMode +
+      " maxW=" + String(packet.maxPowerW) +
+      " len=" + String(sizeof(EspNowActuatorDiscoveryPacket)) +
+      " peersQueued=" + String(queuedCount) + "/" + String(peerCount) +
+      (sent ? "" : " non_envoye");
+    state.addLog(line);
+    state.logEvent(sent ? "INFO" : "WARNING", "ESPNOW_ACTUATOR_TX", line, "EspNow");
   }
   return sent;
 }
@@ -1087,6 +1559,19 @@ bool EspNowManager::espNowDebugReceptionEnabled() {
   return config.system()["espnow"]["debugReception"] | false;
 }
 
+bool EspNowManager::debugEnabledForLocalActuatorExport(const char *actuatorId) {
+  if (!actuatorId || !actuatorId[0]) return false;
+  for (JsonObject actuator : config.actuators()) {
+    String source = actuator["source"] | "local";
+    if (source.equalsIgnoreCase("espnow")) continue;
+    if (!(actuator["espNowExportEnabled"] | false)) continue;
+    String id = actuator["id"] | "";
+    if (id != actuatorId) continue;
+    return (actuator["espNowDebug"] | false) || (actuator["debug"] | false);
+  }
+  return false;
+}
+
 bool EspNowManager::espNowSensorDebugEnabledForMac(const String &sourceMac) {
   for (JsonObject sensor : config.sensors()) {
     if (!(sensor["enabled"] | true)) continue;
@@ -1095,6 +1580,18 @@ bool EspNowManager::espNowSensorDebugEnabledForMac(const String &sourceMac) {
     String mac = sensor["mac"] | "";
     if (!mac.equalsIgnoreCase(sourceMac)) continue;
     if (sensor["debug"] | false) return true;
+  }
+  return false;
+}
+
+bool EspNowManager::espNowActuatorDebugEnabledForMac(const String &sourceMac) {
+  for (JsonObject actuator : config.actuators()) {
+    if (!(actuator["enabled"] | true)) continue;
+    String source = actuator["source"] | "local";
+    if (!source.equalsIgnoreCase("espnow")) continue;
+    String mac = actuator["mac"] | "";
+    if (!mac.equalsIgnoreCase(sourceMac)) continue;
+    if ((actuator["debug"] | false) || (actuator["espNowDebug"] | false)) return true;
   }
   return false;
 }
@@ -1134,31 +1631,39 @@ void EspNowManager::logDebugSensorPacketIfNeeded(const String &sourceMac, const 
   String sensorName = packet.sensorName;
   if (!sensorName.length()) sensorName = packet.nodeName;
   String configuredName;
-  if (!debugEnabledForRemoteSensor(sourceMac, packet.sensorId, packet.sensorType, configuredName)) return;
+  if (!espNowDebugReceptionEnabled() && !debugEnabledForRemoteSensor(sourceMac, packet.sensorId, packet.sensorType, configuredName)) return;
   if (configuredName.length()) sensorName = configuredName;
 
-  String line = "ESP-NOW decode ";
+  String line = "ESP-NOW SENSOR_DATA ";
   line += sensorName.length() ? sensorName : String(packet.nodeName);
   line += " mac=";
   line += sourceMac;
-  line += " seq=";
-  line += String(packet.sequence);
+  line += " len=";
+  line += String(sizeof(EspNowSensorPacket));
+  line += " nodeId=";
+  line += String(packet.nodeId);
   line += " sensorId=";
   line += String(packet.sensorId);
+  line += " seq=";
+  line += String(packet.sequence);
+  line += " remoteTsMs=";
+  line += String(packet.timestampMs);
   line += " sensorName=";
   line += packet.sensorName;
   line += " ok=";
   line += packet.sensorOk ? "true" : "false";
   line += " type=";
   line += espNowSensorTypeText(packet.sensorType);
+  line += " checksum=";
+  line += String(packet.checksum);
+  line += "/";
+  line += String(espNowCalculateChecksum(packet));
   line += " values:";
 
   for (uint8_t i = 0; i < packet.valueCount && i < ESPNOW_MAX_SENSOR_VALUES; i++) {
     line += " ";
-    line += "vt";
-    line += String(packet.values[i].valueType);
-    line += "/";
-    line += packet.values[i].key;
+    if (packet.values[i].key[0]) line += packet.values[i].key;
+    else line += espNowValueTypeText(packet.values[i].valueType);
     line += "=";
     if (isnan(packet.values[i].value) || isinf(packet.values[i].value)) line += "N/A";
     else line += String(packet.values[i].value, 3);
@@ -1259,6 +1764,36 @@ void EspNowManager::logDebugSensorDiscoveryPacketIfNeeded(const String &sourceMa
   state.logEvent("INFO", "ESPNOW_SENSOR_DECODE", line, "EspNow");
 }
 
+void EspNowManager::logDebugActuatorDiscoveryPacketIfNeeded(const String &sourceMac, const EspNowActuatorDiscoveryPacket &packet, int len) {
+  if (!espNowDebugReceptionEnabled() && !espNowActuatorDebugEnabledForMac(sourceMac)) return;
+
+  String line = "ESP-NOW ACTUATOR_DISCOVERY mac=";
+  line += sourceMac;
+  line += " len=";
+  line += String(len);
+  line += " node=";
+  line += packet.nodeName;
+  line += " id=";
+  line += packet.actuatorId;
+  line += " name=";
+  line += packet.actuatorName;
+  line += " role=";
+  line += packet.actuatorRole;
+  line += " type=";
+  line += espNowActuatorTypeText(packet.actuatorType);
+  line += " mode=";
+  line += packet.electricalMode;
+  line += " maxW=";
+  line += String(packet.maxPowerW);
+  line += " enabled=";
+  line += packet.enabled ? "1" : "0";
+  line += " critical=";
+  line += packet.critical ? "1" : "0";
+
+  Serial.println(line);
+  state.logEvent("INFO", "ESPNOW_ACTUATOR_DECODE", line, "EspNow");
+}
+
 void EspNowManager::logDebugDiagnosticPacketIfNeeded(const String &sourceMac, const EspNowDiagnosticPacket &packet, int len) {
   if (!espNowDebugReceptionEnabled() && !espNowSensorDebugEnabledForMac(sourceMac)) return;
 
@@ -1323,6 +1858,34 @@ uint16_t EspNowManager::localCapabilityFlags() {
     if ((actuator["enabled"] | false) || String(actuator["id"] | "").length()) flags |= ESPNOW_CAP_ACTUATOR;
   }
   return flags;
+}
+
+uint8_t EspNowManager::localNodeId() const {
+  return state.nodeId ? state.nodeId : 1;
+}
+
+uint8_t EspNowManager::fallbackNodeIdFromMac(const uint8_t *mac) const {
+  if (!mac) return 1;
+  uint16_t macHash = 0;
+  for (uint8_t i = 0; i < 6; i++) macHash = static_cast<uint16_t>((macHash * 33U) ^ mac[i]);
+  return static_cast<uint8_t>((macHash % 254U) + 1U);
+}
+
+uint8_t EspNowManager::localRedundancyRole() const {
+  if (state.role == ROLE_MASTER) return ESPNOW_REDUNDANCY_MASTER;
+  if (state.role == ROLE_BACKUP) return ESPNOW_REDUNDANCY_BACKUP;
+  return ESPNOW_REDUNDANCY_STANDALONE;
+}
+
+uint8_t EspNowManager::espNowActuatorTypeFor(const String &type) {
+  String normalized = type;
+  normalized.toUpperCase();
+  if (normalized.indexOf("SSR") >= 0) return ACTUATOR_SSR;
+  if (normalized.indexOf("TRIAC") >= 0 || normalized.indexOf("ROBOTDYN") >= 0) return ACTUATOR_TRIAC;
+  if (normalized.indexOf("RELAY") >= 0 || normalized.indexOf("RELAIS") >= 0) return ACTUATOR_RELAY;
+  if (normalized.indexOf("PWM") >= 0) return ACTUATOR_PWM;
+  if (normalized.indexOf("REMOTE") >= 0) return ACTUATOR_REMOTE;
+  return ACTUATOR_CUSTOM;
 }
 
 bool EspNowManager::acceptActuatorCommand(const EspNowMessage &message, const String &mac) {

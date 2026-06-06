@@ -12,14 +12,15 @@
 #include "../logic/rule_engine.h"
 #include "../safety/safety_manager.h"
 #include "../simulation/simulation_manager.h"
+#include "../status/status_led.h"
 
 class WebUi {
 public:
   WebUi(ConfigManager &config, RuntimeState &state, SolarWiFiManager &wifi, EspNowManager &espnow,
         RedundancyManager &redundancy, SensorManager &sensors, ActuatorManager &actuators, RuleEngine &rules, SafetyManager &safety,
-        SimulationManager &simulation)
+        SimulationManager &simulation, StatusLed &statusLed)
       : config(config), state(state), wifi(wifi), espnow(espnow), redundancy(redundancy),
-        sensors(sensors), actuators(actuators), rules(rules), safety(safety), simulation(simulation), server(80) {}
+        sensors(sensors), actuators(actuators), rules(rules), safety(safety), simulation(simulation), statusLed(statusLed), server(80) {}
   void begin();
   void loop();
 
@@ -34,6 +35,7 @@ private:
   RuleEngine &rules;
   SafetyManager &safety;
   SimulationManager &simulation;
+  StatusLed &statusLed;
   WebServer server;
   bool littleFsOtaBackupOk = false;
 
@@ -48,6 +50,10 @@ private:
   void sendSystemInfo();
   void appendJsonNumber(String &out, float value, uint8_t decimals = 1);
   bool streamLittleFsFile(const char *path, const char *contentType);
+  bool downloadGithubAssetToUpdate(const String &url, int updateCommand, const char *logCode, String &error, size_t &written, int &httpCode);
+  void sendGithubOtaCheck();
+  void startGithubFirmwareOta();
+  void startGithubLittleFsOta();
   String fallbackStyleCss();
   void sendFsListJson();
   void appendFsListJson(String &out, const char *dirname);

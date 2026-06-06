@@ -3,7 +3,7 @@
 #include <Arduino.h>
 #include <stddef.h>
 
-static const uint8_t ESPNOW_PROTOCOL_VERSION = 3;
+static const uint8_t ESPNOW_PROTOCOL_VERSION = 4;
 static const uint8_t ESPNOW_MAX_SENSOR_VALUES = 8;
 static const uint8_t ESPNOW_MAX_FAST_VALUES = 6;
 static const uint8_t ESPNOW_SENSOR_NAME_LEN = 12;
@@ -17,7 +17,8 @@ enum EspNowPacketType : uint8_t {
   ESPNOW_PACKET_SENSOR_DATA = 2,
   ESPNOW_PACKET_FAST_DATA = 3,
   ESPNOW_PACKET_DIAGNOSTIC = 4,
-  ESPNOW_PACKET_SENSOR_DISCOVERY = 5
+  ESPNOW_PACKET_SENSOR_DISCOVERY = 5,
+  ESPNOW_PACKET_ACTUATOR_DISCOVERY = 6
 };
 
 enum EspNowFrameType : uint8_t {
@@ -26,7 +27,8 @@ enum EspNowFrameType : uint8_t {
   FRAME_LEGACY_SENSOR_DATA = ESPNOW_PACKET_SENSOR_DATA,
   FRAME_FAST_DATA = ESPNOW_PACKET_FAST_DATA,
   FRAME_DIAGNOSTIC = ESPNOW_PACKET_DIAGNOSTIC,
-  FRAME_SENSOR_DISCOVERY = ESPNOW_PACKET_SENSOR_DISCOVERY
+  FRAME_SENSOR_DISCOVERY = ESPNOW_PACKET_SENSOR_DISCOVERY,
+  FRAME_ACTUATOR_DISCOVERY = ESPNOW_PACKET_ACTUATOR_DISCOVERY
 };
 
 enum EspNowNodeRole : uint8_t {
@@ -51,6 +53,16 @@ enum EspNowSensorType : uint8_t {
 };
 
 static const uint8_t SENSOR_TEMP = SENSOR_TEMP_HUM;
+
+enum EspNowActuatorType : uint8_t {
+  ACTUATOR_UNKNOWN = 0,
+  ACTUATOR_SSR = 1,
+  ACTUATOR_TRIAC = 2,
+  ACTUATOR_RELAY = 3,
+  ACTUATOR_PWM = 4,
+  ACTUATOR_REMOTE = 5,
+  ACTUATOR_CUSTOM = 255
+};
 
 enum SensorOrigin : uint8_t {
   SENSOR_ORIGIN_LOCAL = 0,
@@ -93,6 +105,12 @@ enum EspNowCapability : uint16_t {
   ESPNOW_CAP_SOLAR = 0x0010,
   ESPNOW_CAP_ROUTER = 0x0020,
   ESPNOW_CAP_ACTUATOR = 0x0040
+};
+
+enum EspNowRedundancyRole : uint8_t {
+  ESPNOW_REDUNDANCY_STANDALONE = 0,
+  ESPNOW_REDUNDANCY_MASTER = 1,
+  ESPNOW_REDUNDANCY_BACKUP = 2
 };
 
 typedef struct __attribute__((packed)) {
@@ -153,10 +171,30 @@ typedef struct __attribute__((packed)) {
   char sensorRole[ESPNOW_SENSOR_ROLE_LEN];
   uint8_t sensorType;
   char firmwareVersion[12];
+  char littlefsVersion[12];
   uint8_t valueCount;
   EspNowSensorDiscoveryValue values[ESPNOW_MAX_FAST_VALUES];
   uint16_t checksum;
 } EspNowSensorDiscoveryPacket;
+
+typedef struct __attribute__((packed)) {
+  uint8_t version;
+  uint8_t packetType;
+  uint8_t nodeId;
+  char nodeName[20];
+  char actuatorId[20];
+  char actuatorName[20];
+  char actuatorRole[20];
+  uint8_t actuatorType;
+  char electricalMode[16];
+  uint16_t maxPowerW;
+  bool enabled;
+  bool critical;
+  uint32_t commandTimeoutMs;
+  char firmwareVersion[12];
+  char littlefsVersion[12];
+  uint16_t checksum;
+} EspNowActuatorDiscoveryPacket;
 
 typedef struct __attribute__((packed)) {
   uint8_t version;
@@ -179,11 +217,14 @@ typedef struct __attribute__((packed)) {
   uint8_t nodeId;
   char nodeName[20];
   uint8_t roleFlags;
+  uint8_t redundancyRole;
   uint16_t capabilityFlags;
   uint8_t primarySensorType;
   uint8_t mac[6];
   uint32_t sequence;
   uint32_t uptimeMs;
+  char firmwareVersion[12];
+  char littlefsVersion[12];
   uint16_t checksum;
 } EspNowDiscoveryPacket;
 
@@ -192,16 +233,50 @@ struct EspNowDiscoveredNode {
   uint8_t mac[6]{};
   uint8_t nodeId = 0;
   char nodeName[20]{};
+  char firmwareVersion[12]{};
+  char littlefsVersion[12]{};
   uint8_t roleFlags = ESPNOW_ROLE_NONE;
+  uint8_t redundancyRole = ESPNOW_REDUNDANCY_STANDALONE;
   uint16_t capabilityFlags = ESPNOW_CAP_NONE;
   uint8_t primarySensorType = SENSOR_UNKNOWN;
   uint32_t lastSeenMs = 0;
+  uint32_t lastFrameMs = 0;
+  uint32_t lastHeartbeatMs = 0;
   uint32_t lastSequence = 0;
+  uint8_t lastFrameType = ESPNOW_PACKET_UNKNOWN;
+  uint32_t uptimeMs = 0;
+  uint32_t freeHeap = 0;
+  int8_t rssiDbm = 0;
+  uint32_t sendOkCount = 0;
+  uint32_t sendFailCount = 0;
+  uint32_t receivedCount = 0;
+  uint32_t lostPackets = 0;
+  uint8_t lastError = 0;
+};
+
+struct EspNowDiscoveredActuator {
+  bool used = false;
+  uint8_t mac[6]{};
+  uint8_t nodeId = 0;
+  char nodeName[20]{};
+  char actuatorId[20]{};
+  char actuatorName[20]{};
+  char actuatorRole[20]{};
+  uint8_t actuatorType = ACTUATOR_UNKNOWN;
+  char electricalMode[16]{};
+  uint16_t maxPowerW = 0;
+  bool enabled = false;
+  bool critical = false;
+  uint32_t commandTimeoutMs = 0;
+  char firmwareVersion[12]{};
+  char littlefsVersion[12]{};
+  uint32_t lastSeenMs = 0;
 };
 
 static_assert(sizeof(EspNowSensorPacket) <= 250, "EspNowSensorPacket depasse la limite ESP-NOW de 250 octets.");
 static_assert(sizeof(EspNowFastSensorPacket) <= 250, "EspNowFastSensorPacket depasse la limite ESP-NOW de 250 octets.");
 static_assert(sizeof(EspNowSensorDiscoveryPacket) <= 250, "EspNowSensorDiscoveryPacket depasse la limite ESP-NOW de 250 octets.");
+static_assert(sizeof(EspNowActuatorDiscoveryPacket) <= 250, "EspNowActuatorDiscoveryPacket depasse la limite ESP-NOW de 250 octets.");
 static_assert(sizeof(EspNowDiagnosticPacket) <= 250, "EspNowDiagnosticPacket depasse la limite ESP-NOW de 250 octets.");
 static_assert(sizeof(EspNowDiscoveryPacket) <= 250, "EspNowDiscoveryPacket depasse la limite ESP-NOW de 250 octets.");
 
@@ -229,6 +304,10 @@ inline uint16_t espNowCalculateChecksum(const EspNowSensorDiscoveryPacket &packe
   return espNowChecksumBytes(reinterpret_cast<const uint8_t *>(&packet), offsetof(EspNowSensorDiscoveryPacket, checksum));
 }
 
+inline uint16_t espNowCalculateChecksum(const EspNowActuatorDiscoveryPacket &packet) {
+  return espNowChecksumBytes(reinterpret_cast<const uint8_t *>(&packet), offsetof(EspNowActuatorDiscoveryPacket, checksum));
+}
+
 inline uint16_t espNowCalculateChecksum(const EspNowDiagnosticPacket &packet) {
   return espNowChecksumBytes(reinterpret_cast<const uint8_t *>(&packet), offsetof(EspNowDiagnosticPacket, checksum));
 }
@@ -246,6 +325,10 @@ inline bool espNowChecksumValid(const EspNowFastSensorPacket &packet) {
 }
 
 inline bool espNowChecksumValid(const EspNowSensorDiscoveryPacket &packet) {
+  return packet.checksum == espNowCalculateChecksum(packet);
+}
+
+inline bool espNowChecksumValid(const EspNowActuatorDiscoveryPacket &packet) {
   return packet.checksum == espNowCalculateChecksum(packet);
 }
 
@@ -272,21 +355,33 @@ inline const char *espNowSensorTypeText(uint8_t sensorType) {
   }
 }
 
+inline const char *espNowActuatorTypeText(uint8_t actuatorType) {
+  switch (actuatorType) {
+    case ACTUATOR_SSR: return "SSR";
+    case ACTUATOR_TRIAC: return "TRIAC";
+    case ACTUATOR_RELAY: return "RELAY";
+    case ACTUATOR_PWM: return "PWM";
+    case ACTUATOR_REMOTE: return "REMOTE";
+    case ACTUATOR_CUSTOM: return "CUSTOM";
+    default: return "UNKNOWN";
+  }
+}
+
 inline uint8_t espNowValueTypeFromKey(const char *key) {
   if (!key) return VALUE_UNKNOWN;
   if (strcmp(key, "GRID") == 0) return VALUE_GRID_POWER_W;
-  if (strcmp(key, "POWER") == 0 || strcmp(key, "BATP") == 0) return VALUE_POWER_W;
+  if (strcmp(key, "POWER") == 0 || strcmp(key, "BATP") == 0 || strcmp(key, "CH1_POWER") == 0 || strcmp(key, "CH2_POWER") == 0) return VALUE_POWER_W;
   if (strcmp(key, "VOLT") == 0) return VALUE_VOLTAGE_V;
-  if (strcmp(key, "CURR") == 0) return VALUE_CURRENT_A;
+  if (strcmp(key, "CURR") == 0 || strcmp(key, "CH1_CURR") == 0 || strcmp(key, "CH2_CURR") == 0) return VALUE_CURRENT_A;
   if (strcmp(key, "PAPP") == 0 || strcmp(key, "SINSTS") == 0) return VALUE_APPARENT_POWER_VA;
-  if (strcmp(key, "PF") == 0) return VALUE_POWER_FACTOR;
+  if (strcmp(key, "PF") == 0 || strcmp(key, "CH1_PF") == 0 || strcmp(key, "CH2_PF") == 0) return VALUE_POWER_FACTOR;
   if (strcmp(key, "FREQ") == 0) return VALUE_FREQUENCY_HZ;
   if (strcmp(key, "TEMP") == 0) return VALUE_TEMPERATURE_C;
   if (strcmp(key, "HUM") == 0) return VALUE_HUMIDITY_PERCENT;
-  if (strcmp(key, "ENERGY") == 0 || strcmp(key, "BASE") == 0) return VALUE_ENERGY_KWH;
+  if (strcmp(key, "ENERGY") == 0 || strcmp(key, "BASE") == 0 || strcmp(key, "CH1_EPOS") == 0 || strcmp(key, "CH1_ENEG") == 0 || strcmp(key, "CH2_EPOS") == 0 || strcmp(key, "CH2_ENEG") == 0 || strcmp(key, "CH1_ENERGY_POS") == 0 || strcmp(key, "CH1_ENERGY_NEG") == 0 || strcmp(key, "CH2_ENERGY_POS") == 0 || strcmp(key, "CH2_ENERGY_NEG") == 0) return VALUE_ENERGY_KWH;
   if (strcmp(key, "BATV") == 0) return VALUE_BATTERY_VOLTAGE_V;
   if (strcmp(key, "BATA") == 0) return VALUE_BATTERY_CURRENT_A;
   if (strcmp(key, "SOC") == 0) return VALUE_BATTERY_SOC_PERCENT;
-  if (strcmp(key, "RELAY") == 0 || strcmp(key, "STATE") == 0) return VALUE_STATE_BOOL;
+  if (strcmp(key, "RELAY") == 0 || strcmp(key, "STATE") == 0 || strcmp(key, "CH1_DIR") == 0 || strcmp(key, "CH2_DIR") == 0) return VALUE_STATE_BOOL;
   return VALUE_CUSTOM;
 }

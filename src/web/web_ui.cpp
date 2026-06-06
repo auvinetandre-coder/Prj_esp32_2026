@@ -1,6 +1,8 @@
 #include "web_ui.h"
+#include <HTTPClient.h>
 #include <LittleFS.h>
 #include <WiFi.h>
+#include <WiFiClientSecure.h>
 #include <Update.h>
 #include <esp_arduino_version.h>
 #include <esp_app_format.h>
@@ -11,6 +13,10 @@
 #include "../build_info.h"
 
 static const char *ROUTEUR_ACTIVE_FIRMWARE_MARKER = ROUTEUR_FIRMWARE_MARKER;
+static const char *GITHUB_VERSION_URL = "https://github.com/auvinetandre-coder/Prj_esp32_2026/releases/latest/download/version.json";
+static const char *GITHUB_FIRMWARE_URL = "https://github.com/auvinetandre-coder/Prj_esp32_2026/releases/latest/download/firmware.bin";
+static const char *GITHUB_LITTLEFS_URL = "https://github.com/auvinetandre-coder/Prj_esp32_2026/releases/latest/download/littlefs.bin";
+static const char *GITHUB_RELEASE_URL = "https://github.com/auvinetandre-coder/Prj_esp32_2026/releases/latest";
 
 static const char *wifiQualityLabel(int rssi) {
   if (rssi == 0) return "N/A";
@@ -268,6 +274,7 @@ void WebUi::routes() {
     JsonObject device = config.device();
     JsonObject system = config.system();
     out["moduleName"] = device["deviceName"] | device["name"] | state.moduleName.c_str();
+    out["nodeId"] = state.nodeId;
     out["role"] = device["role"] | RuntimeState::roleToString(state.role);
     out["firmwareVersion"] = ROUTEUR_FIRMWARE_VERSION;
     out["buildTimestamp"] = ROUTEUR_BUILD_TIMESTAMP;
@@ -281,6 +288,37 @@ void WebUi::routes() {
     sendJson(doc);
   });
   server.on("/api/status-lite", HTTP_GET, [this]() { sendStatusLite(); });
+  server.on("/api/state", HTTP_GET, [this]() { sendStatusLite(); });
+  server.on("/api/actuators/runtime", HTTP_GET, [this]() {
+    DynamicJsonDocument doc(8192);
+    JsonObject out = doc.to<JsonObject>();
+    out["ok"] = true;
+    actuators.runtimeToJson(out["actuators"].to<JsonArray>());
+    sendJson(doc);
+  });
+  server.on("/api/dashboard/config", HTTP_GET, [this]() {
+    if (!requireAuth()) return;
+    DynamicJsonDocument doc(8192);
+    JsonObject dashboard = config.system()["dashboard"].is<JsonObject>()
+                             ? config.system()["dashboard"].as<JsonObject>()
+                             : config.system()["dashboard"].to<JsonObject>();
+    doc.set(dashboard);
+    sendJson(doc);
+  });
+  server.on("/api/dashboard/config", HTTP_POST, [this]() {
+    if (!requireAuth()) return;
+    DynamicJsonDocument doc(8192);
+    DeserializationError err = deserializeJson(doc, server.arg("plain"));
+    if (err || !doc.is<JsonObject>()) {
+      server.send(400, "application/json", "{\"ok\":false,\"error\":\"JSON dashboard invalide\"}");
+      return;
+    }
+    JsonObject dashboard = config.system()["dashboard"].to<JsonObject>();
+    dashboard.clear();
+    dashboard.set(doc.as<JsonObject>());
+    bool ok = config.saveSystem();
+    server.send(ok ? 200 : 500, "application/json", ok ? "{\"ok\":true}" : "{\"ok\":false,\"error\":\"sauvegarde dashboard impossible\"}");
+  });
   server.on("/api/realtime", HTTP_GET, [this]() {
     DynamicJsonDocument doc(2048);
     JsonObject out = doc.to<JsonObject>();
@@ -293,11 +331,13 @@ void WebUi::routes() {
     setNumber("gridPowerRawW", state.gridPowerRawW);
     setNumber("gridPowerFilteredW", state.gridPowerFilteredW);
     setNumber("gridPowerW", state.gridPowerW);
+    setNumber("productionW", state.productionW);
     setNumber("injectionW", state.injectionW);
     setNumber("consumptionW", state.consumptionW);
     setNumber("surplusW", state.surplusW);
     setNumber("targetW", router["gridSetpointW"] | 0.0f);
     setNumber("deadbandW", router["deadbandW"] | 30.0f);
+    setNumber("pidErrorW", state.pidErrorW);
     setNumber("pidOutputPercent", state.pidOutputPercent);
     setNumber("commandPercent", state.commandPercent);
     setNumber("heaterPowerW", state.heaterPowerW);
@@ -386,6 +426,12 @@ void WebUi::routes() {
     if (!requireAuth()) return;
     safety.triggerManualStop();
     server.send(200, "application/json", "{\"ok\":true}");
+  });
+  server.on("/api/diagnostic/identify", HTTP_POST, [this]() {
+    if (!requireAuth()) return;
+    statusLed.identify(millis(), 120000UL);
+    state.logEvent("INFO", "IDENTIFY", "Clignotement LEDs diagnostic pendant 120 s", "WebUi");
+    server.send(200, "application/json", "{\"ok\":true,\"durationMs\":120000}");
   });
   server.on("/api/logs/export", HTTP_GET, [this]() {
     DynamicJsonDocument doc(8192);
@@ -542,6 +588,15 @@ void WebUi::routes() {
       sendJson(out);
     }
   });
+  server.on("/api/jsy/reconfigure-19200", HTTP_POST, [this]() {
+    if (!requireAuth()) return;
+    bool ok = sensors.reconfigureJsyTo19200();
+    DynamicJsonDocument out(384);
+    out["ok"] = ok;
+    out["baudrate"] = state.jsyBaudrate;
+    out["error"] = ok ? "" : state.jsyLastError;
+    sendJson(out);
+  });
   server.on("/api/wifi/test", HTTP_POST, [this]() {
     if (!requireAuth()) return;
     bool ok = wifi.testConnection(server.arg("ssid"), server.arg("password"));
@@ -580,6 +635,12 @@ void WebUi::routes() {
     bool ok = espnow.sendDiscovery();
     server.send(ok ? 200 : 400, "application/json", ok ? "{\"ok\":true}" : "{\"ok\":false}");
   });
+  server.on("/api/espnow/sensors/announce", HTTP_POST, [this]() {
+    if (!requireAuth()) return;
+    espnow.sendAllSensorDiscovery();
+    espnow.sendAllActuatorDiscovery();
+    server.send(200, "application/json", "{\"ok\":true}");
+  });
   server.on("/api/restart", HTTP_POST, [this]() {
     if (!requireAuth()) return;
     server.send(200, "application/json", "{\"ok\":true}");
@@ -590,6 +651,9 @@ void WebUi::routes() {
     server.send(200, "application/json", "{\"ok\":true}");
     wifi.restart();
   });
+  server.on("/api/ota/github/check", HTTP_GET, [this]() { sendGithubOtaCheck(); });
+  server.on("/api/ota/github/firmware", HTTP_POST, [this]() { startGithubFirmwareOta(); });
+  server.on("/api/ota/github/littlefs", HTTP_POST, [this]() { startGithubLittleFsOta(); });
   server.on("/api/ota/rollback", HTTP_POST, [this]() {
     if (!requireAuth()) return;
     const esp_partition_t *running = esp_ota_get_running_partition();
@@ -618,17 +682,248 @@ void WebUi::routes() {
 
 void WebUi::sendJson(DynamicJsonDocument &doc) {
   if (!requireAuth()) return;
+  state.webRequestCount++;
   String out;
   serializeJson(doc, out);
   server.send(200, "application/json", out);
 }
 
+bool WebUi::downloadGithubAssetToUpdate(const String &url, int updateCommand, const char *logCode, String &error, size_t &written, int &httpCode) {
+  written = 0;
+  httpCode = 0;
+  error = "";
+  if (WiFi.status() != WL_CONNECTED) {
+    error = "WiFi non connecte";
+    return false;
+  }
+
+  WiFiClientSecure client;
+  client.setInsecure();
+  HTTPClient http;
+  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+  http.setTimeout(15000);
+  if (!http.begin(client, url)) {
+    error = "Initialisation HTTPS impossible";
+    return false;
+  }
+
+  httpCode = http.GET();
+  if (httpCode != HTTP_CODE_OK) {
+    error = String("HTTP ") + httpCode;
+    http.end();
+    return false;
+  }
+
+  const int contentLength = http.getSize();
+  const size_t updateSize = contentLength > 0 ? static_cast<size_t>(contentLength) : UPDATE_SIZE_UNKNOWN;
+  if (!Update.begin(updateSize, updateCommand)) {
+    error = Update.errorString();
+    http.end();
+    return false;
+  }
+
+  WiFiClient *stream = http.getStreamPtr();
+  uint8_t buffer[1024];
+  uint32_t lastDataMs = millis();
+  while (http.connected() && (contentLength < 0 || written < static_cast<size_t>(contentLength))) {
+    size_t available = stream->available();
+    if (available) {
+      int readLen = stream->readBytes(buffer, min<size_t>(available, sizeof(buffer)));
+      if (readLen <= 0) continue;
+      if (Update.write(buffer, readLen) != static_cast<size_t>(readLen)) {
+        error = Update.errorString();
+        Update.abort();
+        http.end();
+        return false;
+      }
+      written += readLen;
+      lastDataMs = millis();
+      delay(1);
+    } else {
+      if (millis() - lastDataMs > 20000UL) {
+        error = "Timeout telechargement";
+        Update.abort();
+        http.end();
+        return false;
+      }
+      delay(10);
+    }
+  }
+
+  if (contentLength > 0 && written != static_cast<size_t>(contentLength)) {
+    error = String("Telechargement incomplet: ") + written + "/" + contentLength;
+    Update.abort();
+    http.end();
+    return false;
+  }
+
+  if (!Update.end(true)) {
+    error = Update.errorString();
+    http.end();
+    return false;
+  }
+
+  http.end();
+  state.logEvent("WARNING", logCode, String("OTA GitHub appliquee, octets=") + written, "WebUi");
+  return true;
+}
+
+void WebUi::sendGithubOtaCheck() {
+  if (!requireAuth()) return;
+  DynamicJsonDocument doc(2048);
+  JsonObject out = doc.to<JsonObject>();
+  out["ok"] = false;
+  out["versionUrl"] = GITHUB_VERSION_URL;
+  out["releaseUrl"] = GITHUB_RELEASE_URL;
+  out["localFirmwareVersion"] = ROUTEUR_FIRMWARE_VERSION;
+  out["localLittlefsVersion"] = readLittleFsTextFile("/www/littlefs_version.txt");
+
+  if (WiFi.status() != WL_CONNECTED) {
+    out["error"] = "WiFi non connecte";
+    sendJson(doc);
+    return;
+  }
+
+  WiFiClientSecure client;
+  client.setInsecure();
+  HTTPClient http;
+  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+  http.setTimeout(12000);
+  if (!http.begin(client, GITHUB_VERSION_URL)) {
+    out["error"] = "Initialisation HTTPS impossible";
+    sendJson(doc);
+    return;
+  }
+
+  int httpCode = http.GET();
+  out["httpCode"] = httpCode;
+  if (httpCode != HTTP_CODE_OK) {
+    out["error"] = String("HTTP ") + httpCode;
+    http.end();
+    sendJson(doc);
+    return;
+  }
+
+  String payload = http.getString();
+  http.end();
+  DynamicJsonDocument remote(2048);
+  DeserializationError err = deserializeJson(remote, payload);
+  if (err || !remote.is<JsonObject>()) {
+    out["error"] = String("version.json invalide: ") + err.c_str();
+    sendJson(doc);
+    return;
+  }
+
+  JsonObject src = remote.as<JsonObject>();
+  const String remoteFirmware = src["firmwareVersion"] | src["version"] | "";
+  const String remoteLittlefs = src["littlefsVersion"] | src["version"] | "";
+  const String localLittlefs = out["localLittlefsVersion"].as<String>();
+  out["ok"] = true;
+  out["project"] = src["project"] | "";
+  out["remoteVersion"] = src["version"] | "";
+  out["remoteFirmwareVersion"] = remoteFirmware;
+  out["remoteLittlefsVersion"] = remoteLittlefs;
+  out["firmwareUrl"] = src["firmwareUrl"] | GITHUB_FIRMWARE_URL;
+  out["littlefsUrl"] = src["littlefsUrl"] | GITHUB_LITTLEFS_URL;
+  out["mandatory"] = src["mandatory"] | false;
+  out["notes"] = src["notes"] | "";
+  out["firmwareUpdateAvailable"] = remoteFirmware.length() && remoteFirmware != ROUTEUR_FIRMWARE_VERSION;
+  out["littlefsUpdateAvailable"] = remoteLittlefs.length() && remoteLittlefs != localLittlefs;
+  out["updateAvailable"] = (out["firmwareUpdateAvailable"] | false) || (out["littlefsUpdateAvailable"] | false);
+  sendJson(doc);
+}
+
+void WebUi::startGithubFirmwareOta() {
+  if (!requireAuth()) return;
+  String error;
+  size_t written = 0;
+  int httpCode = 0;
+  state.logEvent("WARNING", "OTA_GITHUB_FIRMWARE", "Demarrage OTA firmware GitHub", "WebUi");
+  bool ok = downloadGithubAssetToUpdate(GITHUB_FIRMWARE_URL, U_FLASH, "OTA_GITHUB_FIRMWARE", error, written, httpCode);
+  DynamicJsonDocument doc(512);
+  JsonObject out = doc.to<JsonObject>();
+  out["ok"] = ok;
+  out["httpCode"] = httpCode;
+  out["bytes"] = written;
+  if (!ok) out["error"] = error.length() ? error : "OTA firmware GitHub refusee";
+  String response;
+  serializeJson(doc, response);
+  server.send(ok ? 200 : 500, "application/json", response);
+  if (ok) {
+    delay(250);
+    ESP.restart();
+  }
+}
+
+void WebUi::startGithubLittleFsOta() {
+  if (!requireAuth()) return;
+  state.logEvent("WARNING", "OTA_GITHUB_LITTLEFS", "Demarrage OTA LittleFS GitHub", "WebUi");
+  littleFsOtaBackupOk = config.backupToNvsBeforeLittleFsOta();
+  if (!littleFsOtaBackupOk) {
+    DynamicJsonDocument doc(384);
+    doc["ok"] = false;
+    doc["error"] = config.lastError().length() ? config.lastError() : "Sauvegarde config NVS impossible";
+    sendJson(doc);
+    return;
+  }
+
+  LittleFS.end();
+  String error;
+  size_t written = 0;
+  int httpCode = 0;
+  bool ok = downloadGithubAssetToUpdate(GITHUB_LITTLEFS_URL, U_SPIFFS, "OTA_GITHUB_LITTLEFS", error, written, httpCode);
+  if (!ok) LittleFS.begin(false);
+
+  DynamicJsonDocument doc(512);
+  JsonObject out = doc.to<JsonObject>();
+  out["ok"] = ok;
+  out["httpCode"] = httpCode;
+  out["bytes"] = written;
+  if (!ok) out["error"] = error.length() ? error : "OTA LittleFS GitHub refusee";
+  String response;
+  serializeJson(doc, response);
+  server.send(ok ? 200 : 500, "application/json", response);
+  littleFsOtaBackupOk = false;
+  if (ok) {
+    delay(250);
+    ESP.restart();
+  }
+}
+
 void WebUi::sendStatusLite() {
-  DynamicJsonDocument doc(4096);
+  const uint32_t apiStateStartedMs = millis();
+  state.apiStateRequestCount++;
+  DynamicJsonDocument doc(20480);
   JsonObject out = doc.to<JsonObject>();
   auto setNumber = [&out](const char *key, float value) {
     if (isnan(value) || isinf(value)) out[key] = nullptr;
     else out[key] = value;
+  };
+  auto setObjectNumber = [](JsonObject obj, const char *key, float value) {
+    if (isnan(value) || isinf(value)) obj[key] = nullptr;
+    else obj[key] = value;
+  };
+  const uint32_t nowMs = millis();
+  auto sensorAgeMs = [nowMs](uint32_t lastUpdateMs) -> uint32_t {
+    return lastUpdateMs && nowMs >= lastUpdateMs ? nowMs - lastUpdateMs : 0;
+  };
+  auto setSensorRuntime = [&sensorAgeMs](JsonObject item, bool enabled, bool available, uint32_t lastUpdateMs, uint32_t timeoutMs) {
+    const bool neverSeen = lastUpdateMs == 0;
+    const uint32_t ageMs = sensorAgeMs(lastUpdateMs);
+    const bool timedOut = enabled && (neverSeen || ageMs > timeoutMs);
+    item["enabled"] = enabled;
+    item["ok"] = enabled && available && !timedOut;
+    item["timedOut"] = timedOut;
+    item["neverSeen"] = neverSeen;
+    if (neverSeen) item["ageMs"] = nullptr;
+    else item["ageMs"] = ageMs;
+    if (lastUpdateMs) {
+      item["lastUpdateMs"] = lastUpdateMs;
+      item["lastSeenMs"] = lastUpdateMs;
+    } else {
+      item["lastUpdateMs"] = nullptr;
+      item["lastSeenMs"] = nullptr;
+    }
   };
 
   out["ok"] = true;
@@ -636,6 +931,7 @@ void WebUi::sendStatusLite() {
   JsonObject system = config.system();
   out["moduleName"] = device["deviceName"] | device["name"] | state.moduleName.c_str();
   out["deviceId"] = state.deviceId;
+  out["nodeId"] = state.nodeId;
   out["role"] = device["role"] | RuntimeState::roleToString(state.role);
   out["firmwareVersion"] = ROUTEUR_FIRMWARE_VERSION;
   out["buildTimestamp"] = ROUTEUR_BUILD_TIMESTAMP;
@@ -719,6 +1015,10 @@ void WebUi::sendStatusLite() {
   setNumber("powerFactor2", state.powerFactor2);
   out["energyDirection1"] = state.energyDirection1;
   out["energyDirection2"] = state.energyDirection2;
+  out["jsyBaudrate"] = state.jsyBaudrate;
+  out["jsyLastError"] = state.jsyLastError;
+  out["jsyTimeoutCount"] = state.jsyTimeoutCount;
+  out["jsyCrcErrorCount"] = state.jsyCrcErrorCount;
   setNumber("injectionW", state.injectionW);
   setNumber("consumptionW", state.consumptionW);
   setNumber("surplusW", state.surplusW);
@@ -740,6 +1040,7 @@ void WebUi::sendStatusLite() {
   setNumber("pidErrorW", state.pidErrorW);
   out["pidEnabled"] = state.pidEnabled;
   out["pidStatus"] = state.pidStatus;
+  actuators.runtimeToJson(out["actuators"].to<JsonArray>());
   JsonObject router = system["router"].as<JsonObject>();
   setNumber("pidMeasuredW", isnan(state.gridPowerFilteredW) || isinf(state.gridPowerFilteredW) ? state.gridPowerW : state.gridPowerFilteredW);
   setNumber("gridSetpointW", router["gridSetpointW"] | 0.0f);
@@ -749,7 +1050,131 @@ void WebUi::sendStatusLite() {
   setNumber("pidKd", router["kd"] | router["pidKd"] | 0.0f);
   setNumber("maxOutputRampPercentPerSecond", router["maxOutputRampPercentPerSecond"] | 5.0f);
   setNumber("heaterMaxPowerW", router["heaterMaxPowerW"] | router["ssr1MaxW"] | 1500.0f);
+  JsonObject energy = out["energy"].to<JsonObject>();
+  setObjectNumber(energy, "productionW", state.productionW);
+  setObjectNumber(energy, "gridPowerW", state.gridPowerW);
+  setObjectNumber(energy, "heaterPowerW", state.heaterPowerW);
+  setObjectNumber(energy, "heaterPercent", state.commandPercent);
+  setObjectNumber(energy, "tankTempC", state.tankTopC);
+  setObjectNumber(energy, "surplusW", state.surplusW);
+  setObjectNumber(energy, "consumptionW", state.consumptionW);
+
+  JsonObject pid = out["pid"].to<JsonObject>();
+  pid["mode"] = router["mode"] | (state.pidEnabled ? "AUTO" : "OFF");
+  String pidSource = router["gridPowerSource"] | state.gridPowerSource.c_str();
+  String pidSourceUpper = pidSource;
+  pidSourceUpper.toUpperCase();
+  bool sourceIsJsy = pidSourceUpper.indexOf("JSY") >= 0 || (pidSourceUpper == "AUTO" && state.jsyOnline);
+  bool sourceIsLinky = pidSourceUpper.indexOf("TIC") >= 0 || pidSourceUpper.indexOf("LINKY") >= 0 || (pidSourceUpper == "AUTO" && state.ticAvailable && !sourceIsJsy);
+  bool sourceIsEspNow = false;
+  for (JsonObject cfg : config.sensors()) {
+    if (!(cfg["enabled"] | true)) continue;
+    String source = cfg["source"] | "local";
+    if (!source.equalsIgnoreCase("espnow")) continue;
+    String type = cfg["type"] | "";
+    type.toUpperCase();
+    if (sourceIsJsy && type.indexOf("JSY") >= 0) sourceIsEspNow = true;
+    if (sourceIsLinky && (type.indexOf("TIC") >= 0 || type.indexOf("LINKY") >= 0)) sourceIsEspNow = true;
+  }
+  if (sourceIsJsy) pid["source"] = sourceIsEspNow ? "ESPNOW_JSY" : "LOCAL_JSY";
+  else if (sourceIsLinky) pid["source"] = sourceIsEspNow ? "ESPNOW_LINKY" : "LOCAL_LINKY";
+  else pid["source"] = pidSource;
+  setObjectNumber(pid, "targetGridW", router["gridSetpointW"] | 0.0f);
+  setObjectNumber(pid, "deadbandW", router["deadbandW"] | 30.0f);
+  setObjectNumber(pid, "errorW", state.pidErrorW);
+  setObjectNumber(pid, "outputPercent", state.pidOutputPercent);
+  setObjectNumber(pid, "commandPercent", state.commandPercent);
+  pid["status"] = state.pidStatus.length() ? state.pidStatus : "IDLE";
+  setObjectNumber(pid, "heaterPowerW", state.heaterPowerW);
+
+  JsonArray activeSensors = out["sensors"].to<JsonArray>();
+  for (JsonObject cfg : config.sensors()) {
+    const bool enabled = cfg["enabled"] | true;
+    if (!enabled) continue;
+    String source = cfg["source"] | "local";
+    if (source.equalsIgnoreCase("espnow")) continue;
+    String type = cfg["type"] | "";
+    String id = cfg["id"] | "";
+    JsonObject item = activeSensors.add<JsonObject>();
+    item["id"] = id;
+    item["name"] = cfg["name"] | id.c_str();
+    item["type"] = type;
+    item["role"] = cfg["role"] | "";
+    item["origin"] = "LOCAL";
+    if (cfg["channels"].is<JsonArray>()) item["channels"].set(cfg["channels"]);
+    JsonObject values = item["values"].to<JsonObject>();
+    if (type.indexOf("JSY") >= 0 || id == "jsy_grid") {
+      const uint32_t readIntervalMs = cfg["readIntervalMs"] | 350UL;
+      const uint32_t timeoutMs = cfg["timeoutMs"] | 300UL;
+      setSensorRuntime(item, enabled, state.jsyOnline, state.lastJsyReadMs, readIntervalMs + timeoutMs * 3UL);
+      if (state.lastJsyReadMs) {
+        setObjectNumber(values, "GRID", state.jsyGridPowerW);
+        setObjectNumber(values, "VOLT", state.gridVoltageV);
+        setObjectNumber(values, "FREQ", state.gridFrequencyHz);
+        setObjectNumber(values, "CH1_CURR", state.currentA1);
+        setObjectNumber(values, "CH1_POWER", state.activePowerW1);
+        setObjectNumber(values, "CH1_PF", state.powerFactor1);
+        setObjectNumber(values, "CH1_ENERGY_POS", state.jsyImportEnergyWh1);
+        setObjectNumber(values, "CH1_ENERGY_NEG", state.jsyExportEnergyWh1);
+        values["CH1_DIR"] = state.energyDirection1;
+        setObjectNumber(values, "CH2_CURR", state.currentA2);
+        setObjectNumber(values, "CH2_POWER", state.activePowerW2);
+        setObjectNumber(values, "CH2_PF", state.powerFactor2);
+        setObjectNumber(values, "CH2_ENERGY_POS", state.jsyImportEnergyWh2);
+        setObjectNumber(values, "CH2_ENERGY_NEG", state.jsyExportEnergyWh2);
+        values["CH2_DIR"] = state.energyDirection2;
+      }
+    } else if (type.indexOf("TIC") >= 0 || type.indexOf("Linky") >= 0 || id == "tic_linky") {
+      const uint32_t timeoutMs = cfg["timeoutMs"] | 5000UL;
+      setSensorRuntime(item, enabled, state.ticAvailable, state.lastTicReadMs, timeoutMs);
+      if (state.lastTicReadMs) {
+        setObjectNumber(values, "GRID", state.ticGridPowerW);
+        setObjectNumber(values, "PAPP", state.ticApparentPowerVA);
+        setObjectNumber(values, "IINST", state.ticCurrentA);
+      }
+    } else {
+      setSensorRuntime(item, enabled, true, nowMs, 60000UL);
+    }
+  }
+  uint8_t unifiedDsIndex = 0;
+  for (JsonObject cfg : config.sensorsDoc()["ds18b20"].as<JsonArray>()) {
+    if (unifiedDsIndex >= 3) break;
+    const bool enabled = cfg["enabled"] | true;
+    if (!enabled) {
+      unifiedDsIndex++;
+      continue;
+    }
+    JsonObject item = activeSensors.add<JsonObject>();
+    String fallbackId = String("sonde") + String(unifiedDsIndex + 1);
+    String id = cfg["id"] | fallbackId.c_str();
+    item["id"] = id;
+    item["name"] = cfg["name"] | id.c_str();
+    item["type"] = "DS18B20";
+    item["role"] = cfg["role"] | "";
+    item["origin"] = "LOCAL";
+    JsonObject bus = config.sensorsDoc()["oneWireBus"];
+    const uint32_t readIntervalMs = bus["readIntervalMs"] | 2000UL;
+    setSensorRuntime(item, enabled, state.ds18b20Available[unifiedDsIndex], state.ds18b20LastReadMs[unifiedDsIndex], readIntervalMs * 3UL);
+    JsonObject values = item["values"].to<JsonObject>();
+    if (state.ds18b20LastReadMs[unifiedDsIndex]) setObjectNumber(values, "TEMP", state.ds18b20Temps[unifiedDsIndex]);
+    unifiedDsIndex++;
+  }
+  sensors.remoteSensorsToJson(activeSensors, true);
+
+  JsonObject health = out["systemHealth"].to<JsonObject>();
+  health["wifi"] = state.wifiConnected ? "OK" : state.networkMode;
+  health["espnow"] = state.espNowReady ? "OK" : "N/A";
+  health["mqtt"] = state.mqttEnabled ? (state.mqttConnected ? "OK" : state.mqttStatus) : "N/A";
+  health["safety"] = state.safetyLevel;
+  health["uptimeMs"] = millis();
+  health["heapFree"] = ESP.getFreeHeap();
+  health["lastFault"] = state.safetyReason.length() ? state.safetyReason : "aucun";
   out["heapFree"] = ESP.getFreeHeap();
+  out["heapMin"] = ESP.getMinFreeHeap();
+  out["heapMaxAlloc"] = ESP.getMaxAllocHeap();
+  state.apiStateBuildMs = millis() - apiStateStartedMs;
+  state.apiStateJsonBytes = measureJson(doc);
+  state.performanceToJson(out["performance"].to<JsonObject>());
   sendJson(doc);
 }
 
@@ -852,6 +1277,14 @@ void WebUi::sendSystemInfo() {
   storage["used"] = LittleFS.usedBytes();
   storage["status"] = state.littleFsOk || LittleFS.totalBytes() > 0 ? "OK" : "Erreur";
 
+  JsonObject githubOta = out["githubOta"].to<JsonObject>();
+  githubOta["versionUrl"] = GITHUB_VERSION_URL;
+  githubOta["firmwareUrl"] = GITHUB_FIRMWARE_URL;
+  githubOta["littlefsUrl"] = GITHUB_LITTLEFS_URL;
+  githubOta["releaseUrl"] = GITHUB_RELEASE_URL;
+  githubOta["localFirmwareVersion"] = ROUTEUR_FIRMWARE_VERSION;
+  githubOta["localLittlefsVersion"] = storage["version"];
+
   JsonObject services = out["services"].to<JsonObject>();
   services["wifi"] = wifiOk ? "OK" : (state.networkMode == "AP" || state.networkMode == "AP_STA" ? "Attention" : "Erreur");
   services["ntp"] = !state.ntpEnabled ? "N/A" : (state.ntpSynced ? "OK" : "Attention");
@@ -895,6 +1328,7 @@ bool WebUi::streamLittleFsFile(const char *path, const char *contentType) {
     file.close();
     return false;
   }
+  state.webRequestCount++;
   server.streamFile(file, contentType);
   file.close();
   return true;
@@ -1022,6 +1456,16 @@ void WebUi::saveConfig(const char *name, const char *path) {
     state.gridPowerSource = config.system()["router"]["gridPowerSource"] | state.gridPowerSource.c_str();
   }
   if (ok && strcmp(name, "sensors") == 0) sensors.reloadConfiguration();
+  if (ok && strcmp(name, "sensors") == 0) {
+    espnow.sendDiscovery();
+    espnow.sendAllSensorDiscovery();
+    state.addLog("ESP-NOW exports capteurs annonces apres sauvegarde");
+  }
+  if (ok && strcmp(name, "actuators") == 0) {
+    espnow.sendDiscovery();
+    espnow.sendAllActuatorDiscovery();
+    state.addLog("ESP-NOW capacites actionneurs annoncees apres sauvegarde");
+  }
   if (ok) {
     server.send(200, "application/json", "{\"ok\":true}");
   } else {

@@ -18,19 +18,22 @@ public:
   String detectedDs18b20Json();
   String ds18b20StatusJson();
   bool assignDs18b20(const String &sensorId, const String &address);
+  bool reconfigureJsyTo19200();
   void reloadConfiguration();
   bool updateRemoteSensor(const String &sourceMac, const EspNowSensorPacket &packet);
   bool updateRemoteSensorFast(const String &sourceMac, const EspNowFastSensorPacket &packet);
   bool updateRemoteSensorDiscovery(const String &sourceMac, const EspNowSensorDiscoveryPacket &packet);
   void updateRemoteDiagnostic(const String &sourceMac, const EspNowDiagnosticPacket &packet);
   void checkRemoteSensorTimeouts(uint32_t now);
-  void remoteSensorsToJson(JsonArray out);
+  void remoteSensorsToJson(JsonArray out, bool configuredOnly = false);
 
   struct RemoteSensorRuntime {
     bool used = false;
     String sourceMac;
     uint8_t nodeId = 0;
     char nodeName[20]{};
+    char firmwareVersion[12]{};
+    char littlefsVersion[12]{};
     uint8_t sensorId = 0;
     char sensorName[ESPNOW_SENSOR_NAME_LEN]{};
     char sensorRole[ESPNOW_SENSOR_ROLE_LEN]{};
@@ -45,12 +48,14 @@ public:
     uint32_t lostPackets = 0;
     uint32_t receivedPackets = 0;
     uint8_t lastError = 0;
+    int8_t rssiDbm = 0;
     uint8_t valueCount = 0;
-    EspNowSensorValue values[ESPNOW_MAX_SENSOR_VALUES]{};
+    EspNowSensorValue values[16]{};
   };
 
 private:
   static const uint8_t MAX_REMOTE_SENSORS = 16;
+  static const uint8_t MAX_REMOTE_SENSOR_VALUES = 16;
   static const uint32_t REMOTE_SENSOR_TIMEOUT_MS = 5000UL;
   ConfigManager &config;
   RuntimeState &state;
@@ -69,8 +74,12 @@ private:
   RemoteSensorRuntime *findOrCreateRemoteSensor(uint8_t nodeId, uint8_t sensorId, const String &sourceMac);
   void applyRemoteSensorToState(const RemoteSensorRuntime &sensor);
   void applyRemoteValueToState(const RemoteSensorRuntime &sensor, const EspNowSensorValue &value);
+  void mergeRemoteValue(RemoteSensorRuntime &sensor, const EspNowSensorValue &value);
   JsonObject configuredEspNowSensorFor(const RemoteSensorRuntime &sensor);
+  bool syncConfiguredRemoteSensorRole(const RemoteSensorRuntime &sensor);
   uint32_t remoteTimeoutForType(uint8_t sensorType);
   void updateRemotePacketLoss(RemoteSensorRuntime &sensor, uint32_t sequence);
   void setDefaultValueMetadata(EspNowSensorValue &value);
+  String remoteMacSuffix(const String &mac) const;
+  String remoteNodeLabel(const RemoteSensorRuntime &sensor) const;
 };
