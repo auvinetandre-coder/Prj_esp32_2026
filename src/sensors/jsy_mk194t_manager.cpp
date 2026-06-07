@@ -2,6 +2,7 @@
 
 void JSYMK194TManager::begin() {
   configureFromJson();
+  autoDetectBaudrate();
   beginSerial();
 }
 
@@ -48,6 +49,8 @@ void JSYMK194TManager::readFrame(uint32_t now) {
     waiting = false;
     reading.available = false;
     reading.errorCount++;
+    timeoutCount++;
+    state.jsyTimeoutCount = timeoutCount;
     publishRuntime();
     logError(F("JSY timeout Modbus"), now);
   }
@@ -65,6 +68,8 @@ bool JSYMK194TManager::parseFrame(uint32_t now) {
   uint16_t received = static_cast<uint16_t>(rx[rxLen - 2]) | (static_cast<uint16_t>(rx[rxLen - 1]) << 8);
   if (expected != received) {
     reading.errorCount++;
+    crcErrorCount++;
+    state.jsyCrcErrorCount = crcErrorCount;
     logError(F("JSY CRC invalide"), now);
     return false;
   }
@@ -207,6 +212,7 @@ void JSYMK194TManager::reloadConfig() {
   uint8_t previousTx = txPin;
   uint32_t previousBaudrate = baudrate;
   configureFromJson();
+  autoDetectBaudrate();
   if (previousRx != rxPin || previousTx != txPin || previousBaudrate != baudrate) {
     beginSerial();
   }
@@ -237,7 +243,8 @@ void JSYMK194TManager::configureFromJson() {
   for (JsonObject sensor : config.sensors()) {
     const char *id = sensor["id"] | "";
     const char *type = sensor["type"] | "";
-    if (strcmp(id, "jsy_grid") == 0 || strcmp(type, "JSY-MK-194T") == 0) {
+    String source = sensor["source"] | "local";
+    if (!source.equalsIgnoreCase("espnow") && (strcmp(id, "jsy_grid") == 0 || strcmp(type, "JSY-MK-194T") == 0)) {
       jsy = sensor;
       break;
     }
@@ -248,14 +255,12 @@ void JSYMK194TManager::configureFromJson() {
   modbusAddress = constrain(address, 1, 247);
   rxPin = constrain(jsy["rx"] | 26, 0, 39);
   txPin = constrain(jsy["tx"] | 27, 0, 39);
-  baudrate = jsy["baudrate"] | 4800;
-  if (baudrate != 4800 && baudrate != 9600 && baudrate != 19200 && baudrate != 38400) baudrate = 4800;
-  readIntervalMs = jsy["readIntervalMs"] | config.system()["router"]["jsyReadIntervalMs"] | 100;
-  readIntervalMs = constrain(readIntervalMs, 80UL, 10000UL);
+  baudrate = jsy["baudrate"] | 19200;
+  if (baudrate != 4800 && baudrate != 19200) baudrate = 19200;
+  readIntervalMs = jsy["readIntervalMs"] | config.system()["router"]["jsyReadIntervalMs"] | 350;
+  readIntervalMs = constrain(readIntervalMs, 200UL, 10000UL);
   timeoutMs = jsy["timeoutMs"] | 300;
   timeoutMs = constrain(timeoutMs, 80UL, 3000UL);
-  rs485DirPin = jsy["rs485DirPin"] | jsy["dePin"] | -1;
-  if (rs485DirPin < 0 || rs485DirPin > 39) rs485DirPin = -1;
 
   clamp1Role = "production";
   clamp2Role = "grid";
@@ -269,13 +274,202 @@ void JSYMK194TManager::configureFromJson() {
   }
 }
 
-void JSYMK194TManager::beginSerial() {
-  if (rs485DirPin >= 0) {
-    pinMode(rs485DirPin, OUTPUT);
-    digitalWrite(rs485DirPin, LOW);
+void JSYMK194TManager::autoDetectBaudrate() {
+  if (!enabled) return;
+  const uint32_t configuredBaudrate = baudrate == 4800 ? 4800 : 19200;
+  state.addLog(String("JSY auto-baud: test config ") + String(configuredBaudrate));
+  if (testReadAtBaud(configuredBaudrate)) {
+    baudrate = configuredBaudrate;
+    state.jsyBaudrate = baudrate;
+    state.jsyLastError = "";
+    state.addLog(String("JSY auto-baud: OK ") + String(baudrate));
+    for (JsonObject sensor : config.sensors()) {
+      const char *id = sensor["id"] | "";
+      const char *type = sensor["type"] | "";
+      String source = sensor["source"] | "local";
+      if (!source.equalsIgnoreCase("espnow") && (strcmp(id, "jsy_grid") == 0 || strcmp(type, "JSY-MK-194T") == 0)) {
+        if ((sensor["baudrate"] | 0) != static_cast<int>(baudrate)) {
+          sensor["baudrate"] = baudrate;
+          config.saveSensors();
+        }
+        break;
+      }
+    }
+    return;
   }
+
+  baudrate = configuredBaudrate;
+  state.jsyBaudrate = baudrate;
+  state.jsyLastError = String("JSY absent a la vitesse configuree ") + String(configuredBaudrate);
+  state.addLog(state.jsyLastError);
+  state.addLog(String("JSY auto-baud: pas de bascule automatique, conserve config ") + String(configuredBaudrate));
+}
+
+bool JSYMK194TManager::reconfigureTo19200() {
+  if (!enabled) {
+    state.jsyLastError = "JSY reconfiguration refusee: capteur inactif";
+    state.addLog(state.jsyLastError);
+    return false;
+  }
+  const uint32_t configuredBaudrate = baudrate == 4800 ? 4800 : 19200;
+
+  state.addLog("JSY manuel 19200: debut");
+  state.addLog("JSY manuel 19200: test lecture en 19200");
+  if (testReadAtBaud(19200)) {
+    baudrate = 19200;
+    state.jsyBaudrate = baudrate;
+    state.jsyLastError = "";
+    state.addLog("JSY manuel 19200: deja OK en 19200");
+  } else {
+    state.addLog("JSY manuel 19200: test lecture en 4800");
+    if (!testReadAtBaud(4800)) {
+      baudrate = configuredBaudrate;
+      state.jsyBaudrate = baudrate;
+      state.jsyLastError = String("JSY manuel 19200: aucune reponse en 19200 ni 4800, retour config ") + String(configuredBaudrate);
+      state.addLog(state.jsyLastError);
+      beginSerial();
+      return false;
+    }
+
+    state.addLog("JSY manuel 19200: reponse en 4800, ecriture registre 0x0004 = 0x0107");
+    if (!writeBaudrate19200At4800()) {
+      baudrate = configuredBaudrate;
+      state.jsyBaudrate = baudrate;
+      state.jsyLastError = String("JSY manuel 19200: ecriture registre 0x0004 echouee, retour config ") + String(configuredBaudrate);
+      state.addLog(state.jsyLastError);
+      beginSerial();
+      return false;
+    }
+
+    delay(500);
+    state.addLog("JSY manuel 19200: redemarrage Serial2 en 19200");
+    if (!testReadAtBaud(19200)) {
+      baudrate = configuredBaudrate;
+      state.jsyBaudrate = baudrate;
+      state.jsyLastError = String("JSY manuel 19200: validation lecture 19200 echouee, retour config ") + String(configuredBaudrate);
+      state.addLog(state.jsyLastError);
+      beginSerial();
+      return false;
+    }
+
+    baudrate = 19200;
+    state.jsyBaudrate = baudrate;
+    state.jsyLastError = "";
+    state.addLog("JSY manuel 19200: validation lecture OK");
+  }
+
+  for (JsonObject sensor : config.sensors()) {
+    const char *id = sensor["id"] | "";
+    const char *type = sensor["type"] | "";
+    String source = sensor["source"] | "local";
+    if (!source.equalsIgnoreCase("espnow") && (strcmp(id, "jsy_grid") == 0 || strcmp(type, "JSY-MK-194T") == 0)) {
+      sensor["baudrate"] = 19200;
+      config.saveSensors();
+      break;
+    }
+  }
+  state.addLog("JSY manuel 19200: termine, baudrate sauvegarde");
+  beginSerial();
+  return true;
+}
+
+bool JSYMK194TManager::testReadAtBaud(uint32_t testBaudrate) {
+  Serial2.end();
+  Serial2.begin(testBaudrate, SERIAL_8N1, rxPin, txPin);
+  delay(120);
+  while (Serial2.available()) Serial2.read();
+  sendRequest();
+  return waitForValidFrame(max(timeoutMs, 1200UL));
+}
+
+bool JSYMK194TManager::writeBaudrate19200At4800() {
+  auto writeAndCheckEcho = [this](uint8_t *frame, uint8_t frameLen, uint8_t functionCode, const char *label) {
+    Serial2.end();
+    Serial2.begin(4800, SERIAL_8N1, rxPin, txPin);
+    delay(150);
+    while (Serial2.available()) Serial2.read();
+    Serial2.write(frame, frameLen);
+    Serial2.flush();
+
+    uint32_t start = millis();
+    uint8_t response[8]{};
+    uint8_t len = 0;
+    while (millis() - start < max(timeoutMs, 1200UL) && len < sizeof(response)) {
+      while (Serial2.available() && len < sizeof(response)) response[len++] = Serial2.read();
+      if (len >= sizeof(response)) break;
+      delay(1);
+    }
+
+    if (len < sizeof(response)) {
+      state.addLog(String("JSY manuel 19200: ") + label + " sans echo Modbus");
+      return false;
+    }
+    uint16_t expected = crc16(response, 6);
+    uint16_t received = static_cast<uint16_t>(response[6]) | (static_cast<uint16_t>(response[7]) << 8);
+    bool ok = response[0] == modbusAddress && response[1] == functionCode && expected == received;
+    state.addLog(String("JSY manuel 19200: ") + label + (ok ? " echo OK" : " echo invalide"));
+    return ok;
+  };
+
+  uint8_t frame06[8] = {modbusAddress, 0x06, 0x00, 0x04, 0x01, 0x07, 0x00, 0x00};
+  uint16_t crc06 = crc16(frame06, 6);
+  frame06[6] = crc06 & 0xFF;
+  frame06[7] = crc06 >> 8;
+  writeAndCheckEcho(frame06, sizeof(frame06), 0x06, "write 0x06 registre 0004=0107");
+  delay(700);
+  if (testReadAtBaud(19200)) {
+    state.addLog("JSY manuel 19200: validation OK apres write 0x06");
+    return true;
+  }
+  if (testReadAtBaud(4800)) {
+    state.addLog("JSY manuel 19200: reste en 4800 apres write 0x06");
+  } else {
+    state.addLog("JSY manuel 19200: aucune reponse apres write 0x06");
+  }
+
+  uint8_t frame10[11] = {modbusAddress, 0x10, 0x00, 0x04, 0x00, 0x01, 0x02, 0x01, 0x07, 0x00, 0x00};
+  uint16_t crc10 = crc16(frame10, 9);
+  frame10[9] = crc10 & 0xFF;
+  frame10[10] = crc10 >> 8;
+  writeAndCheckEcho(frame10, sizeof(frame10), 0x10, "write 0x10 registre 0004=0107");
+  delay(700);
+  if (testReadAtBaud(19200)) {
+    state.addLog("JSY manuel 19200: validation OK apres write 0x10");
+    return true;
+  }
+  if (testReadAtBaud(4800)) {
+    state.addLog("JSY manuel 19200: reste en 4800 apres write 0x10");
+  } else {
+    state.addLog("JSY manuel 19200: aucune reponse apres write 0x10");
+  }
+  return false;
+}
+
+bool JSYMK194TManager::waitForValidFrame(uint32_t waitMs) {
+  uint32_t start = millis();
+  uint8_t len = 0;
+  uint8_t expectedLen = 0;
+  uint8_t buffer[80]{};
+  while (millis() - start < waitMs && len < sizeof(buffer)) {
+    while (Serial2.available() && len < sizeof(buffer)) {
+      buffer[len++] = Serial2.read();
+      if (len == 3) expectedLen = 3 + buffer[2] + 2;
+      if (expectedLen && len >= expectedLen) {
+        if (len < 61 || buffer[0] != modbusAddress || buffer[1] != 0x03 || buffer[2] != 56) return false;
+        uint16_t expected = crc16(buffer, len - 2);
+        uint16_t received = static_cast<uint16_t>(buffer[len - 2]) | (static_cast<uint16_t>(buffer[len - 1]) << 8);
+        return expected == received;
+      }
+    }
+    delay(1);
+  }
+  return false;
+}
+
+void JSYMK194TManager::beginSerial() {
   Serial2.end();
   Serial2.begin(baudrate, SERIAL_8N1, rxPin, txPin);
+  state.jsyBaudrate = baudrate;
   Serial.print(F("JSY-MK-194T Serial2: RX"));
   Serial.print(rxPin);
   Serial.print(F(" TX"));
@@ -284,10 +478,6 @@ void JSYMK194TManager::beginSerial() {
   Serial.print(baudrate);
   Serial.print(F(" 8N1 adresse "));
   Serial.print(modbusAddress);
-  if (rs485DirPin >= 0) {
-    Serial.print(F(" DE/RE GPIO"));
-    Serial.print(rs485DirPin);
-  }
   Serial.println();
 }
 
@@ -296,10 +486,8 @@ void JSYMK194TManager::sendRequest() {
   uint16_t crc = crc16(frame, 6);
   frame[6] = crc & 0xFF;
   frame[7] = crc >> 8;
-  if (rs485DirPin >= 0) digitalWrite(rs485DirPin, HIGH);
   Serial2.write(frame, sizeof(frame));
   Serial2.flush();
-  if (rs485DirPin >= 0) digitalWrite(rs485DirPin, LOW);
 }
 
 uint16_t JSYMK194TManager::crc16(const uint8_t *data, uint8_t len) {
@@ -340,6 +528,7 @@ void JSYMK194TManager::publishRuntime() {
 void JSYMK194TManager::logError(const __FlashStringHelper *message, uint32_t now) {
   if (now - lastErrorLogMs < 5000) return;
   lastErrorLogMs = now;
+  state.jsyLastError = String(message);
   Serial.println(message);
   state.addLog(String(message));
 }

@@ -67,6 +67,8 @@ normalizeDashboardCleanVersion();
 cleanupGraphData();
 while (dashHistory.length > historyMaxPoints) dashHistory.shift();
 var dirtyPages = {};
+var lastSensorDeleteId = "";
+var lastActuatorDeleteId = "";
 var state = {
   ok: false,
   networkMode: "chargement",
@@ -625,6 +627,10 @@ async function api(path, options) {
 
 function postJson(path, data) {
   return fetch(path, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(data)});
+}
+
+function addQuery(path, key, value) {
+  return path + (path.indexOf("?") >= 0 ? "&" : "?") + encodeURIComponent(key) + "=" + encodeURIComponent(value);
 }
 
 function markDirty(name) {
@@ -1844,8 +1850,8 @@ function actuatorConfigList() {
 }
 
 function actuatorRuntimeList() {
-  if (state && Array.isArray(state.actuators)) return state.actuators;
   if (cache.actuatorRuntime && Array.isArray(cache.actuatorRuntime.actuators)) return cache.actuatorRuntime.actuators;
+  if (state && Array.isArray(state.actuators)) return state.actuators;
   return [];
 }
 
@@ -1886,6 +1892,25 @@ function getActuators() {
     });
   });
   return Object.keys(byId).map(function (id) { return byId[id]; }).sort(function (a, b) {
+    if (!!a.ok !== !!b.ok) return a.ok ? -1 : 1;
+    return String(a.name || a.id).localeCompare(String(b.name || b.id));
+  });
+}
+
+function configuredActuatorsWithRuntime() {
+  var runtimeById = {};
+  actuatorRuntimeList().forEach(function (runtime) {
+    if (runtime && runtime.id) runtimeById[String(runtime.id)] = runtime;
+  });
+  return actuatorConfigList().filter(function (cfg) {
+    return cfg && cfg.id;
+  }).map(function (cfg) {
+    var id = String(cfg.id);
+    return Object.assign({}, normalizeActuatorFromConfig(cfg), runtimeById[id] || {}, {
+      origin:actuatorOrigin(runtimeById[id] || cfg),
+      values:runtimeById[id] && runtimeById[id].values && typeof runtimeById[id].values === "object" ? runtimeById[id].values : (cfg.values || {})
+    });
+  }).sort(function (a, b) {
     if (!!a.ok !== !!b.ok) return a.ok ? -1 : 1;
     return String(a.name || a.id).localeCompare(String(b.name || b.id));
   });
@@ -2366,6 +2391,32 @@ function roleInfo() {
   if (role === "NODE_ACTUATOR") return {label:"NODE_ACTUATOR", detail:"actionneur seulement", pidExecution:"inactive sur NODE_ACTUATOR"};
   if (role === "NODE_MIXED") return {label:"NODE_MIXED", detail:"acquisition + action locale", pidExecution:"locale si active"};
   return {label:role || "-", detail:"role non renseigne", pidExecution:"non determinee"};
+}
+
+function redundancyRoleFromLegacy(role) {
+  role = String(role || "").toUpperCase();
+  if (role === "MASTER") return "MASTER";
+  if (role === "BACKUP") return "BACKUP";
+  return "STANDALONE";
+}
+
+function functionalRoleFromLegacy(role) {
+  role = String(role || "").toUpperCase();
+  if (role === "NODE_SENSOR") return "SENSOR";
+  if (role === "NODE_ACTUATOR") return "ACTUATOR";
+  return "MIXED";
+}
+
+function deviceRedundancyRole(source) {
+  source = source || state || {};
+  var device = source.device || {};
+  return device.redundancyRole || source.redundancyRole || redundancyRoleFromLegacy(source.role);
+}
+
+function deviceFunctionalRole(source) {
+  source = source || state || {};
+  var device = source.device || {};
+  return device.functionalRole || source.functionalRole || functionalRoleFromLegacy(source.role);
 }
 
 function gridBalanceInfo(value) {
@@ -4726,6 +4777,9 @@ function toggleDsSensor(index) {
 
 function deleteSensor(index) {
   if (confirm("Supprimer ce capteur ?")) {
+    var sensor = cache.sensors.sensors[index] || {};
+    lastSensorDeleteId = sensor.id || sensor.name || String(index);
+    console.log("SENSOR DELETE requested id=" + lastSensorDeleteId);
     cache.sensors.sensors.splice(index, 1);
     markDirty("sensors");
     drawSensorsPage();
@@ -4734,6 +4788,9 @@ function deleteSensor(index) {
 
 function deleteDsSensor(index) {
   if (confirm("Supprimer cette sonde DS18B20 ?")) {
+    var sensor = cache.sensors.ds18b20[index] || {};
+    lastSensorDeleteId = sensor.id || sensor.name || ("ds18b20_" + index);
+    console.log("SENSOR DELETE requested id=" + lastSensorDeleteId);
     cache.sensors.ds18b20.splice(index, 1);
     markDirty("sensors");
     drawSensorsPage();
@@ -4741,9 +4798,18 @@ function deleteDsSensor(index) {
 }
 
 async function saveSensors() {
-  var response = await postJson("/api/sensors", cache.sensors);
+  var sensorCount = (Array.isArray(cache.sensors.sensors) ? cache.sensors.sensors.length : 0) +
+    (Array.isArray(cache.sensors.ds18b20) ? cache.sensors.ds18b20.length : 0);
+  var path = "/api/sensors";
+  if (sensorCount === 0) {
+    if (!confirm("Confirmer la suppression de tous les capteurs ?")) return;
+    path = addQuery(path, "allowEmptySensors", "true");
+  }
+  if (lastSensorDeleteId) path = addQuery(path, "deleteId", lastSensorDeleteId);
+  var response = await postJson(path, cache.sensors);
   if (response.ok) {
     clearDirty("sensors");
+    lastSensorDeleteId = "";
     cache.sensors = await api("/api/sensors");
   }
   alert(response.ok ? "Capteurs sauvegardes et relus depuis LittleFS" : "Sauvegarde refusee: " + await response.text());
@@ -4938,7 +5004,7 @@ async function actuatorsPage() {
 }
 
 function drawActuatorsPage() {
-  var actuators = mergedActuatorsRuntime();
+  var actuators = configuredActuatorsWithRuntime();
   var remoteActuators = remoteDiscoveredActuators();
   var rows = actuators.map(function (a) {
     var index = actuatorConfigIndex(a.id);
@@ -5203,6 +5269,9 @@ async function toggleActuator(index) {
 
 function deleteActuator(index) {
   if (confirm("Supprimer cet actionneur ?")) {
+    var actuator = cache.actuators.actuators[index] || {};
+    lastActuatorDeleteId = actuator.id || actuator.name || String(index);
+    console.log("ACTUATOR DELETE requested id=" + lastActuatorDeleteId);
     cache.actuators.actuators.splice(index, 1);
     markDirty("actuators");
     drawActuatorsPage();
@@ -5210,10 +5279,24 @@ function deleteActuator(index) {
 }
 
 async function saveActuators() {
-  var response = await postJson("/api/actuators", cache.actuators);
+  var actuatorCount = Array.isArray(cache.actuators.actuators) ? cache.actuators.actuators.length : 0;
+  var path = "/api/actuators";
+  if (actuatorCount === 0) {
+    if (!confirm("Confirmer la suppression de tous les actionneurs ?")) return;
+    path = addQuery(path, "allowEmptyActuators", "true");
+  }
+  if (lastActuatorDeleteId) path = addQuery(path, "deleteId", lastActuatorDeleteId);
+  var response = await postJson(path, cache.actuators);
   if (response.ok) clearDirty("actuators");
   alert(response.ok ? "Actionneurs sauvegardes" : "Sauvegarde refusee: " + await response.text());
-  if (response.ok) await refreshActuatorRuntime(false);
+  if (response.ok) {
+    lastActuatorDeleteId = "";
+    cache.actuators = await api("/api/actuators");
+    await refreshActuatorRuntime(false);
+    if (cache.actuatorRuntime && Array.isArray(cache.actuatorRuntime.actuators)) {
+      state.actuators = cache.actuatorRuntime.actuators;
+    }
+  }
   drawActuatorsPage();
 }
 
@@ -5676,6 +5759,8 @@ async function settingsPage() {
       textField("devName", "Nom module", d.name || d.deviceName || "") +
       field("devNodeId", "Node ID ESP-NOW", d.nodeId == null ? 0 : d.nodeId) +
       '<label>Role<select id="devRole">' + options(["MASTER","BACKUP","NODE_SENSOR","NODE_ACTUATOR","NODE_MIXED"], d.role || "MASTER") + '</select></label>' +
+      '<label>Role redondance<select id="devRedundancyRole">' + options(["MASTER","BACKUP","STANDALONE"], d.redundancyRole || redundancyRoleFromLegacy(d.role || "MASTER")) + '</select></label>' +
+      '<label>Role fonctionnel<select id="devFunctionalRole">' + options(["SENSOR","ACTUATOR","MIXED"], d.functionalRole || functionalRoleFromLegacy(d.role || "MASTER")) + '</select></label>' +
       selectField("devConfigured", "Configuration terminee", d.isConfigured !== false) +
       '<p class="muted">0 = auto depuis MAC. Utilise 1 a 254 pour imposer un identifiant unique.</p>' +
     '</div></section>' +
@@ -5771,6 +5856,9 @@ function syncSliderField(id, fromRange) {
 async function saveSettings() {
   var s = cache.system;
   var d = cache.device;
+  var previousWifi = s.wifi || {};
+  var previousSsid = previousWifi.ssid || s.wifiSsid || "";
+  var previousPassword = previousWifi.password || s.wifiPassword || "";
   s.wifi = s.wifi || {};
   s.router = s.router || {};
   s.safety = s.safety || {};
@@ -5780,12 +5868,18 @@ async function saveSettings() {
   d.deviceName = d.name;
   d.nodeId = readNumber("devNodeId", 0);
   d.role = $("devRole").value;
+  d.redundancyRole = $("devRedundancyRole").value;
+  d.functionalRole = $("devFunctionalRole").value;
   d.isConfigured = boolField("devConfigured");
-  s.wifi.ssid = $("wifiSsid").value;
+  var requestedSsid = $("wifiSsid").value;
+  s.wifi.ssid = requestedSsid || previousSsid;
   s.wifiSsid = s.wifi.ssid;
   if ($("wifiPassword").value) {
     s.wifi.password = $("wifiPassword").value;
     s.wifiPassword = s.wifi.password;
+  } else if (previousPassword) {
+    s.wifi.password = previousPassword;
+    s.wifiPassword = previousPassword;
   }
   s.wifi.keepFallbackApAlwaysOn = boolField("keepAp");
   s.webAuth.enabled = boolField("webAuthEnabled");
@@ -6296,10 +6390,45 @@ async function systemPage() {
   if (!cache.actuators) cache.actuators = await api("/api/actuators");
   var gpioRows = gpioRowsFromConfig();
   var storage = sys.storage || {};
-  var githubOta = sys.githubOta || {};
   var services = sys.services || {};
-  var solar = sys.solarRouter || {};
   var ota = sys.ota || {};
+  var deviceName = (sys.device && sys.device.name) || sys.deviceName || "N/A";
+  var redundancyRole = deviceRedundancyRole(sys);
+  var functionalRole = deviceFunctionalRole(sys);
+  var firmwareVersion = sys.firmwareVersion || "N/A";
+  var littleFsVersion = sys.littleFsVersion || storage.version || "N/A";
+  var littleFsStatus = storage.status || "N/A";
+  var activePartition = ota.runningLabel || ota.runningSlot || "N/A";
+  var networkMode = sys.networkMode || "N/A";
+  var appMargin = Number(ota.runningRemainingBytes || 0);
+  var appMarginCls = appMargin > 250000 ? "ok" : "warn";
+  var ntpCls = sys.ntpSynced ? "ok" : "warn";
+  var wifiFallback = String(networkMode).toUpperCase().indexOf("AP") >= 0 && String(networkMode).toUpperCase().indexOf("STA") < 0;
+  var littleFsMismatch = firmwareVersion !== "N/A" && littleFsVersion !== "N/A" && firmwareVersion !== littleFsVersion;
+  var summaryItems = [
+    ["Nom ESP", deviceName, "info"],
+    ["Redondance", redundancyRole, redundancyRole === "MASTER" ? "ok" : "info"],
+    ["Fonction", functionalRole, "ok"],
+    ["Wi-Fi", networkMode, wifiFallback ? "warn" : "info"],
+    ["Firmware", firmwareVersion, littleFsMismatch ? "warn" : "ok"],
+    ["LittleFS", littleFsStatus, stateClass(littleFsStatus)],
+    ["Partition", activePartition, "info"]
+  ];
+  var warnings = [];
+  if (littleFsMismatch) warnings.push(["warn", "Firmware et LittleFS ont des versions differentes"]);
+  if (String(littleFsStatus).toUpperCase() !== "OK") warnings.push(["bad", "LittleFS n est pas OK"]);
+  if (appMargin <= 250000) warnings.push(["warn", "Marge app faible: " + bytesHuman(appMargin)]);
+  if (!sys.ntpSynced) warnings.push(["warn", "NTP non synchronise"]);
+  if (wifiFallback) warnings.push(["warn", "Wi-Fi en fallback AP"]);
+  function systemSummaryCard(item) {
+    return '<div class="systemSummaryCard ' + esc(item[2]) + '"><span>' + esc(item[0]) + '</span><b>' + esc(item[1]) + '</b></div>';
+  }
+  function warningStrip() {
+    if (!warnings.length) return "";
+    return '<div class="systemAlertStrip">' + warnings.map(function (item) {
+      return '<span class="badge ' + esc(item[0]) + '">' + esc(item[1]) + '</span>';
+    }).join("") + '</div>';
+  }
   function otaSlotCard(title, slot) {
     slot = slot || {};
     var version = slot.routeurVersion || slot.version || "N/A";
@@ -6311,97 +6440,91 @@ async function systemPage() {
       '<div class="miniSub">Adresse: ' + (slot.address == null ? 'N/A' : '0x' + Number(slot.address).toString(16)) + '</div>' +
     '</div>';
   }
-  $("app").innerHTML = banner() + '<h1>Systeme</h1><div class="toolbar"><button onclick="refresh()">Actualiser</button><button class="danger" onclick="restartSystemPage()">Redemarrer ESP32</button><a href="/api/system-info">JSON systeme</a></div><div class="settingsGrid">' +
-    dashboardBlock("Module ESP", "carte, firmware et uptime",
+  var gpioTable = '<table><tr><th>GPIO</th><th>Usage</th><th>Champ</th><th>Detail</th></tr>' +
+    (gpioRows.length ? gpioRows.map(function (row) {
+      return '<tr><td>GPIO' + esc(row.gpio) + '</td><td>' + esc(row.owner) + '</td><td>' + esc(row.field) + '</td><td>' + esc(row.detail) + '</td></tr>';
+    }).join("") : '<tr><td colspan="4">Aucun GPIO configure.</td></tr>') +
+    '</table>';
+  var advancedHtml =
+    '<details class="systemAdvanced"><summary>Details avances</summary>' +
+      '<div class="settingsGrid">' +
+        dashboardBlock("Informations build", "compatibilite et diagnostic",
+          '<div class="blockMetricGrid">' +
+            blockMetric("Role historique", sys.role || "N/A", "", "muted", "compatibilite") +
+            blockMetric("Version build", sys.buildVersion || "N/A", "", "info", "format YYYYMMDD-NN") +
+            blockMetric("Compilation", sys.buildDate || "N/A", "", "muted", "") +
+            blockMetric("Build timestamp", sys.buildTimestamp || "N/A", "", "muted", "") +
+            blockMetric("Cause reset", sys.resetReason || "N/A", "", stateClass(sys.resetReason === "Power on" ? "OK" : "Attention"), "") +
+            blockMetric("Uptime ms", sys.uptime || "N/A", "", "muted", "") +
+          '</div>', "advanced") +
+        dashboardBlock("Reseau avance", "adresses secondaires",
+          '<div class="blockMetricGrid">' +
+            blockMetric("SSID", sys.ssid || "N/A", "", sys.ssid && sys.ssid !== "N/A" ? "ok" : "muted", "") +
+            blockMetric("RSSI", sys.rssi == null ? "N/A" : sys.rssi, sys.rssi == null ? "" : "dBm", stateClass(sys.wifiQuality), sys.wifiQuality || "N/A") +
+            blockMetric("Qualite WiFi", sys.wifiQuality || "N/A", "", stateClass(sys.wifiQuality), "") +
+            blockMetric("IP station", sys.stationIp || "N/A", "", "info", "") +
+            blockMetric("IP AP", sys.apIp || "N/A", "", "info", "") +
+          '</div>', "advanced") +
+        dashboardBlock("Boot detaille", "factory recovery et ota_0",
+          '<div class="blockMetricGrid">' +
+            blockMetric("Boot configure", ota.bootLabel || ota.bootSlot || "N/A", "", "info", ota.bootSlot || "") +
+            blockMetric("Partition main", ota.mainInfo || "N/A", "", "info", "") +
+            blockMetric("Next update", ota.nextUpdateLabel || "N/A", "", "muted", ota.nextUpdateSlot || "") +
+            blockMetric("Running info", ota.runningInfo || "N/A", "", "muted", "") +
+            blockMetric("Boot info", ota.bootInfo || "N/A", "", "muted", "") +
+            blockMetric("Libre sketch", bytesHuman(ota.freeSketchSpace), "", "muted", "") +
+          '</div><div class="miniGrid">' + otaSlotCard("Factory recovery", ota.factory) + otaSlotCard("Main ota_0", ota.app0) + '</div>', "advanced") +
+        dashboardBlock("Services et securite", "etat technique",
+          '<div class="statusMiniGrid">' +
+            statusMini("WiFi", services.wifi) +
+            statusMini("NTP", services.ntp) +
+            statusMini("MQTT", services.mqtt) +
+            statusMini("Capteurs", services.sensors) +
+            statusMini("ESP-NOW", services.espnow) +
+            statusMini("Safety", services.safety) +
+          '</div><div class="blockMetricGrid">' +
+            blockMetric("RAM libre", bytesHuman(sys.freeHeap), "", "ok", "") +
+            blockMetric("RAM mini observee", bytesHuman(sys.minFreeHeap), "", "warn", "") +
+            blockMetric("CPU", sys.cpuFreqMHz == null ? "N/A" : sys.cpuFreqMHz, sys.cpuFreqMHz == null ? "" : "MHz", "info", "") +
+            blockMetric("Safety", sys.safetyLevel || "N/A", "", stateClass(sys.safetyLevel), sys.safetyReason || "N/A") +
+          '</div>', "advanced") +
+      '</div><h2>GPIO utilises</h2>' + gpioTable +
+    '</details>';
+  $("app").innerHTML = banner() + '<h1>Systeme</h1><div class="toolbar"><button onclick="refresh()">Actualiser</button><button class="danger" onclick="restartSystemPage()">Redemarrer ESP32</button><a href="/api/system-info">JSON systeme</a></div>' +
+    '<section class="systemSummaryBand">' + summaryItems.map(systemSummaryCard).join("") + '</section>' +
+    warningStrip() +
+    '<div class="settingsGrid systemMainGrid">' +
+    dashboardBlock("Identite ESP", "exploitation",
       '<div class="blockMetricGrid">' +
-        blockMetric("Nom", sys.deviceName || "N/A", "", "info", sys.role || "N/A") +
-        blockMetric("Firmware", sys.firmwareVersion || "N/A", "", "muted", "") +
-        blockMetric("Version build", sys.buildVersion || "N/A", "", "info", "format YYYYMMDD-NN") +
-        blockMetric("Compilation", sys.buildDate || "N/A", "", "muted", "") +
-        blockMetric("Build timestamp", sys.buildTimestamp || "N/A", "", "muted", "") +
+        blockMetric("Nom ESP", deviceName, "", "info", sys.deviceId || "") +
+        blockMetric("Role redondance", redundancyRole, "", "info", "") +
+        blockMetric("Role fonctionnel", functionalRole, "", "ok", "") +
         blockMetric("Uptime", uptimeHuman(sys.uptime), "", "ok", "") +
       '</div>', "identity") +
-    dashboardBlock("Reseau WiFi", "connectivite locale",
+    dashboardBlock("Versions", "firmware et interface",
       '<div class="blockMetricGrid">' +
-        blockMetric("SSID", sys.ssid || "N/A", "", sys.ssid && sys.ssid !== "N/A" ? "ok" : "muted", "") +
-        blockMetric("RSSI", sys.rssi == null ? "N/A" : sys.rssi, sys.rssi == null ? "" : "dBm", stateClass(sys.wifiQuality), sys.wifiQuality || "N/A") +
-        blockMetric("Qualite WiFi", sys.wifiQuality || "N/A", "", stateClass(sys.wifiQuality), "") +
-        blockMetric("Mode", sys.networkMode || "N/A", "", "info", "") +
+        blockMetric("Firmware", firmwareVersion, "", littleFsMismatch ? "warn" : "ok", "") +
+        blockMetric("LittleFS", littleFsVersion, "", littleFsMismatch ? "warn" : "info", "") +
+        blockMetric("Etat LittleFS", littleFsStatus, "", stateClass(littleFsStatus), "") +
+      '</div>', "versions") +
+    dashboardBlock("Reseau", "acces local",
+      '<div class="blockMetricGrid">' +
+        blockMetric("Mode WiFi", networkMode, "", wifiFallback ? "warn" : "info", "") +
         blockMetric("IP active", sys.ip || "N/A", "", "info", "") +
-        blockMetric("IP station", sys.stationIp || "N/A", "", "info", "") +
-        blockMetric("IP AP", sys.apIp || "N/A", "", "info", "") +
-        blockMetric("NTP", sys.localDateTime || "N/A", "", sys.ntpSynced ? "ok" : "warn", sys.ntpStatus || "N/A") +
         blockMetric("MAC WiFi", sys.mac || "N/A", "", "muted", "") +
+        blockMetric("NTP", sys.localDateTime || "N/A", "", ntpCls, sys.ntpStatus || "N/A") +
       '</div>', "network") +
-    dashboardBlock("OTA firmware", "app active et prochain slot",
+    dashboardBlock("Stockage / partitions", "memoire flash",
       '<div class="blockMetricGrid">' +
-        blockMetric("Lancee depuis", ota.runningSlot || "N/A", "", "ok", ota.runningLabel || "") +
-        blockMetric("Boot configure", ota.bootSlot || "N/A", "", "info", ota.bootLabel || "") +
-        blockMetric("Prochaine MAJ", ota.nextUpdateSlot || "N/A", "", "warn", ota.nextUpdateLabel || "") +
-        blockMetric("Taille slot", bytesHuman(ota.runningSlotSize), "", "info", "partition app") +
+        blockMetric("Partition active", activePartition, "", "ok", ota.runningSlot || "") +
+        blockMetric("Taille app", bytesHuman(ota.runningSlotSize), "", "info", "partition app") +
         blockMetric("Firmware utilise", bytesHuman(ota.sketchSize), "", "muted", "") +
-        blockMetric("Reste disponible", bytesHuman(ota.runningRemainingBytes), "", ota.runningRemainingBytes > 250000 ? "ok" : "warn", "marge firmware") +
-      '</div><div class="miniGrid">' +
-        otaSlotCard("APP1 / OTA_0", ota.app0) +
-        otaSlotCard("APP2 / OTA_1", ota.app1) +
-      '</div><p><button class="danger" onclick="rollbackFirmware()">Rollback firmware</button></p><p class="muted">Redemarre sur l autre partition OTA si elle contient une image valide.</p>', "firmware") +
-    dashboardBlock("Partition LittleFS", "stockage interface et configuration",
-      '<div class="blockMetricGrid">' +
-        blockMetric("Type", storage.type || "N/A", "", "info", "") +
-        blockMetric("Version", storage.version || "N/A", "", "info", "LittleFS") +
-        blockMetric("Etat", storage.status || "N/A", "", stateClass(storage.status), "") +
-        blockMetric("Utilise", bytesHuman(storage.used), "", "info", "") +
-        blockMetric("Total", bytesHuman(storage.total), "", "ok", "") +
+        blockMetric("Marge app", bytesHuman(appMargin), "", appMarginCls, "marge firmware") +
+        blockMetric("LittleFS utilise", bytesHuman(storage.used) + " / " + bytesHuman(storage.total), "", stateClass(littleFsStatus), "") +
       '</div><p class="muted"><a href="/fs">Voir les fichiers LittleFS</a></p>', "storage") +
-    dashboardBlock("OTA GitHub Releases", "verification et mise a jour volontaire",
-      '<div class="blockMetricGrid">' +
-        blockMetric("Firmware local", githubOta.localFirmwareVersion || sys.firmwareVersion || "N/A", "", "info", "") +
-        blockMetric("LittleFS local", githubOta.localLittlefsVersion || storage.version || "N/A", "", "info", "") +
-        blockMetric("Version GitHub", "-", "", "muted", "Cliquer verifier") +
-      '</div><div id="githubOtaStatus" class="pendingBox">Aucune verification GitHub effectuee.</div>' +
-      '<div class="toolbar">' +
-        '<button onclick="checkGithubOta()">Verifier GitHub</button>' +
-        '<button class="danger" onclick="updateGithubFirmware()">Mettre a jour firmware</button>' +
-        '<button class="danger" onclick="updateGithubLittlefs()">Mettre a jour LittleFS</button>' +
-        '<a href="' + esc(githubOta.releaseUrl || "https://github.com/auvinetandre-coder/Prj_esp32_2026/releases/latest") + '">Release GitHub</a>' +
-      '</div><p class="muted">Aucune mise a jour automatique. Firmware et LittleFS restent separes.</p>', "githubOta") +
-    dashboardBlock("Memoire / CPU", "ressources ESP32",
-      '<div class="blockMetricGrid">' +
-        blockMetric("RAM libre", bytesHuman(sys.freeHeap), "", "ok", "") +
-        blockMetric("RAM mini observee", bytesHuman(sys.minFreeHeap), "", "warn", "") +
-        blockMetric("CPU", sys.cpuFreqMHz == null ? "N/A" : sys.cpuFreqMHz, sys.cpuFreqMHz == null ? "" : "MHz", "info", "") +
-      '</div>', "memory") +
-    dashboardBlock("Redemarrage / stabilite", "diagnostic boot",
-      '<div class="blockMetricGrid">' +
-        blockMetric("Cause reset", sys.resetReason || "N/A", "", stateClass(sys.resetReason === "Power on" ? "OK" : "Attention"), "") +
-        blockMetric("Uptime ms", sys.uptime || "N/A", "", "muted", "") +
-        blockMetric("Safety", sys.safetyLevel || "N/A", "", stateClass(sys.safetyLevel), sys.safetyReason || "N/A") +
-      '</div>', "stability") +
-    dashboardBlock("Services", "etat general",
-      '<div class="statusMiniGrid">' +
-        statusMini("WiFi", services.wifi) +
-        statusMini("NTP", services.ntp) +
-        statusMini("MQTT", services.mqtt) +
-        statusMini("Capteurs", services.sensors) +
-        statusMini("ESP-NOW", services.espnow) +
-        statusMini("Safety", services.safety) +
-      '</div>', "services") +
-    dashboardBlock("Routeur solaire", "mesures principales",
-      '<div class="blockMetricGrid">' +
-        blockMetric("Mode", solar.mode || "N/A", "", "info", solar.gridPowerSource || "") +
-        blockMetric("Puissance", solar.power == null ? "N/A" : solar.power, solar.power == null ? "" : "W", Number(solar.power) < 0 ? "solar" : "consume", "") +
-        blockMetric("Sortie", solar.outputPercent == null ? "N/A" : solar.outputPercent, solar.outputPercent == null ? "" : "%", Number(solar.outputPercent) > 0 ? "ok" : "muted", "SSR / triac") +
-        blockMetric("Temperature", solar.temperature == null ? "N/A" : solar.temperature, typeof solar.temperature === "number" ? "C" : "", typeof solar.temperature === "number" ? tempClass(solar.temperature) : "muted", "") +
-        blockMetric("Derniere mesure", solar.lastMeasureAge == null ? "N/A" : solar.lastMeasureAge, typeof solar.lastMeasureAge === "number" ? "s" : "", "info", "") +
-        blockMetric("SSR1 / SSR2", fmt(solar.ssr1Percent) + " / " + fmt(solar.ssr2Percent), "%", "muted", "") +
-      '</div>', "solar") +
     dashboardBlock("Actions systeme", "commandes locales",
-      '<p><button class="danger" onclick="restartSystemPage()">Redemarrer ESP32</button></p><p class="muted">Le redemarrage demande une confirmation dans le navigateur. Aucun mot de passe WiFi n est affiche sur cette page.</p>', "actions") +
-    '</div><h2>GPIO utilises</h2><table><tr><th>GPIO</th><th>Usage</th><th>Champ</th><th>Detail</th></tr>' +
-      (gpioRows.length ? gpioRows.map(function (row) {
-        return '<tr><td>GPIO' + esc(row.gpio) + '</td><td>' + esc(row.owner) + '</td><td>' + esc(row.field) + '</td><td>' + esc(row.detail) + '</td></tr>';
-      }).join("") : '<tr><td colspan="4">Aucun GPIO configure.</td></tr>') +
-    '</table>';
+      '<p><button class="danger" onclick="restartSystemPage()">Redemarrer ESP32</button> <button class="danger" onclick="bootRecoveryPage()">Passer en recovery</button></p><p class="muted">Le redemarrage normal reste sur ota_0. Le bouton recovery redemarre sur la factory recovery pour les mises a jour.</p>', "actions") +
+    '</div>' + advancedHtml;
 }
 
 async function restartSystemPage() {
@@ -6410,64 +6533,11 @@ async function restartSystemPage() {
   $("app").innerHTML = '<h1>Redemarrage...</h1><div class="panel">Attends quelques secondes puis recharge /app.</div>';
 }
 
-async function rollbackFirmware() {
-  if (!confirm("Redemarrer sur l autre partition firmware ?")) return;
-  var response = await fetch("/api/ota/rollback", {method:"POST"});
-  if (!response.ok) return alert("Rollback refuse: " + await response.text());
-  $("app").innerHTML = '<h1>Rollback firmware...</h1><div class="panel">L ESP32 redemarre sur l autre partition OTA. Attends quelques secondes puis recharge /app.</div>';
-}
-
-async function checkGithubOta() {
-  var box = $("githubOtaStatus");
-  if (box) box.textContent = "Verification GitHub en cours...";
-  try {
-    var response = await fetch("/api/ota/github/check");
-    var text = await response.text();
-    var info;
-    try { info = JSON.parse(text); } catch (parseError) { info = {ok:false, error:text || parseError.message}; }
-    if (!response.ok) info.ok = false;
-    if (!box) return;
-    var cls = info.ok ? (info.updateAvailable ? "pendingBox" : "help") : "banner";
-    box.className = cls;
-    box.innerHTML =
-      '<b>' + (info.ok ? "GitHub accessible" : "Verification refusee") + '</b><br>' +
-      'Version distante: ' + esc(info.remoteVersion || "N/A") + '<br>' +
-      'Firmware: local ' + esc(info.localFirmwareVersion || "N/A") + ' / GitHub ' + esc(info.remoteFirmwareVersion || "N/A") +
-      (info.firmwareUpdateAvailable ? ' <span class="badge warn">MAJ disponible</span>' : ' <span class="badge ok">OK</span>') + '<br>' +
-      'LittleFS: local ' + esc(info.localLittlefsVersion || "N/A") + ' / GitHub ' + esc(info.remoteLittlefsVersion || "N/A") +
-      (info.littlefsUpdateAvailable ? ' <span class="badge warn">MAJ disponible</span>' : ' <span class="badge ok">OK</span>') +
-      (info.notes ? '<br>Notes: ' + esc(info.notes) : '') +
-      (info.error ? '<br>Erreur: ' + esc(info.error) : '');
-  } catch (e) {
-    if (box) {
-      box.className = "banner";
-      box.textContent = "Verification GitHub impossible: " + e.message;
-    }
-  }
-}
-
-async function updateGithubFirmware() {
-  if (!confirm("Telecharger firmware.bin depuis GitHub Releases et redemarrer ?")) return;
-  $("app").innerHTML = '<h1>OTA firmware GitHub...</h1><div class="panel">Telechargement en cours. Ne coupe pas l alimentation.</div>';
-  var response = await fetch("/api/ota/github/firmware", {method:"POST"});
-  var text = await response.text();
-  if (!response.ok) {
-    $("app").innerHTML = '<h1>OTA firmware refusee</h1><div class="banner">' + esc(text) + '</div>';
-    return;
-  }
-  $("app").innerHTML = '<h1>OTA firmware appliquee</h1><div class="panel">L ESP32 redemarre. Attends quelques secondes puis recharge /app.</div>';
-}
-
-async function updateGithubLittlefs() {
-  if (!confirm("Sauvegarder /config, telecharger littlefs.bin depuis GitHub Releases et redemarrer ?")) return;
-  $("app").innerHTML = '<h1>OTA LittleFS GitHub...</h1><div class="panel">Sauvegarde config puis telechargement en cours. Ne coupe pas l alimentation.</div>';
-  var response = await fetch("/api/ota/github/littlefs", {method:"POST"});
-  var text = await response.text();
-  if (!response.ok) {
-    $("app").innerHTML = '<h1>OTA LittleFS refusee</h1><div class="banner">' + esc(text) + '</div>';
-    return;
-  }
-  $("app").innerHTML = '<h1>OTA LittleFS appliquee</h1><div class="panel">L ESP32 redemarre puis restaure /config si necessaire.</div>';
+async function bootRecoveryPage() {
+  if (!confirm("Redemarrer en recovery pour maintenance ?")) return;
+  var response = await fetch("/api/system/recovery", {method:"POST"});
+  if (!response.ok) return alert("Passage recovery refuse: " + await response.text());
+  $("app").innerHTML = '<h1>Passage en recovery...</h1><div class="panel">Connecte-toi a RouteurSolaire_Recovery ou ouvre l IP locale si le recovery rejoint le WiFi.</div>';
 }
 
 function simulationControlsHtml() {

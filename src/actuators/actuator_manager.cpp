@@ -53,7 +53,7 @@ void ActuatorManager::loop(uint32_t now) {
   scheduleTriacFire();
 
   for (JsonObject actuator : config.actuators()) {
-    if (actuator["source"].as<String>() != "local") continue;
+    const bool remote = actuator["source"].as<String>() == "espnow";
     Actuator *channel = channelFor(actuator["id"] | "");
     if (!channel) continue;
     syncChannelFromConfig(channel, actuator);
@@ -71,11 +71,16 @@ void ActuatorManager::loop(uint32_t now) {
       channel->commandPercent = 0;
       publishPower(channel->id, 0);
       state.addLog(String("Timeout commande actionneur ") + channel->id);
+      if (actuator["debug"] | false) state.logEvent("WARNING", "ACTUATOR_TIMEOUT", String(channel->id), "ActuatorManager");
     }
 
     if (actuator["critical"] && !criticalControlAllowed()) channel->commandPercent = 0;
     if (channel->safetyLocked) channel->commandPercent = 0;
 
+    if (remote) {
+      publishPower(channel->id, channel->commandPercent);
+      continue;
+    }
     applyLocal(actuator, now);
   }
 }
@@ -91,6 +96,12 @@ void ActuatorManager::allOff() {
     bool activeHigh = actuator["activeHigh"] | true;
     String id = actuator["id"] | "";
     bool offPinHigh = !activeHigh;
+    String source = actuator["source"] | "local";
+    if (source.equalsIgnoreCase("espnow")) {
+      String mac = actuator["mac"] | "";
+      String remoteId = actuator["remoteActuatorId"] | id.c_str();
+      if (mac.length()) espnow.sendActuatorCommand(mac, remoteId, 0.0f, actuator["mode"] | "OFF", actuator["ttlMs"] | 1000);
+    }
     if (pin >= 0) {
       pinMode(pin, OUTPUT);
       digitalWrite(pin, offPinHigh ? HIGH : LOW);
@@ -173,7 +184,15 @@ void ActuatorManager::setCommandPercent(const String &id, float percent) {
   if (actuator["critical"] && !criticalControlAllowed()) percent = 0;
 
   if (actuator["source"].as<String>() == "espnow") {
-    espnow.sendActuatorCommand(actuator["mac"] | "", id, percent, actuator["mode"] | "OFF", actuator["ttlMs"] | 1000);
+    String remoteId = actuator["remoteActuatorId"] | id.c_str();
+    Actuator *channel = channelFor(id);
+    if (channel) {
+      syncChannelFromConfig(channel, actuator);
+      channel->commandPercent = percent;
+      channel->lastCommandMs = millis();
+      channel->currentState = percent > 0.5f;
+    }
+    espnow.sendActuatorCommand(actuator["mac"] | "", remoteId, percent, actuator["mode"] | "OFF", actuator["ttlMs"] | 1000);
   } else {
     Actuator *channel = channelFor(id);
     if (channel) {
@@ -185,7 +204,7 @@ void ActuatorManager::setCommandPercent(const String &id, float percent) {
 
   publishPower(id, percent);
   state.lastActuatorCommandLog = String(simulationMode ? "SIM " : "REEL ") + id + " = " + String(percent, 1) + "%";
-  if (simulationMode) state.logEvent("INFO", "ACTUATOR_COMMAND", state.lastActuatorCommandLog, "ActuatorManager");
+  if (simulationMode || (actuator["debug"] | false)) state.logEvent("INFO", "ACTUATOR_COMMAND", state.lastActuatorCommandLog, "ActuatorManager");
 }
 
 void ActuatorManager::setPowerWatts(const String &actuatorId, float watts) {
@@ -248,6 +267,92 @@ void ActuatorManager::unlockSafety() {
 void ActuatorManager::stopCritical() {
   lockAllForSafety("SafetyManager critical");
   allOff();
+}
+
+void ActuatorManager::runtimeToJson(JsonArray out) {
+  const uint32_t now = millis();
+  const uint32_t timeoutMs = config.system()["router"]["commandTimeoutMs"] | commandTimeoutMs;
+
+  for (JsonObject actuator : config.actuators()) {
+    String id = actuator["id"] | "";
+    if (!id.length()) continue;
+
+    String source = actuator["source"] | "local";
+    source.toLowerCase();
+    const bool remote = source == "espnow";
+    const bool enabled = actuator["enabled"] | false;
+    const bool critical = actuator["critical"] | false;
+    const float maxPowerW = actuator["maxPowerW"] | 0.0f;
+    Actuator *channel = channelForExisting(id);
+    const uint32_t lastCommandMs = channel ? channel->lastCommandMs : 0;
+    const float commandPercent = channel ? channel->commandPercent : 0.0f;
+    const float outputPercent = commandPercent;
+    const bool outputOn = channel ? channel->currentState : false;
+    const bool channelSafetyLocked = safetyLocked || (channel && channel->safetyLocked) || (critical && state.safetyTripped);
+    const bool commandTimedOut = enabled && commandPercent > 0.0f && lastCommandMs &&
+      now >= lastCommandMs && now - lastCommandMs > timeoutMs;
+    const bool remoteIncomplete = remote && String(actuator["mac"] | "").length() == 0;
+    const bool ok = enabled && !channelSafetyLocked && !commandTimedOut && !remoteIncomplete;
+
+    String type = actuator["type"] | "SSR";
+    String normalizedType = type;
+    normalizedType.toUpperCase();
+    if (normalizedType.indexOf("ROBOTDYN") >= 0 || normalizedType.indexOf("TRIAC") >= 0) normalizedType = "TRIAC";
+    else if (normalizedType.indexOf("RELAY") >= 0 || normalizedType.indexOf("RELAIS") >= 0) normalizedType = "RELAY";
+    else if (normalizedType.indexOf("PWM") >= 0) normalizedType = "PWM";
+    else if (remote && normalizedType.length() == 0) normalizedType = "REMOTE";
+    else if (normalizedType != "SSR" && normalizedType != "TRIAC" && normalizedType != "RELAY" && normalizedType != "PWM") normalizedType = remote ? "REMOTE" : normalizedType;
+
+    String mode = normalizeMode(actuator["mode"] | "OFF", type);
+    String electricalMode = mode;
+    if (mode == "TRAIN_ONDES_ENTIERES" || mode == "ZERO_CROSS_BURST") electricalMode = "BURST_FIRE";
+    if (mode == "MANUAL_SAFE") electricalMode = "LOW_FREQ_PWM";
+
+    JsonObject item = out.add<JsonObject>();
+    item["id"] = id;
+    item["name"] = actuator["name"] | id.c_str();
+    item["type"] = normalizedType;
+    item["role"] = actuator["role"] | actuator["usage"] | "";
+    item["origin"] = remote ? "ESP-NOW" : "LOCAL";
+    item["enabled"] = enabled;
+    item["debug"] = actuator["debug"] | false;
+    item["ok"] = ok;
+    if (lastCommandMs) item["ageMs"] = now >= lastCommandMs ? now - lastCommandMs : 0;
+    else item["ageMs"] = nullptr;
+    item["timedOut"] = commandTimedOut || remoteIncomplete;
+    item["critical"] = critical;
+    item["safetyLocked"] = channelSafetyLocked;
+    item["mode"] = mode;
+    item["electricalMode"] = electricalMode;
+    item["commandPercent"] = commandPercent;
+    item["outputPercent"] = outputPercent;
+    item["outputOn"] = outputOn;
+    if (maxPowerW > 0.0f) item["estimatedPowerW"] = maxPowerW * outputPercent / 100.0f;
+    else item["estimatedPowerW"] = nullptr;
+    item["maxPowerW"] = maxPowerW > 0.0f ? maxPowerW : 0.0f;
+    item["source"] = channelSafetyLocked ? "SECURITY" : "AUTOMATE";
+    if (!remote) item["gpio"] = actuator.containsKey("gpio") ? actuator["gpio"].as<int>() : -1;
+    else item["gpio"] = nullptr;
+    String remoteNodeId = actuator["remoteNodeId"] | "";
+    if (!remoteNodeId.length()) remoteNodeId = actuator["nodeId"] | "";
+    item["remoteNodeId"] = remote ? remoteNodeId : "";
+    item["remoteActuatorId"] = remote ? String(actuator["remoteActuatorId"] | id.c_str()) : "";
+    item["remoteMac"] = remote ? String(actuator["mac"] | "") : "";
+    if (lastCommandMs) item["lastCommandMs"] = lastCommandMs;
+    else item["lastCommandMs"] = nullptr;
+    item["lastAckMs"] = nullptr;
+    item["ackStatus"] = remote ? "NOT_SUPPORTED" : "LOCAL";
+    item["nodeOk"] = remote ? !remoteIncomplete : true;
+    item["discovered"] = !remote || !remoteIncomplete;
+    item["commandSent"] = remote && lastCommandMs > 0;
+    item["commandAcked"] = false;
+    item["lastError"] = remoteIncomplete ? "REMOTE_MAC_MISSING" : (commandTimedOut ? "COMMAND_TIMEOUT" : "");
+    JsonObject values = item["values"].to<JsonObject>();
+    values["commandPercent"] = commandPercent;
+    values["outputPercent"] = outputPercent;
+    values["outputOn"] = outputOn;
+    if (maxPowerW > 0.0f) values["estimatedPowerW"] = maxPowerW * outputPercent / 100.0f;
+  }
 }
 
 bool ActuatorManager::criticalControlAllowed() {
@@ -336,6 +441,14 @@ ActuatorManager::Actuator *ActuatorManager::channelFor(const String &id) {
   strlcpy(channels[channelCount].id, id.c_str(), sizeof(channels[channelCount].id));
   channels[channelCount].cycleStartMs = millis();
   return &channels[channelCount++];
+}
+
+ActuatorManager::Actuator *ActuatorManager::channelForExisting(const String &id) {
+  if (!id.length()) return nullptr;
+  for (uint8_t i = 0; i < channelCount; i++) {
+    if (id == channels[i].id) return &channels[i];
+  }
+  return nullptr;
 }
 
 void ActuatorManager::syncChannelFromConfig(Actuator *channel, JsonObject actuator) {

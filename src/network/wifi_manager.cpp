@@ -1,8 +1,10 @@
 #include "wifi_manager.h"
+#include <Preferences.h>
 #include <time.h>
 
 static const char *DEFAULT_AP_SSID = "RouteurSolaire_Config";
 static const char *DEFAULT_AP_PASSWORD = "routeur1234";
+static const char *RECOVERY_NVS_NAMESPACE = "recovery";
 
 static bool isWifiPlaceholder(const String &value) {
   if (value.length() == 0) return true;
@@ -11,20 +13,42 @@ static bool isWifiPlaceholder(const String &value) {
   return text.indexOf("A_CONFIGURER") >= 0 || text.indexOf("ACONFIGURER") >= 0;
 }
 
+static bool syncRecoveryWifiCredentials(const String &ssid, const String &password) {
+  if (isWifiPlaceholder(ssid) || password.length() == 0) return false;
+  Preferences prefs;
+  if (!prefs.begin(RECOVERY_NVS_NAMESPACE, false)) return false;
+  bool ok = prefs.putString("ssid", ssid) > 0;
+  ok = prefs.putString("pass", password) > 0 && ok;
+  prefs.end();
+  return ok;
+}
+
 void SolarWiFiManager::begin() {
   JsonObject sys = config.system();
-  String ssid = sys["wifi"]["ssid"] | sys["wifiSsid"] | "";
-  String password = sys["wifi"]["password"] | sys["wifiPassword"] | "";
+  const char *modernSsid = sys["wifi"]["ssid"] | "";
+  const char *legacySsid = sys["wifiSsid"] | "";
+  const char *modernPassword = sys["wifi"]["password"] | "";
+  const char *legacyPassword = sys["wifiPassword"] | "";
+  String ssid = modernSsid && modernSsid[0] ? modernSsid : legacySsid;
+  String password = modernPassword && modernPassword[0] ? modernPassword : legacyPassword;
   bool keepAp = sys["wifi"]["keepFallbackApAlwaysOn"] | true;
   uint32_t connectTimeoutMs = sys["wifi"]["connectTimeoutMs"] | sys["wifiConnectTimeoutMs"] | 8000UL;
   connectTimeoutMs = constrain(connectTimeoutMs, 1000UL, 20000UL);
   state.wifiSsid = ssid;
+
+  Serial.print(F("WiFi config source: "));
+  Serial.print(modernSsid && modernSsid[0] ? F("wifi.ssid") : F("wifiSsid legacy"));
+  Serial.print(F(", wifi.ssid present="));
+  Serial.print(modernSsid && modernSsid[0] ? F("oui") : F("non"));
+  Serial.print(F(", legacy present="));
+  Serial.println(legacySsid && legacySsid[0] ? F("oui") : F("non"));
 
   if (isWifiPlaceholder(ssid)) {
     Serial.println(F("WiFi maison non configure, demarrage AP local."));
     startFallbackAp();
     return;
   }
+  syncRecoveryWifiCredentials(ssid, password);
 
   WiFi.mode(keepAp ? WIFI_AP_STA : WIFI_STA);
   if (keepAp) startLocalAp();
@@ -81,8 +105,12 @@ void SolarWiFiManager::loop() {
 
 bool SolarWiFiManager::testConnection(const String &ssid, const String &password, uint32_t timeoutMs) {
   String previousMode = state.networkMode;
-  String previousSsid = config.system()["wifi"]["ssid"] | config.system()["wifiSsid"] | "";
-  String previousPassword = config.system()["wifi"]["password"] | config.system()["wifiPassword"] | "";
+  const char *modernSsid = config.system()["wifi"]["ssid"] | "";
+  const char *legacySsid = config.system()["wifiSsid"] | "";
+  const char *modernPassword = config.system()["wifi"]["password"] | "";
+  const char *legacyPassword = config.system()["wifiPassword"] | "";
+  String previousSsid = modernSsid && modernSsid[0] ? modernSsid : legacySsid;
+  String previousPassword = modernPassword && modernPassword[0] ? modernPassword : legacyPassword;
   bool keepAp = config.system()["wifi"]["keepFallbackApAlwaysOn"] | true;
   WiFi.mode(keepAp ? WIFI_AP_STA : WIFI_STA);
   if (keepAp) startLocalAp();
@@ -106,7 +134,10 @@ void SolarWiFiManager::saveCredentials(const String &ssid, const String &passwor
   JsonObject wifi = config.system()["wifi"];
   wifi["ssid"] = ssid;
   wifi["password"] = password;
+  config.system()["wifiSsid"] = ssid;
+  config.system()["wifiPassword"] = password;
   config.saveSystem();
+  syncRecoveryWifiCredentials(ssid, password);
 }
 
 void SolarWiFiManager::startFallbackAp() {

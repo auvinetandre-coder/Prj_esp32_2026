@@ -7,6 +7,15 @@ void RuntimeState::begin(ConfigManager &config) {
   role = roleFromString(device["role"] | "MASTER");
   moduleName = device["deviceName"] | device["name"] | "Routeur solaire";
   deviceId = WiFi.macAddress();
+  uint32_t configuredNodeId = device["nodeId"] | 0UL;
+  if (configuredNodeId == 0 || configuredNodeId > 254) {
+    uint8_t mac[6]{};
+    WiFi.macAddress(mac);
+    uint16_t macHash = 0;
+    for (uint8_t byte : mac) macHash = static_cast<uint16_t>((macHash * 33U) ^ byte);
+    configuredNodeId = (macHash % 254U) + 1U;
+  }
+  nodeId = static_cast<uint8_t>(configuredNodeId);
   isActiveMaster = role == ROLE_MASTER;
   masterAlive = role == ROLE_MASTER;
   activeMasterId = isActiveMaster ? deviceId : "";
@@ -74,8 +83,11 @@ void RuntimeState::toJson(JsonObject out) {
 
 void RuntimeState::toJson(JsonObject out, bool includeLogs) {
   out["deviceId"] = deviceId;
+  out["nodeId"] = nodeId;
   out["moduleName"] = moduleName;
   out["role"] = roleToString(role);
+  out["redundancyRole"] = redundancyRoleToString(role);
+  out["functionalRole"] = functionalRoleToString(role);
   out["networkMode"] = networkMode;
   out["localIp"] = localIp;
   out["stationIp"] = stationIp;
@@ -129,6 +141,10 @@ void RuntimeState::toJson(JsonObject out, bool includeLogs) {
   out["energyDirection2"] = energyDirection2;
   out["jsyOnline"] = jsyOnline;
   out["lastJsyReadMs"] = lastJsyReadMs;
+  out["jsyBaudrate"] = jsyBaudrate;
+  out["jsyLastError"] = jsyLastError;
+  out["jsyTimeoutCount"] = jsyTimeoutCount;
+  out["jsyCrcErrorCount"] = jsyCrcErrorCount;
   out["ticAvailable"] = ticAvailable;
   out["ticStatus"] = ticStatus;
   out["ticApparentPowerVA"] = ticApparentPowerVA;
@@ -173,6 +189,40 @@ void RuntimeState::toJson(JsonObject out, bool includeLogs) {
   out["robotDynPinHigh"] = robotDynPinHigh;
   out["heaterPowerW"] = heaterPowerW;
   out["commandPercent"] = commandPercent;
+  out["automateState"] = automateState;
+  out["previousAutomateState"] = previousAutomateState;
+  out["automateReason"] = automateReason;
+  out["activePriority"] = activePriority;
+  out["commandSource"] = commandSource;
+  out["pidAllowed"] = pidAllowed;
+  out["routingAllowed"] = routingAllowed;
+  out["safetyActive"] = safetyActive;
+  out["errorActive"] = errorActive;
+  out["automateLastTransitionMs"] = automateLastTransitionMs;
+  out["ruleCount"] = ruleCount;
+  out["activeRule"] = activeRule;
+  out["manualCommandPending"] = manualCommandPending;
+  out["manualCommandSource"] = manualCommandSource;
+  out["manualCommandReason"] = manualCommandReason;
+  out["manualAllOffPending"] = manualAllOffPending;
+  JsonObject automate = out["automate"].to<JsonObject>();
+  automate["state"] = automateState;
+  automate["previousState"] = previousAutomateState;
+  automate["reason"] = automateReason;
+  automate["activePriority"] = activePriority;
+  automate["commandSource"] = commandSource;
+  automate["commandPercent"] = commandPercent;
+  automate["pidAllowed"] = pidAllowed;
+  automate["routingAllowed"] = routingAllowed;
+  automate["safetyActive"] = safetyActive;
+  automate["errorActive"] = errorActive;
+  automate["lastTransitionMs"] = automateLastTransitionMs;
+  automate["ruleCount"] = ruleCount;
+  automate["activeRule"] = activeRule;
+  automate["manualCommandPending"] = manualCommandPending;
+  automate["manualCommandSource"] = manualCommandSource;
+  automate["manualCommandReason"] = manualCommandReason;
+  automate["manualAllOffPending"] = manualAllOffPending;
   out["pidOutputPercent"] = pidOutputPercent;
   out["pidEnabled"] = pidEnabled;
   out["pidErrorW"] = pidErrorW;
@@ -188,6 +238,7 @@ void RuntimeState::toJson(JsonObject out, bool includeLogs) {
   out["lastMqttPublishAgeMs"] = lastMqttPublishMs ? millis() - lastMqttPublishMs : 4294967295UL;
   out["lastActuatorCommandLog"] = lastActuatorCommandLog;
   out["littleFsOk"] = littleFsOk;
+  performanceToJson(out["performance"].to<JsonObject>());
   if (!includeLogs) return;
   JsonArray arr = out["logs"].to<JsonArray>();
   for (uint8_t i = 0; i < 24; i++) {
@@ -196,6 +247,45 @@ void RuntimeState::toJson(JsonObject out, bool includeLogs) {
   }
   JsonArray events = out["events"].to<JsonArray>();
   eventsToJson(events);
+}
+
+void RuntimeState::performanceToJson(JsonObject out) {
+  out["loopDurationMs"] = loopDurationMs;
+  out["maxLoopDurationMs"] = maxLoopDurationMs;
+  out["loopCount"] = loopCount;
+  out["apiStateBuildMs"] = apiStateBuildMs;
+  out["apiStateJsonBytes"] = apiStateJsonBytes;
+  out["apiStateRequestCount"] = apiStateRequestCount;
+  out["espNowProcessMs"] = espNowProcessMs;
+  out["webRequestCount"] = webRequestCount;
+  out["heapFree"] = ESP.getFreeHeap();
+  out["heapMin"] = ESP.getMinFreeHeap();
+  out["heapMaxAlloc"] = ESP.getMaxAllocHeap();
+  out["lastSlowTask"] = lastSlowTask;
+  out["lastSlowTaskMs"] = lastSlowTaskMs;
+  out["lastSlowModule"] = lastSlowModule;
+  out["lastSlowModuleMs"] = lastSlowModuleMs;
+  out["slowTaskThresholdMs"] = slowTaskThresholdMs;
+  JsonArray modules = out["modules"].to<JsonArray>();
+  for (uint8_t i = 0; i < PERF_COUNT; i++) {
+    JsonObject item = modules.add<JsonObject>();
+    item["name"] = loopPerf[i].name;
+    item["avgMs"] = loopPerf[i].avgMs;
+    item["maxMs"] = loopPerf[i].maxMs;
+    item["count"] = loopPerf[i].count;
+  }
+}
+
+void RuntimeState::recordLoopPerf(LoopPerfModule module, uint32_t elapsedMs) {
+  if (module >= PERF_COUNT) return;
+  LoopPerfStat &stat = loopPerf[module];
+  stat.count++;
+  stat.avgMs = stat.avgMs == 0 ? elapsedMs : ((stat.avgMs * 7UL) + elapsedMs) / 8UL;
+  if (elapsedMs > stat.maxMs) stat.maxMs = elapsedMs;
+  if (elapsedMs >= slowTaskThresholdMs) {
+    lastSlowModule = stat.name;
+    lastSlowModuleMs = elapsedMs;
+  }
 }
 
 DeviceRole RuntimeState::roleFromString(const String &value) {
@@ -214,4 +304,16 @@ const char *RuntimeState::roleToString(DeviceRole role) {
     case ROLE_NODE_MIXED: return "NODE_MIXED";
     default: return "MASTER";
   }
+}
+
+const char *RuntimeState::redundancyRoleToString(DeviceRole role) {
+  if (role == ROLE_MASTER) return "MASTER";
+  if (role == ROLE_BACKUP) return "BACKUP";
+  return "STANDALONE";
+}
+
+const char *RuntimeState::functionalRoleToString(DeviceRole role) {
+  if (role == ROLE_NODE_SENSOR) return "SENSOR";
+  if (role == ROLE_NODE_ACTUATOR) return "ACTUATOR";
+  return "MIXED";
 }

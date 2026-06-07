@@ -162,6 +162,8 @@ Interface principale :
 http://adresse-ip/app
 ```
 
+La page par defaut `/` redirige vers `/app`.
+
 Pages :
 
 - Dashboard
@@ -178,6 +180,14 @@ Interface de secours :
 ```text
 http://adresse-ip/lite
 ```
+
+Lien cache de passage en recovery, embarque dans le firmware et independant de LittleFS :
+
+```text
+http://adresse-ip/recovery
+```
+
+Cette page ne sert pas a mettre a jour directement le firmware. Elle contient seulement un bouton **Passer en recovery**. Les uploads firmware et LittleFS se font ensuite depuis la factory recovery.
 
 API utiles :
 
@@ -203,7 +213,7 @@ Utilisateur : admin
 Mot de passe : routeur1234
 ```
 
-Le navigateur affiche une fenetre de connexion au premier acces a `/`, `/app`, `/lite`, aux API ou aux pages OTA.
+Le navigateur affiche une fenetre de connexion au premier acces a `/`, `/app`, `/lite`, `/recovery` ou aux API.
 
 La configuration est stockee dans `/config/system.json` :
 
@@ -725,7 +735,7 @@ Au demarrage, chaque noeud :
 5. ecoute les annonces des autres noeuds ;
 6. maintient une table locale des ESP detectes.
 
-La decouverte ne donne pas encore le droit d'injecter des donnees critiques. Elle sert a afficher les ESP visibles et leurs capacites. L'autorisation explicite et le mapping vers `RuntimeState` seront ajoutes dans une etape ulterieure.
+La decouverte ne donne pas a elle seule le droit d'injecter des donnees critiques. Elle sert a afficher les ESP visibles et leurs capacites. Les trames capteurs ne sont appliquees que si le peer source est autorise et si le capteur distant est configure dans la page `Capteurs`.
 
 ### Trame de decouverte
 
@@ -932,48 +942,7 @@ Exemple dans `/config/sensors.json` pour un capteur local :
 
 Pour une sonde DS18B20, les memes champs sont portes directement par l'objet de la sonde dans `ds18b20`.
 
-L'ancien bloc `system.espnow.exports` reste pris en compte comme compatibilite si la fiche capteur ne contient pas encore `espNowExportEnabled`.
-
-Exemple dans `/config/system.json` :
-
-```json
-"espnow": {
-  "sensorDiscoveryIntervalMs": 30000,
-  "diagnosticIntervalMs": 10000,
-  "exports": [
-    {
-      "sensorId": 1,
-      "sensorName": "Linky",
-      "sensorType": 1,
-      "exportEnabled": true,
-      "exportIntervalMs": 1000,
-      "priority": 1,
-      "sendOnChange": true,
-      "minDelta": 10.0
-    },
-    {
-      "sensorId": 2,
-      "sensorName": "JSY",
-      "sensorType": 2,
-      "exportEnabled": false,
-      "exportIntervalMs": 200,
-      "priority": 3,
-      "sendOnChange": true,
-      "minDelta": 5.0
-    },
-    {
-      "sensorId": 20,
-      "sensorName": "Ballon",
-      "sensorType": 3,
-      "exportEnabled": true,
-      "exportIntervalMs": 10000,
-      "priority": 0,
-      "sendOnChange": true,
-      "minDelta": 0.2
-    }
-  ]
-}
-```
+Le bloc historique `system.espnow.exports` n'est plus utilise pour activer un export capteur. Il reste tolere dans le JSON systeme pour ne pas casser les anciennes configurations, mais il ne doit plus annoncer de capteur fantome. La source de verite est maintenant uniquement la configuration du capteur dans `/config/sensors.json`.
 
 Champs importants :
 
@@ -1013,6 +982,7 @@ Endpoints disponibles :
 - `GET /api/espnow` : etat local ESP-NOW, MAC locale, roles, capacites, peers autorises et noeuds detectes.
 - `GET /api/espnow/discovery` : liste brute des noeuds ESP-NOW detectes.
 - `POST /api/espnow/discovery/announce` : force une annonce de presence immediate.
+- `POST /api/espnow/sensors/announce` : force l'annonce immediate des capteurs locaux exportables par `SENSOR_DISCOVERY`.
 - `POST /api/espnow/peer` avec `mac=AA:BB:CC:DD:EE:FF` : ajoute un peer autorise.
 - `POST /api/espnow/peer/remove` avec `mac=AA:BB:CC:DD:EE:FF` : retire un peer autorise.
 
@@ -1034,6 +1004,8 @@ Dans la page `Capteurs`, les trames `SENSOR_DISCOVERY` recues font apparaitre un
 - le role metier repris depuis `sensorRole` ;
 - `remoteKey = ALL`.
 
+La liste est regroupee par ESP source. Un capteur deja ajoute est grise et ne peut pas etre ajoute une seconde fois. Pour les sondes temperature, le role envoye par la source est conserve afin qu'une sonde `ballon_haut` ou `ballon_milieu` reste exploitable comme une sonde locale equivalente sur la destination.
+
 Le capteur distant est ensuite vu par `SensorManager` comme un capteur local virtuel. Pour un Linky ESP-NOW, `remoteKey = ALL` importe :
 
 - `GRID` vers la puissance reseau TIC ;
@@ -1051,6 +1023,16 @@ Les autres profils suivent la meme logique :
 Il reste possible de choisir une seule valeur distante en remplacant `ALL` par une cle precise comme `GRID`, `TEMP`, `VOLT` ou `POWER`. L'option `Debug trames ESP-NOW` est commune a tous les profils : elle ajoute dans les evenements une ligne decodee avec la sequence, le type et toutes les valeurs de chaque trame recue depuis la MAC configuree.
 
 Important : seules les trames provenant d'un peer autorise sont appliquees. Cette separation evite qu'un ESP inconnu ou mal configure puisse modifier directement `state.gridPowerW` ou les variables utilisees par la regulation.
+
+### Etat implementation ESP-NOW 20260525
+
+- Les trames rapides `FAST_DATA` sont compactes et ne transportent plus les noms, roles ni unites.
+- Les trames `SENSOR_DISCOVERY` transportent les metadonnees : `nodeName`, `sensorName`, `sensorRole`, `sensorType`, firmware et valeurs disponibles.
+- Les trames `DIAGNOSTIC` transportent les informations radio et systeme.
+- `SensorManager` conserve les capteurs distants dans une table runtime et les expose dans `/api/status`.
+- La page `Capteurs` peut ajouter automatiquement un capteur distant decouvert.
+- Les options de debug ESP-NOW sont separees entre transmission et reception dans la page `ESP-NOW`.
+- Le JSON capteurs accepte maintenant une liste `sensors` vide, sans recreer automatiquement un capteur distant supprime.
 
 ### Messages historiques EspNowManager
 
@@ -1137,13 +1119,14 @@ ESP32 Dev Module
 Partition conseillee :
 
 ```text
-RouteurSolaire OTA (1.5MB APP x2 / 960KB LittleFS)
+RouteurSolaire Recovery/Main (factory 1.06MB / main 1.88MB / LittleFS 1MB)
 ```
 
 Cette partition permet :
 
-- deux emplacements firmware OTA d'environ 1.5 Mo chacun
-- environ 960 Ko pour LittleFS
+- une partition `factory` pour la recovery
+- une partition `ota_0` pour le firmware principal
+- 1 Mo pour LittleFS
 - l'interface Web complete dans `/www`
 - les fichiers JSON de configuration dans `/config`
 
@@ -1154,28 +1137,28 @@ Si le menu de partition n'apparait pas dans Arduino IDE :
 3. Ouvrir le gestionnaire de cartes.
 4. Laisser l'IDE recharger les donnees des cartes.
 5. Revenir dans `Outils > Partition Scheme`.
-6. Selectionner `RouteurSolaire OTA (1.5MB APP x2 / 960KB LittleFS)`.
+6. Selectionner `RouteurSolaire Recovery/Main (factory 1.06MB / main 1.88MB / LittleFS 1MB)`.
 
 Il peut y avoir un cache cote Arduino IDE. Si l'option n'apparait pas tout de suite, un redemarrage complet de l'IDE ou un rechargement des donnees de cartes peut etre necessaire.
 
 Le fichier de partition du projet est :
 
 ```text
-partitions_ota_1m5app_960k_littlefs.csv
+partitions_recovery_main_4MB.csv
 ```
 
 Il contient :
 
 ```text
-app0   0x10000   0x180000
-app1   0x190000  0x180000
-spiffs 0x310000  0x0F0000
+factory 0x10000   0x110000
+ota_0   0x120000  0x1E0000
+spiffs  0x300000  0x100000
 ```
 
 Dans le core ESP32 Arduino, la partition est declaree sous le nom :
 
 ```text
-partitions_ota_1m5app_960k_littlefs
+partitions_recovery_main_4MB
 ```
 
 ## Compilation
@@ -1195,7 +1178,7 @@ ESP32 Dev Module
 4. Choisir le partitionnement :
 
 ```text
-RouteurSolaire OTA (1.5MB APP x2 / 960KB LittleFS)
+RouteurSolaire Recovery/Main (factory 1.06MB / main 1.88MB / LittleFS 1MB)
 ```
 
 5. Compiler.
@@ -1252,38 +1235,21 @@ Signature embarquee :
 RS32_VERSION:YYYYMMDD-NN;
 ```
 
-Cette signature permet a la page **Systeme** de relire la version presente dans APP1 et APP2, meme pour la partition OTA inactive.
+Cette signature permet a la page **Systeme** de relire la version presente dans le firmware principal `ota_0`.
 
 Important : une partition qui contient un ancien firmware construit avant cette signature peut afficher `N/A`. Elle affichera sa version apres avoir recu un firmware genere avec ce systeme.
 
-Dans la page **Systeme > OTA firmware**, on peut voir :
+Dans la page **Systeme > Boot / Recovery**, on peut voir :
 
-- la partition lancee actuellement : `app0` ou `app1`
+- la partition lancee actuellement
 - la partition configuree au boot
-- la prochaine partition utilisee par l'OTA
-- la version APP1 / OTA_0
-- la version APP2 / OTA_1
+- les informations de la factory recovery
+- les informations de `ota_0`
 - la taille du slot firmware
 - la taille du firmware utilise
 - le reste disponible
 
-La page propose aussi un bouton **Rollback firmware**.
-
-Ce bouton :
-
-1. verifie l'autre partition OTA
-2. refuse l'action si elle ne contient pas une image valide
-3. configure l'autre partition comme partition de boot
-4. redemarre l'ESP32
-
-Exemple :
-
-```text
-ESP32 lance depuis app0
-Rollback firmware -> prochain boot sur app1
-```
-
-Le rollback ne modifie pas LittleFS. L'interface et les fichiers `/config` restent donc ceux de la partition LittleFS actuelle.
+La page propose aussi un bouton **Passer en recovery**. Ce bouton synchronise les identifiants WiFi maison vers NVS, configure le prochain boot sur `factory`, puis redemarre l'ESP32.
 
 ## Televersement firmware
 
@@ -1335,12 +1301,12 @@ Televerser_LittleFS_COM4.bat
 Le script :
 
 1. construit l'image LittleFS a partir du dossier `data`
-2. cree le fichier OTA LittleFS dans `build/ota/RouteurSolaireESP32_littlefs.bin`
+2. cree le fichier LittleFS dans `build/ota/RouteurSolaireESP32_littlefs.bin`
 3. ecrit la version LittleFS dans `data/www/littlefs_version.txt`
 4. cree aussi une copie versionnee `build/ota/RouteurSolaireESP32_littlefs_YYYYMMDD-NN.bin`
 5. demande si l'on veut televerser maintenant sur le port COM
-6. si la reponse est oui, l'ecrit dans la partition LittleFS a l'adresse `0x310000`
-7. utilise une taille LittleFS de `0xF0000`
+6. si la reponse est oui, l'ecrit dans la partition LittleFS a l'adresse `0x300000`
+7. utilise une taille LittleFS de `0x100000`
 8. redemarre l'ESP32 en fin de televersement si possible
 
 Apres televersement, ouvrir :
@@ -1362,82 +1328,68 @@ Si `/app` affiche une ancienne interface, une page blanche, ou `Not found: /www/
 Page de secours :
 
 ```text
-http://192.168.4.1/
+http://192.168.4.1/recovery
 http://192.168.4.1/lite
 ```
 
-La page de secours permet aussi d'envoyer un firmware ou une image LittleFS par OTA quand le reseau fonctionne.
+`/recovery` est une page embarquee dans le firmware principal et independante de LittleFS. Elle contient seulement le bouton **Passer en recovery**.
 
-## OTA Web
+## Recovery factory
 
-La page de secours integre deux zones de mise a jour OTA :
+Les mises a jour firmware et LittleFS sont centralisees dans la factory recovery.
 
-- firmware
-- LittleFS
+Depuis le firmware principal :
 
-Adresse :
+1. Ouvrir l'interface principale `/app`.
+2. Aller dans **Systeme > Actions systeme**.
+3. Cliquer **Passer en recovery**.
 
-```text
-http://adresse-ip/
-```
-
-Routes OTA :
+Lien cache direct, independant de LittleFS :
 
 ```text
-POST /ota/firmware
-POST /ota/littlefs
+http://adresse-ip/recovery
 ```
 
-Procedure OTA firmware :
+Le bouton :
+
+1. synchronise le SSID et le mot de passe WiFi maison vers NVS `recovery`
+2. configure le prochain boot sur `factory`
+3. redemarre l'ESP32
+
+Dans la recovery :
+
+- AP toujours actif : `RouteurSolaire_Recovery`
+- URL AP : `http://192.168.4.1`
+- tentative automatique de connexion au WiFi maison si les identifiants sont disponibles
+- formulaire WiFi local disponible pour changer SSID/mot de passe
+- upload firmware local vers `ota_0`
+- upload image LittleFS locale vers `spiffs`
+- redemarrage vers `ota_0` seulement via le bouton dedie
+
+Procedure firmware via recovery :
 
 1. Compiler le firmware avec `Compiler_RouteurSolaireESP32.bat`.
 2. Recuperer le fichier `.bin` genere dans `build/ota`.
-3. Ouvrir la page de secours.
-4. S'identifier si le navigateur demande le login.
+3. Passer en recovery.
+4. Ouvrir `http://192.168.4.1` ou l'IP locale affichee par la recovery.
 5. Choisir le fichier firmware.
-6. Envoyer.
-7. Attendre le redemarrage.
+6. Envoyer vers `ota_0`.
+7. Cliquer **Demarrer ota_0** quand les mises a jour souhaitees sont terminees.
 
-Procedure OTA LittleFS :
+Procedure LittleFS via recovery :
 
 1. Generer l'image LittleFS avec `Televerser_LittleFS_COM3.bat` ou `Televerser_LittleFS_COM4.bat`.
-2. Ouvrir la page de secours.
-3. S'identifier si le navigateur demande le login.
+2. Passer en recovery.
+3. Ouvrir `http://192.168.4.1` ou l'IP locale affichee par la recovery.
 4. Choisir le fichier LittleFS `.bin`.
-5. Envoyer.
-6. Attendre le redemarrage.
+5. Envoyer vers `spiffs`.
+6. Cliquer **Demarrer ota_0** quand les mises a jour souhaitees sont terminees.
 
-### Conservation de la configuration pendant OTA LittleFS
+### Configuration et LittleFS
 
-L'OTA LittleFS remplace toute la partition LittleFS. Sans protection, les fichiers suivants pourraient etre perdus :
+L'ecriture LittleFS remplace toute la partition `spiffs`. Les fichiers `/config/*.json` sont dans LittleFS : si l'image LittleFS ne contient pas la configuration voulue, il faudra reconfigurer ou restaurer les fichiers.
 
-```text
-/config/device.json
-/config/system.json
-/config/sensors.json
-/config/actuators.json
-/config/rules.json
-```
-
-Le firmware sauvegarde donc automatiquement ces fichiers dans la partition NVS avant de commencer l'ecriture OTA LittleFS.
-
-Au redemarrage suivant, si une sauvegarde NVS est en attente, le `ConfigManager` restaure les fichiers `/config/*.json` avant de charger la configuration.
-
-Cela permet de conserver :
-
-- SSID WiFi maison
-- mot de passe WiFi maison
-- nom du module
-- role du module
-- login Web
-- capteurs
-- actionneurs
-- regles
-- parametres routeur solaire
-
-Si la sauvegarde NVS echoue, l'OTA LittleFS est refusee pour eviter de perdre la configuration.
-
-Ne pas couper l'alimentation pendant une mise a jour OTA.
+Ne pas couper l'alimentation pendant une mise a jour firmware ou LittleFS.
 
 ## Resume des methodes de mise a jour
 
@@ -1448,7 +1400,7 @@ Arduino IDE > Televerser
 ou
 Televerser_Firmware_COM3.bat / Televerser_Firmware_COM4.bat
 ou
-OTA firmware depuis la page de secours avec build/ota/RouteurSolaireESP32_firmware.bin
+upload firmware depuis la recovery avec build/ota/RouteurSolaireESP32_firmware.bin
 ```
 
 Interface Web uniquement :
@@ -1456,7 +1408,7 @@ Interface Web uniquement :
 ```text
 Televerser_LittleFS_COM3.bat / Televerser_LittleFS_COM4.bat
 ou
-OTA LittleFS depuis la page de secours avec build/ota/RouteurSolaireESP32_littlefs.bin
+upload LittleFS depuis la recovery avec build/ota/RouteurSolaireESP32_littlefs.bin
 ```
 
 Firmware + interface Web :

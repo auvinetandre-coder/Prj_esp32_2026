@@ -82,17 +82,20 @@ public:
   String statusJson();
   String discoveredNodesJson();
   bool sendDiscovery();
+  void sendAllSensorDiscovery();
   void printPeers();
   bool isSensorExportEnabled(uint8_t sensorId);
   uint32_t getSensorExportInterval(uint8_t sensorId);
   bool shouldExportSensor(uint8_t sensorId, float currentValue);
   void exportSensorIfNeeded(uint8_t sensorId);
   void sendSensorDiscovery(uint8_t sensorId);
+  void sendAllActuatorDiscovery();
   void sendSensorFastData(uint8_t sensorId);
   void sendSensorDiagnostic(uint8_t sensorId);
 
 private:
   static const uint8_t MAX_EXPORT_RUNTIME_SLOTS = 12;
+  static const uint8_t MAX_DISCOVERED_ACTUATORS = 16;
 
   ConfigManager &config;
   RuntimeState &state;
@@ -119,6 +122,7 @@ private:
   float exportLastValues[MAX_EXPORT_RUNTIME_SLOTS]{};
   bool exportLastValueValid[MAX_EXPORT_RUNTIME_SLOTS]{};
   EspNowDiscoveredNode discoveredNodes[ESPNOW_MAX_DISCOVERED_NODES]{};
+  EspNowDiscoveredActuator discoveredActuators[MAX_DISCOVERED_ACTUATORS]{};
   ActuatorCommandHandler actuatorHandler = nullptr;
   void *actuatorHandlerContext = nullptr;
 
@@ -133,8 +137,11 @@ private:
   void handleSensorPacket(const uint8_t *mac, const uint8_t *data, int len);
   void handleFastSensorPacket(const uint8_t *mac, const uint8_t *data, int len);
   void handleSensorDiscoveryPacket(const uint8_t *mac, const uint8_t *data, int len);
+  void handleActuatorDiscoveryPacket(const uint8_t *mac, const uint8_t *data, int len);
   void handleDiagnosticPacket(const uint8_t *mac, const uint8_t *data, int len);
   EspNowDiscoveredNode *rememberDiscoveredNode(const uint8_t *mac, const EspNowDiscoveryPacket &packet);
+  EspNowDiscoveredNode *findOrCreateDiscoveredNode(const uint8_t *mac, uint8_t nodeId, const char *nodeName, bool updateNodeId = true);
+  void markDiscoveredNodeFrame(EspNowDiscoveredNode &node, uint8_t frameType, uint32_t now);
   void publishLocalSensorsIfNeeded(uint32_t now);
   void publishLocalSensorDiscoveryIfNeeded(uint32_t now);
   void publishDiagnosticIfNeeded(uint32_t now);
@@ -144,26 +151,37 @@ private:
   bool currentExportValue(uint8_t sensorId, float &value);
   bool buildFastPacketForSensor(uint8_t sensorId, EspNowFastSensorPacket &packet, uint32_t now);
   bool buildDiscoveryPacketForSensor(uint8_t sensorId, EspNowSensorDiscoveryPacket &packet);
+  bool buildActuatorDiscoveryPacket(JsonObject actuator, EspNowActuatorDiscoveryPacket &packet);
+  bool sendJsySensorDataChunks(uint32_t now);
+  bool sendJsyDiscoveryChunks();
   const char *defaultExportSensorName(uint8_t sensorId);
   uint8_t defaultExportSensorType(uint8_t sensorId);
   bool sendSensorPacketToPeers(EspNowSensorPacket &packet);
   bool sendFastPacketToPeers(EspNowFastSensorPacket &packet);
   bool sendSensorDiscoveryToPeers(EspNowSensorDiscoveryPacket &packet);
+  bool sendActuatorDiscoveryToPeers(EspNowActuatorDiscoveryPacket &packet);
   bool sendDiagnosticToPeers(EspNowDiagnosticPacket &packet);
   bool addSensorPacketValue(EspNowSensorPacket &packet, uint8_t valueType, const char *key, float value, const char *unit);
   bool addFastPacketValue(EspNowFastSensorPacket &packet, uint8_t valueType, float value);
   bool addSensorDiscoveryValue(EspNowSensorDiscoveryPacket &packet, uint8_t valueType, const char *key, const char *unit);
   bool espNowDebugTransmissionEnabled();
   bool espNowDebugReceptionEnabled();
+  bool debugEnabledForLocalActuatorExport(const char *actuatorId);
   bool debugEnabledForRemoteSensor(const String &sourceMac, uint8_t sensorId, uint8_t sensorType, String &configuredName);
   void logDebugSensorPacketIfNeeded(const String &sourceMac, const EspNowSensorPacket &packet);
   void logDebugFastSensorPacketIfNeeded(const String &sourceMac, const EspNowFastSensorPacket &packet, int len);
   void logDebugSensorDiscoveryPacketIfNeeded(const String &sourceMac, const EspNowSensorDiscoveryPacket &packet, int len);
+  void logDebugActuatorDiscoveryPacketIfNeeded(const String &sourceMac, const EspNowActuatorDiscoveryPacket &packet, int len);
   void logDebugDiagnosticPacketIfNeeded(const String &sourceMac, const EspNowDiagnosticPacket &packet, int len);
   bool espNowSensorDebugEnabledForMac(const String &sourceMac);
+  bool espNowActuatorDebugEnabledForMac(const String &sourceMac);
   void logDebugMapping(const String &message);
   uint8_t localRoleFlags() const;
   uint16_t localCapabilityFlags();
+  uint8_t localNodeId() const;
+  uint8_t fallbackNodeIdFromMac(const uint8_t *mac) const;
+  uint8_t localRedundancyRole() const;
+  uint8_t espNowActuatorTypeFor(const String &type);
   const char *messageTypeText(uint8_t type);
 };
 

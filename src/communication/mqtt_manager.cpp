@@ -216,10 +216,14 @@ bool MqttManager::handleJsonCommand(const String &payload) {
     state.logEvent("WARNING", "MQTT_COMMAND_REFUSED", "Commande MQTT refusee: Safety CRITICAL", "MqttManager");
     return false;
   }
-  bool ok = actuators.command(actuatorId, command, value);
-  state.logEvent(ok ? "INFO" : "WARNING", ok ? "MQTT_COMMAND" : "MQTT_COMMAND_REFUSED",
-                 String("MQTT ") + actuatorId + " " + command + " " + String(value, 1), "MqttManager");
-  return ok;
+  state.manualCommandActuatorId = actuatorId;
+  state.manualCommand = command.length() ? command : "setActuatorPercent";
+  state.manualCommandPercent = value;
+  state.manualCommandSource = "MQTT";
+  state.manualCommandReason = String("MQTT ") + actuatorId + " " + state.manualCommand + " " + String(value, 1);
+  state.manualCommandPending = true;
+  state.logEvent("INFO", "MQTT_COMMAND_REQUEST", state.manualCommandReason, "MqttManager");
+  return true;
 }
 
 bool MqttManager::handleActuatorTopic(const String &topic, const String &payload) {
@@ -233,9 +237,13 @@ bool MqttManager::handleActuatorTopic(const String &topic, const String &payload
     return true;
   }
   float value = payload.toFloat();
-  bool ok = actuators.command(actuatorId, "setActuatorPercent", value);
-  state.logEvent(ok ? "INFO" : "WARNING", ok ? "MQTT_COMMAND" : "MQTT_COMMAND_REFUSED",
-                 String("MQTT ") + actuatorId + " = " + String(value, 1) + "%", "MqttManager");
+  state.manualCommandActuatorId = actuatorId;
+  state.manualCommand = "setActuatorPercent";
+  state.manualCommandPercent = value;
+  state.manualCommandSource = "MQTT";
+  state.manualCommandReason = String("MQTT ") + actuatorId + " = " + String(value, 1) + "%";
+  state.manualCommandPending = true;
+  state.logEvent("INFO", "MQTT_COMMAND_REQUEST", state.manualCommandReason, "MqttManager");
   return true;
 }
 

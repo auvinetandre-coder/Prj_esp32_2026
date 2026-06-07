@@ -37,7 +37,6 @@ private:
   SimulationManager &simulation;
   StatusLed &statusLed;
   WebServer server;
-  bool littleFsOtaBackupOk = false;
 
   void routes();
   bool authEnabled();
@@ -50,10 +49,6 @@ private:
   void sendSystemInfo();
   void appendJsonNumber(String &out, float value, uint8_t decimals = 1);
   bool streamLittleFsFile(const char *path, const char *contentType);
-  bool downloadGithubAssetToUpdate(const String &url, int updateCommand, const char *logCode, String &error, size_t &written, int &httpCode);
-  void sendGithubOtaCheck();
-  void startGithubFirmwareOta();
-  void startGithubLittleFsOta();
   String fallbackStyleCss();
   void sendFsListJson();
   void appendFsListJson(String &out, const char *dirname);

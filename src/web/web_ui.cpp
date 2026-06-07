@@ -1,9 +1,7 @@
 #include "web_ui.h"
-#include <HTTPClient.h>
 #include <LittleFS.h>
+#include <Preferences.h>
 #include <WiFi.h>
-#include <WiFiClientSecure.h>
-#include <Update.h>
 #include <esp_arduino_version.h>
 #include <esp_app_format.h>
 #include <esp_ota_ops.h>
@@ -11,12 +9,22 @@
 #include <esp_system.h>
 #include <time.h>
 #include "../build_info.h"
+#include "../boot/boot_manager.h"
 
 static const char *ROUTEUR_ACTIVE_FIRMWARE_MARKER = ROUTEUR_FIRMWARE_MARKER;
-static const char *GITHUB_VERSION_URL = "https://github.com/auvinetandre-coder/Prj_esp32_2026/releases/latest/download/version.json";
-static const char *GITHUB_FIRMWARE_URL = "https://github.com/auvinetandre-coder/Prj_esp32_2026/releases/latest/download/firmware.bin";
-static const char *GITHUB_LITTLEFS_URL = "https://github.com/auvinetandre-coder/Prj_esp32_2026/releases/latest/download/littlefs.bin";
-static const char *GITHUB_RELEASE_URL = "https://github.com/auvinetandre-coder/Prj_esp32_2026/releases/latest";
+static const char *RECOVERY_NVS_NAMESPACE = "recovery";
+
+static const char *configuredRedundancyRole(JsonObject device, DeviceRole role) {
+  const char *configured = device["redundancyRole"] | "";
+  if (configured && configured[0]) return configured;
+  return RuntimeState::redundancyRoleToString(role);
+}
+
+static const char *configuredFunctionalRole(JsonObject device, DeviceRole role) {
+  const char *configured = device["functionalRole"] | "";
+  if (configured && configured[0]) return configured;
+  return RuntimeState::functionalRoleToString(role);
+}
 
 static const char *wifiQualityLabel(int rssi) {
   if (rssi == 0) return "N/A";
@@ -124,6 +132,31 @@ static void appendOtaPartitionJson(JsonObject dst, const esp_partition_t *part, 
   }
 }
 
+static bool isRecoveryWifiPlaceholder(const String &value) {
+  if (value.length() == 0) return true;
+  String text = value;
+  text.toUpperCase();
+  return text.indexOf("A_CONFIGURER") >= 0 || text.indexOf("ACONFIGURER") >= 0;
+}
+
+static bool syncRecoveryWifiCredentials(ConfigManager &config) {
+  JsonObject sys = config.system();
+  const char *modernSsid = sys["wifi"]["ssid"] | "";
+  const char *legacySsid = sys["wifiSsid"] | "";
+  const char *modernPassword = sys["wifi"]["password"] | "";
+  const char *legacyPassword = sys["wifiPassword"] | "";
+  String ssid = modernSsid && modernSsid[0] ? modernSsid : legacySsid;
+  String password = modernPassword && modernPassword[0] ? modernPassword : legacyPassword;
+  if (isRecoveryWifiPlaceholder(ssid) || password.length() == 0) return false;
+
+  Preferences prefs;
+  if (!prefs.begin(RECOVERY_NVS_NAMESPACE, false)) return false;
+  bool ok = prefs.putString("ssid", ssid) > 0;
+  ok = prefs.putString("pass", password) > 0 && ok;
+  prefs.end();
+  return ok;
+}
+
 static String readLittleFsTextFile(const char *path) {
   if (!LittleFS.exists(path)) return "N/A";
   File file = LittleFS.open(path, "r");
@@ -169,6 +202,11 @@ bool WebUi::requireAuth() {
 void WebUi::routes() {
   server.on("/", HTTP_GET, [this]() {
     if (!requireAuth()) return;
+    server.sendHeader("Location", "/app", true);
+    server.send(302, "text/plain", "Redirection vers /app");
+  });
+  server.on("/recovery", HTTP_GET, [this]() {
+    if (!requireAuth()) return;
     server.send(200, "text/html; charset=utf-8", homePage());
   });
   server.on("/lite", HTTP_GET, [this]() {
@@ -191,72 +229,6 @@ void WebUi::routes() {
     server.sendHeader("Location", "/app", true);
     server.send(302, "text/plain", "Redirection vers /app");
   });
-  server.on("/ota/firmware", HTTP_POST, [this]() {
-    if (!requireAuth()) return;
-    bool ok = !Update.hasError();
-    server.send(200, "text/html; charset=utf-8", ok ? F("<!DOCTYPE html><html lang=\"fr\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>OTA firmware</title></head><body><h1>Firmware OTA OK</h1><p>Redemarrage...</p><script>setTimeout(()=>location.href='/',8000)</script></body></html>") : F("<!DOCTYPE html><html lang=\"fr\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>OTA firmware</title></head><body><h1>Erreur OTA firmware</h1><p>Verifie la partition OTA et le fichier .bin.</p><p><a href=\"/\">Retour secours</a></p></body></html>"));
-    if (ok) {
-      state.logEvent("WARNING", "OTA_FIRMWARE", "Firmware OTA applique, redemarrage", "WebUi");
-      delay(250);
-      ESP.restart();
-    }
-  }, [this]() {
-    if (!isAuthenticated()) {
-      Update.abort();
-      return;
-    }
-    HTTPUpload &upload = server.upload();
-    if (upload.status == UPLOAD_FILE_START) {
-      state.logEvent("WARNING", "OTA_FIRMWARE", String("Upload firmware: ") + upload.filename, "WebUi");
-      if (!Update.begin(UPDATE_SIZE_UNKNOWN, U_FLASH)) Update.printError(Serial);
-    } else if (upload.status == UPLOAD_FILE_WRITE) {
-      if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) Update.printError(Serial);
-    } else if (upload.status == UPLOAD_FILE_END) {
-      if (!Update.end(true)) Update.printError(Serial);
-    } else if (upload.status == UPLOAD_FILE_ABORTED) {
-      Update.abort();
-      state.logEvent("WARNING", "OTA_ABORTED", "Upload firmware annule", "WebUi");
-    }
-  });
-  server.on("/ota/littlefs", HTTP_POST, [this]() {
-    if (!requireAuth()) return;
-    bool ok = littleFsOtaBackupOk && !Update.hasError();
-    server.send(200, "text/html; charset=utf-8", ok ? F("<!DOCTYPE html><html lang=\"fr\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>OTA LittleFS</title></head><body><h1>LittleFS OTA OK</h1><p>Redemarrage...</p><script>setTimeout(()=>location.href='/',8000)</script></body></html>") : F("<!DOCTYPE html><html lang=\"fr\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>OTA LittleFS</title></head><body><h1>Erreur OTA LittleFS</h1><p>Verifie le fichier LittleFS .bin et la taille de partition.</p><p><a href=\"/\">Retour secours</a></p></body></html>"));
-    if (ok) {
-      state.logEvent("WARNING", "OTA_LITTLEFS", "LittleFS OTA applique, redemarrage", "WebUi");
-      delay(250);
-      ESP.restart();
-    }
-    littleFsOtaBackupOk = false;
-  }, [this]() {
-    if (!isAuthenticated()) {
-      Update.abort();
-      littleFsOtaBackupOk = false;
-      return;
-    }
-    HTTPUpload &upload = server.upload();
-    if (upload.status == UPLOAD_FILE_START) {
-      state.logEvent("WARNING", "OTA_LITTLEFS", String("Upload LittleFS: ") + upload.filename, "WebUi");
-      littleFsOtaBackupOk = config.backupToNvsBeforeLittleFsOta();
-      if (!littleFsOtaBackupOk) {
-        state.logEvent("ERROR", "CONFIG_BACKUP_FAILED", config.lastError().length() ? config.lastError() : "Sauvegarde config NVS impossible", "WebUi");
-        Update.abort();
-        return;
-      }
-      LittleFS.end();
-      if (!Update.begin(UPDATE_SIZE_UNKNOWN, U_SPIFFS)) Update.printError(Serial);
-    } else if (upload.status == UPLOAD_FILE_WRITE) {
-      if (!littleFsOtaBackupOk) return;
-      if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) Update.printError(Serial);
-    } else if (upload.status == UPLOAD_FILE_END) {
-      if (!littleFsOtaBackupOk) return;
-      if (!Update.end(true)) Update.printError(Serial);
-    } else if (upload.status == UPLOAD_FILE_ABORTED) {
-      Update.abort();
-      littleFsOtaBackupOk = false;
-      state.logEvent("WARNING", "OTA_ABORTED", "Upload LittleFS annule", "WebUi");
-    }
-  });
   server.on("/api/ping", HTTP_GET, [this]() {
     if (!requireAuth()) return;
     String out = "{\"ok\":true,\"networkMode\":\"" + state.networkMode + "\",\"localIp\":\"" + state.localIp + "\"}";
@@ -273,10 +245,18 @@ void WebUi::routes() {
     state.toJson(out, false);
     JsonObject device = config.device();
     JsonObject system = config.system();
-    out["moduleName"] = device["deviceName"] | device["name"] | state.moduleName.c_str();
+    const char *deviceName = device["deviceName"] | device["name"] | state.moduleName.c_str();
+    out["moduleName"] = deviceName;
+    JsonObject deviceOut = out["device"].to<JsonObject>();
+    deviceOut["name"] = deviceName;
+    deviceOut["redundancyRole"] = configuredRedundancyRole(device, state.role);
+    deviceOut["functionalRole"] = configuredFunctionalRole(device, state.role);
     out["nodeId"] = state.nodeId;
     out["role"] = device["role"] | RuntimeState::roleToString(state.role);
+    out["redundancyRole"] = deviceOut["redundancyRole"];
+    out["functionalRole"] = deviceOut["functionalRole"];
     out["firmwareVersion"] = ROUTEUR_FIRMWARE_VERSION;
+    out["littleFsVersion"] = readLittleFsTextFile("/www/littlefs_version.txt");
     out["buildTimestamp"] = ROUTEUR_BUILD_TIMESTAMP;
     const unsigned long nowMs = millis();
     out["uptimeMs"] = nowMs;
@@ -366,9 +346,17 @@ void WebUi::routes() {
     state.toJson(out, true);
     JsonObject device = config.device();
     JsonObject system = config.system();
-    out["moduleName"] = device["deviceName"] | device["name"] | state.moduleName.c_str();
+    const char *deviceName = device["deviceName"] | device["name"] | state.moduleName.c_str();
+    out["moduleName"] = deviceName;
+    JsonObject deviceOut = out["device"].to<JsonObject>();
+    deviceOut["name"] = deviceName;
+    deviceOut["redundancyRole"] = configuredRedundancyRole(device, state.role);
+    deviceOut["functionalRole"] = configuredFunctionalRole(device, state.role);
     out["role"] = device["role"] | RuntimeState::roleToString(state.role);
+    out["redundancyRole"] = deviceOut["redundancyRole"];
+    out["functionalRole"] = deviceOut["functionalRole"];
     out["firmwareVersion"] = ROUTEUR_FIRMWARE_VERSION;
+    out["littleFsVersion"] = readLittleFsTextFile("/www/littlefs_version.txt");
     out["buildTimestamp"] = ROUTEUR_BUILD_TIMESTAMP;
     out["simulationMode"] = state.simulationMode;
     out["simulationType"] = system["simulation"]["mode"] | state.simulationType.c_str();
@@ -419,8 +407,18 @@ void WebUi::routes() {
     String id = server.arg("id");
     String command = server.arg("command");
     float value = server.arg("value").toFloat();
-    bool ok = actuators.command(id, command.length() ? command : "setPower", value);
-    server.send(ok ? 200 : 400, "application/json", ok ? "{\"ok\":true}" : "{\"ok\":false}");
+    if (!id.length()) {
+      server.send(400, "application/json", "{\"ok\":false,\"error\":\"actuatorId manquant\"}");
+      return;
+    }
+    state.manualCommandActuatorId = id;
+    state.manualCommand = command.length() ? command : "setPower";
+    state.manualCommandPercent = value;
+    state.manualCommandSource = "WEB";
+    state.manualCommandReason = String("Commande Web ") + id + " " + state.manualCommand + " " + String(value, 1);
+    state.manualCommandPending = true;
+    state.logEvent("INFO", "MANUAL_COMMAND_REQUEST", state.manualCommandReason, "WebUi");
+    server.send(202, "application/json", "{\"ok\":true,\"queued\":true}");
   });
   server.on("/api/safety/manual-stop", HTTP_POST, [this]() {
     if (!requireAuth()) return;
@@ -457,7 +455,10 @@ void WebUi::routes() {
   });
   server.on("/api/simulation/stop", HTTP_POST, [this]() {
     if (!requireAuth()) return;
-    actuators.forceAllOff();
+    state.manualAllOffPending = true;
+    state.manualCommandSource = "WEB";
+    state.manualCommandReason = "Arret simulation depuis WebUi";
+    state.logEvent("INFO", "MANUAL_ALLOFF_REQUEST", state.manualCommandReason, "WebUi");
     simulation.disable();
     server.send(200, "application/json", "{\"ok\":true}");
   });
@@ -468,7 +469,10 @@ void WebUi::routes() {
   });
   server.on("/api/simulation/disable", HTTP_POST, [this]() {
     if (!requireAuth()) return;
-    actuators.forceAllOff();
+    state.manualAllOffPending = true;
+    state.manualCommandSource = "WEB";
+    state.manualCommandReason = "Desactivation simulation depuis WebUi";
+    state.logEvent("INFO", "MANUAL_ALLOFF_REQUEST", state.manualCommandReason, "WebUi");
     simulation.disable();
     server.send(200, "application/json", "{\"ok\":true}");
   });
@@ -644,37 +648,24 @@ void WebUi::routes() {
   server.on("/api/restart", HTTP_POST, [this]() {
     if (!requireAuth()) return;
     server.send(200, "application/json", "{\"ok\":true}");
+    BootManager::setNextBootMain();
     wifi.restart();
   });
   server.on("/api/system/reboot", HTTP_POST, [this]() {
     if (!requireAuth()) return;
     server.send(200, "application/json", "{\"ok\":true}");
+    BootManager::setNextBootMain();
     wifi.restart();
   });
-  server.on("/api/ota/github/check", HTTP_GET, [this]() { sendGithubOtaCheck(); });
-  server.on("/api/ota/github/firmware", HTTP_POST, [this]() { startGithubFirmwareOta(); });
-  server.on("/api/ota/github/littlefs", HTTP_POST, [this]() { startGithubLittleFsOta(); });
-  server.on("/api/ota/rollback", HTTP_POST, [this]() {
+  server.on("/api/system/recovery", HTTP_POST, [this]() {
     if (!requireAuth()) return;
-    const esp_partition_t *running = esp_ota_get_running_partition();
-    const esp_partition_t *app0 = esp_partition_find_first(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_OTA_0, nullptr);
-    const esp_partition_t *app1 = esp_partition_find_first(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_OTA_1, nullptr);
-    const esp_partition_t *target = nullptr;
-    if (running && app0 && running->address != app0->address) target = app0;
-    else if (running && app1 && running->address != app1->address) target = app1;
-
-    esp_app_desc_t desc;
-    if (!target || esp_ota_get_partition_description(target, &desc) != ESP_OK) {
-      server.send(400, "application/json", "{\"ok\":false,\"error\":\"Aucune partition OTA precedente valide\"}");
+    bool wifiSynced = syncRecoveryWifiCredentials(config);
+    if (!BootManager::setNextBootFactory()) {
+      server.send(500, "application/json", "{\"ok\":false,\"error\":\"factory recovery introuvable\"}");
       return;
     }
-    esp_err_t err = esp_ota_set_boot_partition(target);
-    if (err != ESP_OK) {
-      server.send(500, "application/json", String("{\"ok\":false,\"error\":\"esp_ota_set_boot_partition: ") + esp_err_to_name(err) + "\"}");
-      return;
-    }
-    state.logEvent("WARNING", "OTA_ROLLBACK", String("Rollback vers ") + target->label, "WebUi");
-    server.send(200, "application/json", String("{\"ok\":true,\"target\":\"") + target->label + "\"}");
+    state.logEvent("WARNING", "BOOT_RECOVERY", wifiSynced ? "Passage recovery avec WiFi NVS synchronise" : "Passage recovery sans WiFi NVS", "WebUi");
+    server.send(200, "application/json", wifiSynced ? "{\"ok\":true,\"wifiSynced\":true}" : "{\"ok\":true,\"wifiSynced\":false}");
     delay(250);
     ESP.restart();
   });
@@ -686,208 +677,6 @@ void WebUi::sendJson(DynamicJsonDocument &doc) {
   String out;
   serializeJson(doc, out);
   server.send(200, "application/json", out);
-}
-
-bool WebUi::downloadGithubAssetToUpdate(const String &url, int updateCommand, const char *logCode, String &error, size_t &written, int &httpCode) {
-  written = 0;
-  httpCode = 0;
-  error = "";
-  if (WiFi.status() != WL_CONNECTED) {
-    error = "WiFi non connecte";
-    return false;
-  }
-
-  WiFiClientSecure client;
-  client.setInsecure();
-  HTTPClient http;
-  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
-  http.setTimeout(15000);
-  if (!http.begin(client, url)) {
-    error = "Initialisation HTTPS impossible";
-    return false;
-  }
-
-  httpCode = http.GET();
-  if (httpCode != HTTP_CODE_OK) {
-    error = String("HTTP ") + httpCode;
-    http.end();
-    return false;
-  }
-
-  const int contentLength = http.getSize();
-  const size_t updateSize = contentLength > 0 ? static_cast<size_t>(contentLength) : UPDATE_SIZE_UNKNOWN;
-  if (!Update.begin(updateSize, updateCommand)) {
-    error = Update.errorString();
-    http.end();
-    return false;
-  }
-
-  WiFiClient *stream = http.getStreamPtr();
-  uint8_t buffer[1024];
-  uint32_t lastDataMs = millis();
-  while (http.connected() && (contentLength < 0 || written < static_cast<size_t>(contentLength))) {
-    size_t available = stream->available();
-    if (available) {
-      int readLen = stream->readBytes(buffer, min<size_t>(available, sizeof(buffer)));
-      if (readLen <= 0) continue;
-      if (Update.write(buffer, readLen) != static_cast<size_t>(readLen)) {
-        error = Update.errorString();
-        Update.abort();
-        http.end();
-        return false;
-      }
-      written += readLen;
-      lastDataMs = millis();
-      delay(1);
-    } else {
-      if (millis() - lastDataMs > 20000UL) {
-        error = "Timeout telechargement";
-        Update.abort();
-        http.end();
-        return false;
-      }
-      delay(10);
-    }
-  }
-
-  if (contentLength > 0 && written != static_cast<size_t>(contentLength)) {
-    error = String("Telechargement incomplet: ") + written + "/" + contentLength;
-    Update.abort();
-    http.end();
-    return false;
-  }
-
-  if (!Update.end(true)) {
-    error = Update.errorString();
-    http.end();
-    return false;
-  }
-
-  http.end();
-  state.logEvent("WARNING", logCode, String("OTA GitHub appliquee, octets=") + written, "WebUi");
-  return true;
-}
-
-void WebUi::sendGithubOtaCheck() {
-  if (!requireAuth()) return;
-  DynamicJsonDocument doc(2048);
-  JsonObject out = doc.to<JsonObject>();
-  out["ok"] = false;
-  out["versionUrl"] = GITHUB_VERSION_URL;
-  out["releaseUrl"] = GITHUB_RELEASE_URL;
-  out["localFirmwareVersion"] = ROUTEUR_FIRMWARE_VERSION;
-  out["localLittlefsVersion"] = readLittleFsTextFile("/www/littlefs_version.txt");
-
-  if (WiFi.status() != WL_CONNECTED) {
-    out["error"] = "WiFi non connecte";
-    sendJson(doc);
-    return;
-  }
-
-  WiFiClientSecure client;
-  client.setInsecure();
-  HTTPClient http;
-  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
-  http.setTimeout(12000);
-  if (!http.begin(client, GITHUB_VERSION_URL)) {
-    out["error"] = "Initialisation HTTPS impossible";
-    sendJson(doc);
-    return;
-  }
-
-  int httpCode = http.GET();
-  out["httpCode"] = httpCode;
-  if (httpCode != HTTP_CODE_OK) {
-    out["error"] = String("HTTP ") + httpCode;
-    http.end();
-    sendJson(doc);
-    return;
-  }
-
-  String payload = http.getString();
-  http.end();
-  DynamicJsonDocument remote(2048);
-  DeserializationError err = deserializeJson(remote, payload);
-  if (err || !remote.is<JsonObject>()) {
-    out["error"] = String("version.json invalide: ") + err.c_str();
-    sendJson(doc);
-    return;
-  }
-
-  JsonObject src = remote.as<JsonObject>();
-  const String remoteFirmware = src["firmwareVersion"] | src["version"] | "";
-  const String remoteLittlefs = src["littlefsVersion"] | src["version"] | "";
-  const String localLittlefs = out["localLittlefsVersion"].as<String>();
-  out["ok"] = true;
-  out["project"] = src["project"] | "";
-  out["remoteVersion"] = src["version"] | "";
-  out["remoteFirmwareVersion"] = remoteFirmware;
-  out["remoteLittlefsVersion"] = remoteLittlefs;
-  out["firmwareUrl"] = src["firmwareUrl"] | GITHUB_FIRMWARE_URL;
-  out["littlefsUrl"] = src["littlefsUrl"] | GITHUB_LITTLEFS_URL;
-  out["mandatory"] = src["mandatory"] | false;
-  out["notes"] = src["notes"] | "";
-  out["firmwareUpdateAvailable"] = remoteFirmware.length() && remoteFirmware != ROUTEUR_FIRMWARE_VERSION;
-  out["littlefsUpdateAvailable"] = remoteLittlefs.length() && remoteLittlefs != localLittlefs;
-  out["updateAvailable"] = (out["firmwareUpdateAvailable"] | false) || (out["littlefsUpdateAvailable"] | false);
-  sendJson(doc);
-}
-
-void WebUi::startGithubFirmwareOta() {
-  if (!requireAuth()) return;
-  String error;
-  size_t written = 0;
-  int httpCode = 0;
-  state.logEvent("WARNING", "OTA_GITHUB_FIRMWARE", "Demarrage OTA firmware GitHub", "WebUi");
-  bool ok = downloadGithubAssetToUpdate(GITHUB_FIRMWARE_URL, U_FLASH, "OTA_GITHUB_FIRMWARE", error, written, httpCode);
-  DynamicJsonDocument doc(512);
-  JsonObject out = doc.to<JsonObject>();
-  out["ok"] = ok;
-  out["httpCode"] = httpCode;
-  out["bytes"] = written;
-  if (!ok) out["error"] = error.length() ? error : "OTA firmware GitHub refusee";
-  String response;
-  serializeJson(doc, response);
-  server.send(ok ? 200 : 500, "application/json", response);
-  if (ok) {
-    delay(250);
-    ESP.restart();
-  }
-}
-
-void WebUi::startGithubLittleFsOta() {
-  if (!requireAuth()) return;
-  state.logEvent("WARNING", "OTA_GITHUB_LITTLEFS", "Demarrage OTA LittleFS GitHub", "WebUi");
-  littleFsOtaBackupOk = config.backupToNvsBeforeLittleFsOta();
-  if (!littleFsOtaBackupOk) {
-    DynamicJsonDocument doc(384);
-    doc["ok"] = false;
-    doc["error"] = config.lastError().length() ? config.lastError() : "Sauvegarde config NVS impossible";
-    sendJson(doc);
-    return;
-  }
-
-  LittleFS.end();
-  String error;
-  size_t written = 0;
-  int httpCode = 0;
-  bool ok = downloadGithubAssetToUpdate(GITHUB_LITTLEFS_URL, U_SPIFFS, "OTA_GITHUB_LITTLEFS", error, written, httpCode);
-  if (!ok) LittleFS.begin(false);
-
-  DynamicJsonDocument doc(512);
-  JsonObject out = doc.to<JsonObject>();
-  out["ok"] = ok;
-  out["httpCode"] = httpCode;
-  out["bytes"] = written;
-  if (!ok) out["error"] = error.length() ? error : "OTA LittleFS GitHub refusee";
-  String response;
-  serializeJson(doc, response);
-  server.send(ok ? 200 : 500, "application/json", response);
-  littleFsOtaBackupOk = false;
-  if (ok) {
-    delay(250);
-    ESP.restart();
-  }
 }
 
 void WebUi::sendStatusLite() {
@@ -929,11 +718,19 @@ void WebUi::sendStatusLite() {
   out["ok"] = true;
   JsonObject device = config.device();
   JsonObject system = config.system();
-  out["moduleName"] = device["deviceName"] | device["name"] | state.moduleName.c_str();
+  const char *deviceName = device["deviceName"] | device["name"] | state.moduleName.c_str();
+  out["moduleName"] = deviceName;
+  JsonObject deviceOut = out["device"].to<JsonObject>();
+  deviceOut["name"] = deviceName;
+  deviceOut["redundancyRole"] = configuredRedundancyRole(device, state.role);
+  deviceOut["functionalRole"] = configuredFunctionalRole(device, state.role);
   out["deviceId"] = state.deviceId;
   out["nodeId"] = state.nodeId;
   out["role"] = device["role"] | RuntimeState::roleToString(state.role);
+  out["redundancyRole"] = deviceOut["redundancyRole"];
+  out["functionalRole"] = deviceOut["functionalRole"];
   out["firmwareVersion"] = ROUTEUR_FIRMWARE_VERSION;
+  out["littleFsVersion"] = readLittleFsTextFile("/www/littlefs_version.txt");
   out["buildTimestamp"] = ROUTEUR_BUILD_TIMESTAMP;
   out["arduinoCore"] = String(ESP_ARDUINO_VERSION_MAJOR) + "." + String(ESP_ARDUINO_VERSION_MINOR) + "." + String(ESP_ARDUINO_VERSION_PATCH);
   out["idfVersion"] = ESP.getSdkVersion();
@@ -1036,6 +833,40 @@ void WebUi::sendStatusLite() {
   out["robotDynPinHigh"] = state.robotDynPinHigh;
   setNumber("heaterPowerW", state.heaterPowerW);
   setNumber("commandPercent", state.commandPercent);
+  out["automateState"] = state.automateState;
+  out["previousAutomateState"] = state.previousAutomateState;
+  out["automateReason"] = state.automateReason;
+  out["activePriority"] = state.activePriority;
+  out["commandSource"] = state.commandSource;
+  out["pidAllowed"] = state.pidAllowed;
+  out["routingAllowed"] = state.routingAllowed;
+  out["safetyActive"] = state.safetyActive;
+  out["errorActive"] = state.errorActive;
+  out["automateLastTransitionMs"] = state.automateLastTransitionMs;
+  out["ruleCount"] = state.ruleCount;
+  out["activeRule"] = state.activeRule;
+  out["manualCommandPending"] = state.manualCommandPending;
+  out["manualCommandSource"] = state.manualCommandSource;
+  out["manualCommandReason"] = state.manualCommandReason;
+  out["manualAllOffPending"] = state.manualAllOffPending;
+  JsonObject automate = out["automate"].to<JsonObject>();
+  automate["state"] = state.automateState;
+  automate["previousState"] = state.previousAutomateState;
+  automate["reason"] = state.automateReason;
+  automate["activePriority"] = state.activePriority;
+  automate["commandSource"] = state.commandSource;
+  automate["commandPercent"] = state.commandPercent;
+  automate["pidAllowed"] = state.pidAllowed;
+  automate["routingAllowed"] = state.routingAllowed;
+  automate["safetyActive"] = state.safetyActive;
+  automate["errorActive"] = state.errorActive;
+  automate["lastTransitionMs"] = state.automateLastTransitionMs;
+  automate["ruleCount"] = state.ruleCount;
+  automate["activeRule"] = state.activeRule;
+  automate["manualCommandPending"] = state.manualCommandPending;
+  automate["manualCommandSource"] = state.manualCommandSource;
+  automate["manualCommandReason"] = state.manualCommandReason;
+  automate["manualAllOffPending"] = state.manualAllOffPending;
   setNumber("pidOutputPercent", state.pidOutputPercent);
   setNumber("pidErrorW", state.pidErrorW);
   out["pidEnabled"] = state.pidEnabled;
@@ -1208,7 +1039,12 @@ void WebUi::sendSystemInfo() {
   }
 
   out["deviceName"] = device["deviceName"] | device["name"] | state.moduleName.c_str();
+  JsonObject deviceOut = out["device"].to<JsonObject>();
+  deviceOut["name"] = out["deviceName"];
+  deviceOut["redundancyRole"] = configuredRedundancyRole(device, state.role);
+  deviceOut["functionalRole"] = configuredFunctionalRole(device, state.role);
   out["firmwareVersion"] = ROUTEUR_FIRMWARE_VERSION;
+  out["littleFsVersion"] = readLittleFsTextFile("/www/littlefs_version.txt");
   out["buildVersion"] = ROUTEUR_FIRMWARE_VERSION;
   out["buildTimestamp"] = ROUTEUR_BUILD_TIMESTAMP;
   out["buildNumber"] = ROUTEUR_BUILD_NUMBER;
@@ -1244,7 +1080,9 @@ void WebUi::sendSystemInfo() {
   } else {
     out["localDateTime"] = "N/A";
   }
-  out["role"] = RuntimeState::roleToString(state.role);
+  out["role"] = device["role"] | RuntimeState::roleToString(state.role);
+  out["redundancyRole"] = deviceOut["redundancyRole"];
+  out["functionalRole"] = deviceOut["functionalRole"];
   out["safetyLevel"] = state.safetyLevel.length() ? state.safetyLevel : "N/A";
   out["safetyReason"] = state.safetyReason.length() ? state.safetyReason : "N/A";
   out["simulationMode"] = state.simulationMode;
@@ -1252,6 +1090,7 @@ void WebUi::sendSystemInfo() {
   const esp_partition_t *running = esp_ota_get_running_partition();
   const esp_partition_t *boot = esp_ota_get_boot_partition();
   const esp_partition_t *next = esp_ota_get_next_update_partition(nullptr);
+  const esp_partition_t *factory = esp_partition_find_first(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_FACTORY, nullptr);
   const esp_partition_t *app0 = esp_partition_find_first(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_OTA_0, nullptr);
   const esp_partition_t *app1 = esp_partition_find_first(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_OTA_1, nullptr);
 
@@ -1263,10 +1102,14 @@ void WebUi::sendSystemInfo() {
   ota["nextUpdateLabel"] = next ? next->label : "N/A";
   ota["nextUpdateSlot"] = next ? partitionSubtypeLabel(next->subtype) : "N/A";
   ota["currentFirmwareVersion"] = ROUTEUR_FIRMWARE_VERSION;
+  ota["runningInfo"] = BootManager::getRunningPartitionInfo();
+  ota["bootInfo"] = BootManager::getBootPartitionInfo();
+  ota["mainInfo"] = BootManager::getMainPartitionInfo();
   ota["sketchSize"] = ESP.getSketchSize();
   ota["freeSketchSpace"] = ESP.getFreeSketchSpace();
   ota["runningSlotSize"] = running ? running->size : 0;
   ota["runningRemainingBytes"] = running && running->size > ESP.getSketchSize() ? running->size - ESP.getSketchSize() : 0;
+  appendOtaPartitionJson(ota["factory"].to<JsonObject>(), factory, running, boot);
   appendOtaPartitionJson(ota["app0"].to<JsonObject>(), app0, running, boot);
   appendOtaPartitionJson(ota["app1"].to<JsonObject>(), app1, running, boot);
 
@@ -1276,14 +1119,6 @@ void WebUi::sendSystemInfo() {
   storage["total"] = LittleFS.totalBytes();
   storage["used"] = LittleFS.usedBytes();
   storage["status"] = state.littleFsOk || LittleFS.totalBytes() > 0 ? "OK" : "Erreur";
-
-  JsonObject githubOta = out["githubOta"].to<JsonObject>();
-  githubOta["versionUrl"] = GITHUB_VERSION_URL;
-  githubOta["firmwareUrl"] = GITHUB_FIRMWARE_URL;
-  githubOta["littlefsUrl"] = GITHUB_LITTLEFS_URL;
-  githubOta["releaseUrl"] = GITHUB_RELEASE_URL;
-  githubOta["localFirmwareVersion"] = ROUTEUR_FIRMWARE_VERSION;
-  githubOta["localLittlefsVersion"] = storage["version"];
 
   JsonObject services = out["services"].to<JsonObject>();
   services["wifi"] = wifiOk ? "OK" : (state.networkMode == "AP" || state.networkMode == "AP_STA" ? "Attention" : "Erreur");
@@ -1392,7 +1227,7 @@ void WebUi::appendFsListJson(String &out, const char *dirname) {
 String WebUi::fsPage() {
   String html;
   html.reserve(1400);
-  html += F("<!DOCTYPE html><html lang=\"fr\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>LittleFS</title><style>body{background:#111827;color:#F9FAFB;font-family:system-ui;padding:18px}a{color:#93C5FD}pre{background:#1F2937;border:1px solid #374151;border-radius:8px;padding:12px;white-space:pre-wrap}</style></head><body><h1>LittleFS</h1><p><a href=\"/\">Retour</a> <a href=\"/api/fs\">JSON</a></p><pre id=\"out\">Chargement...</pre><script>fetch('/api/fs').then(r=>r.text()).then(t=>{try{out.textContent=JSON.stringify(JSON.parse(t),null,2)}catch(e){out.textContent=t}}).catch(e=>out.textContent=e.message)</script></body></html>");
+  html += F("<!DOCTYPE html><html lang=\"fr\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>LittleFS</title><style>body{background:#111827;color:#F9FAFB;font-family:system-ui;padding:18px}a{color:#93C5FD}pre{background:#1F2937;border:1px solid #374151;border-radius:8px;padding:12px;white-space:pre-wrap}</style></head><body><h1>LittleFS</h1><p><a href=\"/app\">Retour app</a> <a href=\"/api/fs\">JSON</a></p><pre id=\"out\">Chargement...</pre><script>fetch('/api/fs').then(r=>r.text()).then(t=>{try{out.textContent=JSON.stringify(JSON.parse(t),null,2)}catch(e){out.textContent=t}}).catch(e=>out.textContent=e.message)</script></body></html>");
   return html;
 }
 
@@ -1409,6 +1244,22 @@ void WebUi::sendConfig(const char *name) {
 
 void WebUi::saveConfig(const char *name, const char *path) {
   if (!requireAuth()) return;
+  bool allowEmpty = false;
+  if (strcmp(name, "sensors") == 0) {
+    allowEmpty = server.arg("allowEmptySensors") == "true" || server.arg("allowEmptySensors") == "1";
+    String deleteId = server.arg("deleteId");
+    if (deleteId.length()) {
+      Serial.print(F("SENSOR DELETE requested id="));
+      Serial.println(deleteId);
+    }
+  } else if (strcmp(name, "actuators") == 0) {
+    allowEmpty = server.arg("allowEmptyActuators") == "true" || server.arg("allowEmptyActuators") == "1";
+    String deleteId = server.arg("deleteId");
+    if (deleteId.length()) {
+      Serial.print(F("ACTUATOR DELETE requested id="));
+      Serial.println(deleteId);
+    }
+  }
   if (strcmp(name, "rules") == 0) {
     String errors;
     if (!rules.validateRulesPayload(server.arg("plain"), errors)) {
@@ -1436,6 +1287,21 @@ void WebUi::saveConfig(const char *name, const char *path) {
         server.send(400, "application/json", "{\"ok\":false,\"error\":\"GPIO OneWire invalide\"}");
         return;
       }
+      size_t oldCount = config.sensorsDoc()["sensors"].as<JsonArray>().size() + config.sensorsDoc()["ds18b20"].as<JsonArray>().size();
+      size_t newCount = check["sensors"].as<JsonArray>().size() + check["ds18b20"].as<JsonArray>().size();
+      if (oldCount > 0 && newCount == 0 && !allowEmpty) {
+        Serial.println(F("SENSOR SAVE refused reason=empty_without_confirmation"));
+        server.send(400, "application/json", "{\"ok\":false,\"error\":\"Liste capteurs vide refusee sans allowEmptySensors=true\"}");
+        return;
+      }
+    } else if (strcmp(name, "actuators") == 0) {
+      size_t oldCount = config.actuatorsDoc()["actuators"].as<JsonArray>().size();
+      size_t newCount = check["actuators"].as<JsonArray>().size();
+      if (oldCount > 0 && newCount == 0 && !allowEmpty) {
+        Serial.println(F("ACTUATOR SAVE refused reason=empty_without_confirmation"));
+        server.send(400, "application/json", "{\"ok\":false,\"error\":\"Liste actionneurs vide refusee sans allowEmptyActuators=true\"}");
+        return;
+      }
     }
     JsonArray arr = strcmp(name, "sensors") == 0 ? check["sensors"].as<JsonArray>() : check["actuators"].as<JsonArray>();
     for (JsonObject item : arr) {
@@ -1448,7 +1314,22 @@ void WebUi::saveConfig(const char *name, const char *path) {
       }
     }
   }
-  bool ok = config.replaceFile(path, server.arg("plain"));
+  size_t oldCount = 0;
+  size_t newCount = 0;
+  if (strcmp(name, "sensors") == 0) {
+    DynamicJsonDocument check(24576);
+    if (!deserializeJson(check, server.arg("plain"))) {
+      oldCount = config.sensorsDoc()["sensors"].as<JsonArray>().size() + config.sensorsDoc()["ds18b20"].as<JsonArray>().size();
+      newCount = check["sensors"].as<JsonArray>().size() + check["ds18b20"].as<JsonArray>().size();
+    }
+  } else if (strcmp(name, "actuators") == 0) {
+    DynamicJsonDocument check(12288);
+    if (!deserializeJson(check, server.arg("plain"))) {
+      oldCount = config.actuatorsDoc()["actuators"].as<JsonArray>().size();
+      newCount = check["actuators"].as<JsonArray>().size();
+    }
+  }
+  bool ok = config.replaceFile(path, server.arg("plain"), allowEmpty);
   if (ok && strcmp(name, "device") == 0) state.begin(config);
   if (ok && strcmp(name, "system") == 0) {
     state.simulationType = config.system()["simulation"]["mode"] | state.simulationType.c_str();
@@ -1466,6 +1347,21 @@ void WebUi::saveConfig(const char *name, const char *path) {
     espnow.sendAllActuatorDiscovery();
     state.addLog("ESP-NOW capacites actionneurs annoncees apres sauvegarde");
   }
+  if (strcmp(name, "sensors") == 0) {
+    Serial.print(F("SENSOR SAVE oldCount="));
+    Serial.print(oldCount);
+    Serial.print(F(" newCount="));
+    Serial.print(newCount);
+    Serial.print(F(" result="));
+    Serial.println(ok ? F("ok") : F("refused"));
+  } else if (strcmp(name, "actuators") == 0) {
+    Serial.print(F("ACTUATOR SAVE oldCount="));
+    Serial.print(oldCount);
+    Serial.print(F(" newCount="));
+    Serial.print(newCount);
+    Serial.print(F(" result="));
+    Serial.println(ok ? F("ok") : F("refused"));
+  }
   if (ok) {
     server.send(200, "application/json", "{\"ok\":true}");
   } else {
@@ -1478,55 +1374,18 @@ void WebUi::saveConfig(const char *name, const char *path) {
 
 String WebUi::homePage() {
   String html;
-  html.reserve(6200);
+  html.reserve(1800);
   html += F("<!DOCTYPE html><html lang=\"fr\"><head><meta charset=\"utf-8\">");
   html += F("<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">");
-  html += F("<title>RouteurSolaireESP32 Secours</title>");
-  html += F("<style>body{margin:0;background:#111827;color:#F9FAFB;font-family:system-ui,Arial,sans-serif;padding:18px}h1{margin:0 0 6px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px}.card{background:#1F2937;border:1px solid #374151;border-radius:8px;padding:14px;margin:10px 0}.label{color:#9CA3AF;font-size:12px}.value{font-size:20px;font-weight:700;margin-top:4px}.ok{color:#22C55E}.warn{color:#FF9800}.bad{color:#F44336}.muted{color:#9CA3AF}a,button,input[type=submit]{display:inline-block;margin:6px 6px 6px 0;background:#263244;color:#F9FAFB;border:1px solid #374151;border-radius:8px;padding:10px 12px;text-decoration:none}input[type=file]{width:100%;background:#0B1220;color:#F9FAFB;border:1px solid #374151;border-radius:8px;padding:10px;margin:8px 0}.danger{border-color:#F44336;background:#3b1111}.bar{height:8px;background:#0B1220;border-radius:999px;overflow:hidden}.fill{height:100%;background:#2196F3}.note{border-left:3px solid #FF9800;padding-left:10px;color:#FFD18A}</style>");
-  html += F("</head><body><h1>RouteurSolaireESP32 - Secours</h1><p class=\"muted\">Page embarquee dans le firmware. Elle fonctionne meme si LittleFS ou /app pose probleme.</p>");
-  html += F("<div class=\"grid\"><div class=\"card\"><div class=\"label\">Module</div><div class=\"value\">");
-  html += state.moduleName.length() ? state.moduleName : "Routeur solaire ESP32";
-  html += F("</div><p class=\"muted\">Role ");
-  html += RuntimeState::roleToString(state.role);
-  html += F("</p></div><div class=\"card\"><div class=\"label\">Safety</div><div class=\"value ");
-  html += state.safetyTripped ? "bad" : "ok";
-  html += F("\">");
-  html += state.safetyLevel;
-  html += F("</div><p class=\"muted\">");
-  html += state.safetyReason.length() ? state.safetyReason : "Aucun defaut critique";
-  html += F("</p></div><div class=\"card\"><div class=\"label\">WiFi</div><div class=\"value ");
-  html += state.wifiConnected ? "ok" : "warn";
-  html += F("\">");
-  html += state.networkMode;
-  html += F("</div><p class=\"muted\">SSID ");
-  html += state.wifiSsid.length() ? state.wifiSsid : "-";
-  html += F("</p></div><div class=\"card\"><div class=\"label\">LittleFS</div><div class=\"value ");
-  html += state.littleFsOk ? "ok" : "bad";
-  html += F("\">");
-  html += state.littleFsOk ? "OK" : "Erreur";
-  html += F("</div><div class=\"bar\"><div class=\"fill\" style=\"width:");
-  size_t total = LittleFS.totalBytes();
-  size_t used = LittleFS.usedBytes();
-  uint8_t pct = total ? min<size_t>(100, (used * 100) / total) : 0;
-  html += pct;
-  html += F("%\"></div></div><p class=\"muted\">");
-  html += String(used / 1024);
-  html += F(" Ko / ");
-  html += String(total / 1024);
-  html += F(" Ko</p></div></div>");
-  html += F("<div class=\"card\"><h2>Reseau</h2><p>IP box: ");
+  html += F("<title>RouteurSolaireESP32 Recovery</title>");
+  html += F("<style>body{margin:0;background:#111827;color:#F9FAFB;font-family:system-ui,Arial,sans-serif;display:grid;min-height:100vh;place-items:center;padding:18px}.card{width:min(520px,100%);background:#1F2937;border:1px solid #374151;border-radius:8px;padding:18px}h1{margin:0 0 8px}.muted{color:#9CA3AF}.kv{display:grid;grid-template-columns:110px 1fr;gap:6px 10px;margin:14px 0}.kv span:nth-child(odd){color:#9CA3AF}.danger,a{display:inline-block;margin:6px 6px 0 0;background:#3b1111;color:#F9FAFB;border:1px solid #F44336;border-radius:8px;padding:10px 12px;text-decoration:none}a{background:#263244;border-color:#374151}</style>");
+  html += F("</head><body><main class=\"card\"><h1>Passage en recovery</h1><p class=\"muted\">Page embarquee dans le firmware, independante de LittleFS.</p><div class=\"kv\"><span>IP box</span><span>");
   html += state.stationIp;
-  html += F("</p><p>IP AP: ");
+  html += F("</span><span>IP AP</span><span>");
   html += state.apIp;
-  html += F("</p><p>RSSI: ");
-  html += String(state.rssi);
-  html += F(" dBm</p></div>");
-  html += F("<div class=\"card\"><h2>Acces rapides</h2>");
-  html += F("<a href=\"/app\">Interface principale /app</a><a href=\"/lite\">Secours lite</a><a href=\"/fs\">Fichiers LittleFS</a><a href=\"/api/status-lite\">API status-lite</a><a href=\"/api/diagnostic\">API diagnostic</a><a href=\"/api/system-info\">API systeme</a><a href=\"/README.md\">README</a>");
-  html += F("</div><div class=\"card\"><h2>OTA firmware</h2><p class=\"note\">Necessite une partition avec OTA. Ne coupe pas l'alimentation pendant l'envoi.</p><form method=\"POST\" action=\"/ota/firmware\" enctype=\"multipart/form-data\" onsubmit=\"return confirm('Televerser ce firmware et redemarrer ?')\"><input type=\"file\" name=\"firmware\" accept=\".bin\" required><input type=\"submit\" value=\"Televerser firmware .bin\"></form></div>");
-  html += F("<div class=\"card\"><h2>OTA LittleFS</h2><p class=\"note\">Envoie l'image LittleFS .bin correspondant a la partition actuelle. Apres upload, l'ESP32 redemarre.</p><form method=\"POST\" action=\"/ota/littlefs\" enctype=\"multipart/form-data\" onsubmit=\"return confirm('Televerser LittleFS et redemarrer ?')\"><input type=\"file\" name=\"littlefs\" accept=\".bin\" required><input type=\"submit\" value=\"Televerser LittleFS .bin\"></form></div>");
-  html += F("<div class=\"card\"><h2>Actions</h2><form method=\"POST\" action=\"/api/system/reboot\" onsubmit=\"return confirm('Redemarrer ESP32 ?')\"><input class=\"danger\" type=\"submit\" value=\"Redemarrer ESP32\"></form></div>");
-  html += F("</body></html>");
+  html += F("</span><span>WiFi</span><span>");
+  html += state.networkMode;
+  html += F("</span></div><form method=\"POST\" action=\"/api/system/recovery\" onsubmit=\"return confirm('Redemarrer en recovery ?')\"><input class=\"danger\" type=\"submit\" value=\"Passer en recovery\"></form><a href=\"/app\">Retour /app</a></main></body></html>");
   return html;
 }
 
@@ -1537,7 +1396,7 @@ String WebUi::litePage() {
 <style>
 body{margin:0;background:#111827;color:#F9FAFB;font-family:system-ui,Segoe UI,sans-serif}nav{background:#050505;padding:12px;display:flex;gap:8px;flex-wrap:wrap;position:sticky;top:0}button{background:#1F2937;color:#F9FAFB;border:1px solid #374151;border-radius:8px;padding:10px 12px}main{padding:14px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px}.card{background:#1F2937;border:1px solid #374151;border-radius:8px;padding:12px}.label{color:#9CA3AF;font-size:12px}.value{font-size:22px;margin-top:6px}.ok{color:#22C55E}.bad{color:#F44336}.warn{color:#FF9800}table{width:100%;border-collapse:collapse;background:#1F2937;margin-top:10px}td,th{padding:8px;border-bottom:1px solid #374151;text-align:left}input,select{width:100%;background:#0B1220;color:#F9FAFB;border:1px solid #374151;border-radius:8px;padding:9px}.row{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px}.banner{background:#7f1d1d;border:1px solid #F44336;border-radius:8px;padding:10px;margin:8px 0}.sim{background:#2a1b08;border:1px solid #FF9800;border-radius:8px;padding:10px;margin:8px 0}
 </style></head><body>
-<nav><button onclick="show('dash')">Dashboard</button><button onclick="show('sim')">Simulation</button><button onclick="show('diag')">Diagnostic</button><button onclick="show('wifi')">WiFi</button><button onclick="location.href='/app'">Interface principale</button><button onclick="location.href='/'">Secours OTA</button></nav>
+<nav><button onclick="show('dash')">Dashboard</button><button onclick="show('sim')">Simulation</button><button onclick="show('diag')">Diagnostic</button><button onclick="show('wifi')">WiFi</button><button onclick="location.href='/app'">Interface principale</button><button onclick="location.href='/recovery'">Recovery</button></nav>
 <main id="v">Chargement...</main>
 <script>
 let status={}, current='dash';

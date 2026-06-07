@@ -37,6 +37,7 @@ public:
   void reloadConfig();
   void stop();
   void printStatus();
+  bool reconfigureTo19200();
 
 private:
   ConfigManager &config;
@@ -46,16 +47,18 @@ private:
   uint8_t modbusAddress = 1;
   uint8_t rxPin = 26;
   uint8_t txPin = 27;
-  int8_t rs485DirPin = -1;
-  uint32_t baudrate = 4800;
-  uint32_t readIntervalMs = 500;
-  uint32_t timeoutMs = 400;
+  uint32_t baudrate = 19200;
+  uint32_t readIntervalMs = 350;
+  uint32_t timeoutMs = 300;
   bool enabled = true;
   float minInjectionStartW = 200;
   float stopBelowInjectionW = 80;
   bool injectionActive = false;
   String clamp1Role = "production";
   String clamp2Role = "grid";
+  String lastError = "";
+  uint16_t timeoutCount = 0;
+  uint16_t crcErrorCount = 0;
 
   uint8_t rx[80]{};
   uint8_t rxLen = 0;
@@ -66,6 +69,10 @@ private:
   uint32_t lastAnomalyLogMs = 0;
 
   void configureFromJson();
+  void autoDetectBaudrate();
+  bool testReadAtBaud(uint32_t testBaudrate);
+  bool writeBaudrate19200At4800();
+  bool waitForValidFrame(uint32_t waitMs);
   void beginSerial();
   void sendRequest();
   uint16_t crc16(const uint8_t *data, uint8_t len);

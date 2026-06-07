@@ -124,6 +124,7 @@ bool EspNowManager::isPeerKnown(const String &mac) {
 }
 
 bool EspNowManager::sendMessage(const String &peer, EspNowMessage message) {
+  if (!state.espNowReady) return false;
   uint8_t addr[6];
   if (!parseMac(peer, addr)) return false;
   prepareMessage(message);

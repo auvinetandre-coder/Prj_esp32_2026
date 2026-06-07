@@ -1,0 +1,12 @@
+# Partition ESP32 4 Mo pour RouteurSolaireESP32 recovery + main
+# Objectif :
+# - factory : firmware recovery / updater
+# - ota_0   : firmware principal RouteurSolaireESP32
+# - spiffs  : partition utilisee comme LittleFS
+#
+# Name,     Type, SubType, Offset,   Size,     Flags
+nvs,        data, nvs,     0x9000,   0x5000,
+otadata,    data, ota,     0xE000,   0x2000,
+factory,    app,  factory, 0x10000,  0x110000,
+ota_0,      app,  ota_0,   0x120000, 0x1E0000,
+spiffs,     data, spiffs,  0x300000, 0x100000,

@@ -16,12 +16,15 @@ void SolarRouter::loop(uint32_t now) {
     integral = constrain(integral + error, -1000.0f, 1000.0f);
     float derivative = error - previousError;
     float next = state.ssr1PowerPct + (kp * -error) + (ki * -integral) + (kd * -derivative);
-    actuators.setPower("ssr1_water_heater", constrain(next, 0.0f, 100.0f));
+    state.commandPercent = constrain(next, 0.0f, 100.0f);
+    state.commandSource = "AUTO_ROUTING";
   } else if (state.gridPowerW > hysteresis) {
     integral = 0;
-    actuators.setPower("ssr1_water_heater", max(0.0f, state.ssr1PowerPct - 5.0f));
+    state.commandPercent = max(0.0f, state.ssr1PowerPct - 5.0f);
+    state.commandSource = "AUTO_ROUTING";
   } else if (state.ssr1PowerPct > 0.0f) {
-    actuators.setPower("ssr1_water_heater", state.ssr1PowerPct);
+    state.commandPercent = state.ssr1PowerPct;
+    state.commandSource = "AUTO_ROUTING";
   }
   previousError = error;
 }

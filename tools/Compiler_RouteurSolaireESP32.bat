@@ -6,9 +6,9 @@ if errorlevel 1 (
   pause
   exit /b 1
 )
-set "PARTITION_NAME=partitions_ota_1m5app_960k_littlefs"
+set "PARTITION_NAME=partitions_recovery_main_4MB"
 set "PARTITION_FILE=%CD%\%PARTITION_NAME%.csv"
-set "MAX_APP_SIZE=1572864"
+set "MAX_APP_SIZE=1966080"
 set "BUILD_DIR=%CD%\build\esp32.esp32.esp32"
 set "OTA_DIR=%CD%\build\ota"
 set "FIRMWARE_BIN=%BUILD_DIR%\RouteurSolaireESP32.ino.bin"

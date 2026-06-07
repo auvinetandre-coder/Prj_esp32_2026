@@ -21,6 +21,7 @@ void PIDController::update(uint32_t now) {
 }
 
 float PIDController::computeSurplusPercent(JsonObject action, uint32_t now) {
+  const uint32_t startedMs = millis();
   JsonObject router = config.system()["router"];
   String mode = router["mode"] | "AUTO";
   mode.toUpperCase();
@@ -36,6 +37,7 @@ float PIDController::computeSurplusPercent(JsonObject action, uint32_t now) {
   if (state.safetyTripped || mode == "OFF" || !state.pidEnabled) {
     reset();
     state.pidStatus = state.safetyTripped ? "SAFETY" : (mode == "OFF" ? "OFF" : "PID_OFF");
+    state.recordLoopPerf(PERF_PID, millis() - startedMs);
     return 0.0f;
   }
 
@@ -46,15 +48,19 @@ float PIDController::computeSurplusPercent(JsonObject action, uint32_t now) {
     state.pidOutputPercent = outputPercent;
     state.commandPercent = outputPercent;
     state.heaterPowerW = heaterMaxW * outputPercent / 100.0f;
+    state.recordLoopPerf(PERF_PID, millis() - startedMs);
     return outputPercent;
   }
 
   if (mode != "AUTO") {
     state.pidStatus = mode;
+    state.recordLoopPerf(PERF_PID, millis() - startedMs);
     return outputPercent;
   }
 
-  return computeAutoPercent(heaterMaxW, elapsedMs, router);
+  const float result = computeAutoPercent(heaterMaxW, elapsedMs, router);
+  state.recordLoopPerf(PERF_PID, millis() - startedMs);
+  return result;
 }
 
 float PIDController::computeAutoPercent(float heaterMaxW, uint32_t elapsedMs, JsonObject router) {

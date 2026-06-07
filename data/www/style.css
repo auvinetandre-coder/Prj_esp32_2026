@@ -429,6 +429,618 @@ main {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
+.systemSummaryBand {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 10px;
+  margin: 12px 0 14px;
+}
+
+.systemSummaryCard {
+  min-height: 58px;
+  padding: 10px;
+  border: 1px solid #26272b;
+  border-radius: 8px;
+  background: #15161a;
+  box-sizing: border-box;
+}
+
+.systemSummaryCard span {
+  display: block;
+  color: #9ca3af;
+  font-size: 10px;
+  font-weight: 750;
+}
+
+.systemSummaryCard b {
+  display: block;
+  margin-top: 6px;
+  color: #f9fafb;
+  font-size: 14px;
+  line-height: 1.1;
+  overflow-wrap: anywhere;
+}
+
+.systemSummaryCard.ok {
+  border-color: rgba(34,197,94,.38);
+}
+
+.systemSummaryCard.ok b { color: #22c55e; }
+.systemSummaryCard.info b { color: #74c7f0; }
+.systemSummaryCard.warn b { color: #ff9800; }
+.systemSummaryCard.bad b { color: #ff6b7a; }
+
+.systemAlertStrip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 14px;
+}
+
+.systemMainGrid {
+  margin-bottom: 14px;
+}
+
+.systemAdvanced {
+  margin-top: 8px;
+  border: 1px solid #26272b;
+  border-radius: 8px;
+  background: #111214;
+  padding: 0;
+}
+
+.systemAdvanced > summary {
+  cursor: pointer;
+  padding: 12px 14px;
+  color: #f9fafb;
+  font-weight: 800;
+  list-style: none;
+}
+
+.systemAdvanced > summary::-webkit-details-marker {
+  display: none;
+}
+
+.systemAdvanced > summary::before {
+  content: "+";
+  display: inline-block;
+  width: 18px;
+  color: #74c7f0;
+  font-weight: 900;
+}
+
+.systemAdvanced[open] > summary {
+  border-bottom: 1px solid #26272b;
+}
+
+.systemAdvanced[open] > summary::before {
+  content: "-";
+}
+
+.systemAdvanced > .settingsGrid,
+.systemAdvanced > h2,
+.systemAdvanced > table {
+  margin: 14px;
+}
+
+.cockpitDashboard {
+  display: grid;
+  gap: 14px;
+}
+
+.energyTopBand {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.cockpitMetric,
+.energyFlowPanel,
+.pidCockpit,
+.routerMood,
+.activeSensorsPanel,
+.systemHealthPanel,
+.canvasChartCard {
+  background: #191a1e;
+  border: 1px solid #26272b;
+  border-radius: 8px;
+  padding: 14px;
+  box-sizing: border-box;
+}
+
+.cockpitMetric {
+  min-height: 104px;
+  display: grid;
+  align-content: space-between;
+  gap: 7px;
+}
+
+.cockpitMetric span {
+  color: #9ca3af;
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.metricLabel,
+.wideChartHead b,
+.routerMood b {
+  position: relative;
+}
+
+.helpIcon {
+  display: inline-grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  min-height: 16px;
+  margin-left: 5px;
+  padding: 0;
+  border: 1px solid #374151;
+  border-radius: 999px;
+  color: #93c5fd;
+  background: #101115;
+  font-size: 10px;
+  font-weight: 900;
+  line-height: 1;
+  vertical-align: middle;
+}
+
+.helpBubble {
+  position: absolute;
+  z-index: 40;
+  top: calc(100% + 7px);
+  left: 0;
+  width: min(260px, 78vw);
+  padding: 8px 9px;
+  border: 1px solid #334155;
+  border-radius: 7px;
+  color: #d1d5db;
+  background: #0f172a;
+  box-shadow: 0 12px 24px rgba(0,0,0,.34);
+  font-size: 11px;
+  font-weight: 550;
+  line-height: 1.35;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-3px);
+  transition: opacity .12s ease, transform .12s ease;
+}
+
+.helpIcon:hover + .helpBubble,
+.helpIcon:focus + .helpBubble,
+.helpIcon:active + .helpBubble {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.cockpitMetric strong {
+  color: #f9fafb;
+  font-size: 28px;
+  line-height: 1;
+}
+
+.cockpitMetric strong em {
+  color: #9ca3af;
+  font-size: 13px;
+  font-style: normal;
+}
+
+.cockpitMetric small {
+  color: #7b808a;
+  font-size: 11px;
+}
+
+.cockpitMetric.solar { border-color: rgba(34,197,94,.5); }
+.cockpitMetric.consume { border-color: rgba(244,67,54,.55); }
+.cockpitMetric.heat { border-color: rgba(249,115,22,.55); }
+.cockpitMetric.info,
+.cockpitMetric.ok { border-color: rgba(56,189,248,.45); }
+.cockpitMetric.bad { border-color: rgba(244,67,54,.75); }
+.cockpitMetric.warn { border-color: rgba(255,152,0,.6); }
+
+.cockpitMetric.solar strong { color: #22c55e; }
+.cockpitMetric.consume strong { color: #f87171; }
+.cockpitMetric.heat strong { color: #f97316; }
+.cockpitMetric.info strong,
+.cockpitMetric.ok strong { color: #38bdf8; }
+.cockpitMetric.bad strong { color: #ff6b7a; }
+.cockpitMetric.warn strong { color: #ffb74d; }
+
+.cockpitMainGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.55fr) minmax(320px, .95fr);
+  gap: 14px;
+  align-items: stretch;
+}
+
+.cockpitTitle {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+
+.energyFlowPanel {
+  min-height: 330px;
+}
+
+.energyFlowSvg {
+  width: 100%;
+  height: 270px;
+  display: block;
+  background: #101115;
+  border: 1px solid #26272b;
+  border-radius: 8px;
+}
+
+.energyFlowSvg .flowNode circle,
+.energyFlowSvg .flowNode rect {
+  fill: #15171c;
+  stroke: #374151;
+  stroke-width: 2;
+}
+
+.energyFlowSvg .sunNode circle { stroke: #22c55e; }
+.energyFlowSvg .heaterNode rect { stroke: #f97316; }
+.energyFlowSvg.inject .gridNode rect { stroke: #22c55e; }
+.energyFlowSvg.buy .gridNode rect { stroke: #f87171; }
+
+.energyFlowSvg text {
+  fill: #f9fafb;
+  font-size: 14px;
+  text-anchor: middle;
+  font-weight: 750;
+}
+
+.energyFlowSvg text + text {
+  fill: #9ca3af;
+  font-size: 12px;
+}
+
+.flowLine {
+  fill: none;
+  stroke: #6b7280;
+  stroke-width: 4;
+  stroke-linecap: round;
+  marker-end: url(#flowArrow);
+  opacity: .62;
+}
+
+.gridBoth {
+  marker-start: url(#flowArrowStart);
+}
+
+.energyFlowSvg marker path {
+  fill: #6b7280;
+}
+
+.energyFlowSvg .solarLine {
+  stroke: #22c55e;
+  opacity: .16;
+}
+
+.energyFlowSvg.pvActive .solarLine {
+  opacity: 1;
+  stroke-dasharray: 8 10;
+  animation: flowDash 1.7s linear infinite;
+}
+
+.energyFlowSvg .flowValue {
+  fill: #cbd5e1;
+  font-size: 11px;
+  font-weight: 750;
+  text-anchor: middle;
+}
+
+.energyFlowSvg.inject .toGrid,
+.energyFlowSvg.buy .fromGrid,
+.energyFlowSvg.inject .gridBoth,
+.energyFlowSvg.buy .gridBoth,
+.energyFlowSvg.heat .heaterLine {
+  opacity: 1;
+  stroke-dasharray: 8 10;
+  animation: flowDash 1.2s linear infinite;
+}
+
+.energyFlowSvg.inject .toGrid { stroke: #22c55e; }
+.energyFlowSvg.buy .fromGrid { stroke: #f87171; }
+.energyFlowSvg.inject .gridBoth { stroke: #22c55e; }
+.energyFlowSvg.buy .gridBoth { stroke: #f87171; }
+.energyFlowSvg.heat .heaterLine { stroke: #f97316; }
+.energyFlowSvg.inject .fromGrid,
+.energyFlowSvg.buy .toGrid,
+.energyFlowSvg.neutral .gridLine,
+.energyFlowSvg.noHeat .heaterLine,
+.energyFlowSvg.unknown .gridLine { opacity: .16; }
+
+@keyframes flowDash {
+  to { stroke-dashoffset: -44; }
+}
+
+.pidCockpit {
+  display: grid;
+  gap: 12px;
+}
+
+.pidModeLine {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+}
+
+.pidModeLine strong {
+  color: #f9fafb;
+  font-size: 22px;
+}
+
+.pidModeLine span {
+  color: #93c5fd;
+  font-size: 12px;
+}
+
+.pidExecutionLine {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  color: #9ca3af;
+  font-size: 12px;
+}
+
+.pidExecutionLine b {
+  color: #d1d5db;
+  text-align: right;
+}
+
+.pidCommandBar {
+  position: relative;
+  height: 16px;
+  border-radius: 999px;
+  background: #101115;
+  border: 1px solid #26272b;
+  overflow: hidden;
+}
+
+.pidCommandBar i {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, #38bdf8, #f97316);
+  border-radius: inherit;
+}
+
+.pidCommandBar span {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: #f9fafb;
+  font-size: 10px;
+  font-weight: 900;
+  text-shadow: 0 1px 2px #000;
+}
+
+.pidDiagnostic {
+  margin: 0;
+  padding: 9px 10px;
+  border: 1px solid #2f333b;
+  border-radius: 7px;
+  color: #d1d5db;
+  background: #131417;
+  font-size: 12px;
+}
+
+.pidGrid,
+.healthGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.routerMood {
+  grid-column: 2;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-height: 92px;
+}
+
+.routerMood.headerMood {
+  grid-column: auto;
+  min-height: 58px;
+  min-width: min(360px, 42vw);
+  padding: 9px 11px;
+}
+
+.routerMood.headerMood > span {
+  font-size: 28px;
+}
+
+.routerMood.headerMood strong {
+  font-size: 15px;
+}
+
+.routerMood.headerMood small {
+  display: none;
+}
+
+.routerMood > span {
+  font-size: 38px;
+  line-height: 1;
+}
+
+.routerMood b {
+  display: block;
+  color: #9ca3af;
+  font-size: 12px;
+}
+
+.routerMood strong {
+  display: block;
+  margin-top: 2px;
+  color: #f9fafb;
+  font-size: 19px;
+}
+
+.routerMood small {
+  display: block;
+  margin-top: 3px;
+  color: #7b808a;
+  font-size: 11px;
+}
+
+.cockpitCharts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.canvasChartCard canvas {
+  width: 100%;
+  display: block;
+  border: 1px solid #26272b;
+  border-radius: 8px;
+  background: #101115;
+}
+
+.miniButton {
+  min-height: 28px;
+  padding: 5px 8px;
+  font-size: 11px;
+}
+
+.graphEditor {
+  grid-column: 1 / -1;
+}
+
+.graphSeriesList {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.graphSeriesRow {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.5fr) minmax(110px, .8fr) 70px 90px auto;
+  gap: 8px;
+  align-items: end;
+  padding: 8px;
+  border: 1px solid #26272b;
+  border-radius: 8px;
+  background: #131417;
+}
+
+.graphSeriesRow input,
+.graphSeriesRow select {
+  margin-top: 0;
+}
+
+.cockpitBottomGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.45fr) minmax(320px, .8fr);
+  gap: 14px;
+}
+
+.activeSensorGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+}
+
+.activeSensorCard {
+  min-height: 116px;
+  display: grid;
+  gap: 7px;
+  padding: 11px;
+  border: 1px solid #2f333b;
+  border-radius: 8px;
+  background: #131417;
+}
+
+.activeSensorCard > div:first-child {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: center;
+}
+
+.activeSensorCard strong {
+  min-width: 0;
+  color: #f9fafb;
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.activeSensorCard small,
+.sensorStatusLine {
+  color: #9ca3af;
+  font-size: 11px;
+}
+
+.sensorStatusLine {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.activeSensorCard p {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  color: #d1d5db;
+  font-size: 12px;
+}
+
+.activeSensorCard p span {
+  padding: 3px 6px;
+  border-radius: 6px;
+  background: #1f2937;
+}
+
+.activeSensorCard p b {
+  color: #93c5fd;
+}
+
+.activeSensorCard.ok { border-color: rgba(34,197,94,.35); }
+.activeSensorCard.bad { border-color: rgba(244,67,54,.6); }
+.activeSensorCard.lost {
+  border-color: rgba(249,115,22,.38);
+  background: linear-gradient(180deg, #151413, #131417);
+}
+
+.activeSensorCard.lost strong,
+.activeSensorCard.lost p {
+  color: #cbd5e1;
+}
+
+.activeSensorCard .staleValue {
+  color: #9ca3af;
+  background: #1b1c20;
+}
+
+.activeSensorCard .sensorUsage {
+  color: #fbbf24;
+}
+
+.sensorOkCounter {
+  padding: 3px 8px;
+  border: 1px solid rgba(56,189,248,.4);
+  border-radius: 999px;
+  color: #e0f2fe;
+  background: rgba(56,189,248,.08);
+  font-weight: 800;
+}
+
+.mutedBox {
+  padding: 12px;
+  border: 1px solid #26272b;
+  border-radius: 8px;
+  color: #9ca3af;
+  background: #131417;
+}
+
 .blockMetric {
   position: relative;
   min-height: 48px;
@@ -1662,6 +2274,31 @@ main {
   font-weight: 700;
 }
 
+.readonlyGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.readonlyLine {
+  border: 1px solid #374151;
+  border-radius: 8px;
+  padding: 9px;
+  background: #0f172a;
+}
+
+.readonlyLine span {
+  display: block;
+  color: #9ca3af;
+  font-size: 12px;
+}
+
+.readonlyLine b {
+  display: block;
+  margin-top: 3px;
+}
+
 .value {
   margin-top: 6px;
   font-size: 22px;
@@ -1844,24 +2481,6 @@ main {
   margin-top: 5px;
 }
 
-.dashCustom summary {
-  cursor: pointer;
-  color: #93c5fd;
-  font-weight: 700;
-}
-
-.dashCustom h2 {
-  margin: 0;
-  font-size: 14px;
-  color: #ffc107;
-}
-
-.dashCustom h3 {
-  margin: 0;
-  font-size: 13px;
-  color: #dbeafe;
-}
-
 .customSection {
   margin-top: 14px;
 }
@@ -1973,6 +2592,101 @@ input, select {
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 10px;
 }
+
+.actuatorSummary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.actuatorSummary span {
+  color: #cbd5e1;
+  font-size: 12px;
+}
+
+.actuatorTable small {
+  color: #9ca3af;
+}
+
+.actuatorPercent {
+  position: relative;
+  min-width: 96px;
+  height: 24px;
+  overflow: hidden;
+  border: 1px solid #374151;
+  border-radius: 999px;
+  background: #0b1220;
+}
+
+.actuatorPercent i {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, #38bdf8, #f97316);
+}
+
+.actuatorPercent span {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: #f9fafb;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.actuatorModalBackdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: rgba(0,0,0,.72);
+}
+
+.actuatorModal {
+  width: min(980px, 96vw);
+  max-height: 88vh;
+  overflow: auto;
+  padding: 14px;
+  border: 1px solid #374151;
+  border-radius: 8px;
+  background: #111827;
+  box-shadow: 0 18px 60px rgba(0,0,0,.45);
+}
+
+.actuatorDetailGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 10px;
+  margin: 12px 0;
+}
+
+.detailCell {
+  padding: 10px;
+  border: 1px solid #374151;
+  border-radius: 8px;
+  background: #0b1220;
+}
+
+.detailCell span,
+.detailCell small {
+  display: block;
+  color: #9ca3af;
+  font-size: 11px;
+}
+
+.detailCell b {
+  display: block;
+  margin: 4px 0;
+  color: #f9fafb;
+}
+
+.detailCell.ok { border-color: rgba(34,197,94,.55); }
+.detailCell.warn { border-color: rgba(255,152,0,.6); }
+.detailCell.bad { border-color: rgba(244,67,54,.75); }
+.detailCell.info { border-color: rgba(56,189,248,.45); }
 
 .compactPanelHead {
   display: flex;
@@ -2145,15 +2859,21 @@ details[open] > summary.compactPanelHead::before {
 
 .espNodeTip {
   position: relative;
-  display: inline-flex;
+  display: inline-block;
   align-items: center;
   max-width: 100%;
   cursor: help;
   outline: none;
+  vertical-align: top;
 }
 
 .espNodeTip > b {
+  display: inline-block;
+  max-width: 150px;
   color: #f9fafb;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .espNodeTip > b::after {
@@ -2171,11 +2891,48 @@ details[open] > summary.compactPanelHead::before {
 }
 
 .espNodeHover {
-  min-width: min(360px, 86vw);
-  max-width: min(520px, 92vw);
+  left: 0;
+  width: calc(100vw - 320px);
+  min-width: 1180px;
+  max-width: none;
   top: calc(100% + 6px);
   display: grid;
+  gap: 10px;
+  white-space: normal;
+  overflow-x: visible;
+  padding: 10px;
+  border-color: #475569;
+  box-shadow: 0 18px 44px rgba(0,0,0,.45);
+}
+
+.espNodeStats {
+  display: flex;
+  flex-wrap: nowrap;
   gap: 8px;
+  min-width: 0;
+  margin-top: 2px;
+}
+
+.espNodeStats .readonlyLine {
+  flex: 1 0 132px;
+  min-width: 132px;
+  padding: 7px 8px;
+}
+
+.espNodeStats .readonlyLine span {
+  white-space: normal;
+  overflow-wrap: normal;
+  word-break: normal;
+}
+
+.espNodeStats .readonlyLine b {
+  display: block;
+  margin-top: 3px;
+  white-space: nowrap;
+  overflow: visible;
+  text-overflow: clip;
+  color: #60a5fa;
+  font-size: 11px;
 }
 
 .espNodeTipHead {
@@ -2199,35 +2956,77 @@ details[open] > summary.compactPanelHead::before {
 
 .espSensorCard {
   display: grid;
-  gap: 6px;
+  grid-template-columns: 170px auto minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
   padding: 9px;
   border: 1px solid #334155;
   border-radius: 8px;
   background: #111827;
+  min-width: 0;
 }
 
 .espSensorCard.empty {
   color: #cbd5e1;
 }
 
-.espSensorCardTop {
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
-  align-items: center;
-  border-bottom: 0;
-  padding: 0;
-}
-
 .espSensorCard strong {
-  color: #f9fafb;
+  color: #fbbf24;
   font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.espSensorCard p {
-  margin: 0;
+.espSensorMeta {
   color: #94a3b8;
   font-size: 11px;
+  overflow: visible;
+  text-overflow: clip;
+  white-space: normal;
+}
+
+.espNowTable {
+  table-layout: fixed;
+}
+
+.espNowTable th,
+.espNowTable td {
+  vertical-align: top;
+  overflow-wrap: anywhere;
+  word-break: normal;
+}
+
+.espNowTable th:nth-child(1),
+.espNowTable td:nth-child(1) { width: 150px; }
+
+.espNowTable th:nth-child(2),
+.espNowTable td:nth-child(2) { width: 135px; }
+
+.espNowTable th:nth-child(3),
+.espNowTable td:nth-child(3) { width: 95px; }
+
+.espNowTable th:nth-child(4),
+.espNowTable td:nth-child(4) { width: 170px; }
+
+.espNowTable th:nth-child(5),
+.espNowTable td:nth-child(5) { width: 105px; }
+
+.espNowTable th:nth-child(7),
+.espNowTable td:nth-child(7) { width: 115px; }
+
+.espNowTable th:nth-child(8),
+.espNowTable td:nth-child(8) { width: 130px; }
+
+.espNowTable th:nth-child(9),
+.espNowTable td:nth-child(9) { width: 105px; }
+
+.espNowTable small {
+  display: block;
+  margin-top: 2px;
+  color: #94a3b8;
+  font-size: 10px;
+  line-height: 1.25;
 }
 
 .espSensorCard small {
@@ -2238,8 +3037,10 @@ details[open] > summary.compactPanelHead::before {
   display: flex;
   flex-wrap: wrap;
   gap: 5px;
-  border-bottom: 0;
-  padding: 0;
+  grid-column: 1 / -1;
+  border-top: 1px solid rgba(51,65,85,.7);
+  padding: 8px 0 0;
+  justify-content: flex-start;
 }
 
 .espSensorValues i {
@@ -2257,6 +3058,17 @@ details[open] > summary.compactPanelHead::before {
   color: #94a3b8;
   font-style: normal;
   font-weight: 650;
+}
+
+@media (max-width: 760px) {
+  .espSensorCard {
+    grid-template-columns: 1fr;
+    align-items: start;
+  }
+
+  .espSensorValues {
+    justify-content: flex-start;
+  }
 }
 
 .oneWireSettingsGrid {
@@ -2452,6 +3264,61 @@ details[open] > summary.compactPanelHead::before {
 
 .toggleField input:checked ~ b {
   color: #22c55e;
+}
+
+@media (max-width: 980px) {
+  .energyTopBand,
+  .cockpitCharts {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .cockpitTitle {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .routerMood.headerMood {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .cockpitMainGrid,
+  .cockpitBottomGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .routerMood {
+    grid-column: auto;
+  }
+}
+
+@media (max-width: 620px) {
+  .energyTopBand,
+  .cockpitCharts,
+  .pidGrid,
+  .healthGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .cockpitMetric strong {
+    font-size: 24px;
+  }
+
+  .energyFlowPanel {
+    min-height: 270px;
+  }
+
+  .energyFlowSvg {
+    height: 230px;
+  }
+
+  .activeSensorGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .graphSeriesRow {
+    grid-template-columns: 1fr;
+  }
 }
 
 .toggleField input:checked ~ b::before {
@@ -2690,6 +3557,7 @@ td, th {
   .dashBlockGrid,
   .blockMetricGrid,
   .blockMetricGrid.three,
+  .systemSummaryBand,
   .blockStates,
   .statusBadges,
   .statusMiniGrid {

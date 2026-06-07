@@ -16,12 +16,12 @@ set "OTA_DIR=%BUILD_DIR%\ota"
 set "IMAGE=%OTA_DIR%\RouteurSolaireESP32_littlefs.bin"
 set "VERSION_FILE=%OTA_DIR%\latest_littlefs_version.txt"
 
-rem Partition custom RouteurSolaireESP32:
-rem app0   : offset 0x10000, taille 0x180000
-rem app1   : offset 0x190000, taille 0x180000
-rem spiffs : offset 0x310000, taille 0xF0000
-set "FS_OFFSET=0x310000"
-set "FS_SIZE=0xF0000"
+rem Partition custom recovery/main RouteurSolaireESP32:
+rem factory : offset 0x10000, taille 0x110000
+rem ota_0   : offset 0x120000, taille 0x1E0000
+rem spiffs  : offset 0x300000, taille 0x100000
+set "FS_OFFSET=0x300000"
+set "FS_SIZE=0x100000"
 set "BLOCK_SIZE=4096"
 set "PAGE_SIZE=256"
 
@@ -32,6 +32,12 @@ echo Dossier    : %DATA_DIR%
 echo Offset FS  : %FS_OFFSET%
 echo Taille FS  : %FS_SIZE%
 echo ==================================================
+echo.
+echo ATTENTION:
+echo - L'image LittleFS est creee depuis le dossier data.
+echo - Le dossier data ne contient pas /config.
+echo - Un upload LittleFS direct remplace toute la partition spiffs.
+echo - Verifie que la configuration utilisateur est sauvegardee ou restaurable.
 echo.
 
 if not exist "%DATA_DIR%" (
@@ -48,7 +54,7 @@ if not exist "%OTA_DIR%" (
   mkdir "%OTA_DIR%"
 )
 
-for /f "delims=" %%I in ('%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$date=Get-Date -Format yyyyMMdd; $ota='%OTA_DIR%'; $max=0; if(Test-Path $ota){ Get-ChildItem $ota -Filter ('RouteurSolaireESP32_littlefs_'+$date+'-*.bin') | ForEach-Object { if($_.BaseName -match '-(\d{2})$'){ $n=[int]$Matches[1]; if($n -gt $max){$max=$n} } } }; '{0}-{1:00}' -f $date, ($max+1)"') do set "BUILD_VERSION=%%I"
+for /f "delims=" %%I in ('%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$date=Get-Date -Format yyyyMMdd; $ota='%OTA_DIR%'; $fwFile=Join-Path $ota 'latest_version.txt'; $fsFile=Join-Path $ota 'latest_littlefs_version.txt'; $fw=if(Test-Path $fwFile){(Get-Content $fwFile -Raw).Trim()}else{''}; $fs=if(Test-Path $fsFile){(Get-Content $fsFile -Raw).Trim()}else{''}; if($fw -and (-not $fs -or [string]::CompareOrdinal($fw,$fs) -gt 0)){ $fw } else { $max=0; if(Test-Path $ota){ Get-ChildItem $ota -Filter ('RouteurSolaireESP32_*_'+$date+'-*.bin') | ForEach-Object { if($_.BaseName -match '-(\d{2})$'){ $n=[int]$Matches[1]; if($n -gt $max){$max=$n} } } }; '{0}-{1:00}' -f $date, ($max+1) }"') do set "BUILD_VERSION=%%I"
 echo %BUILD_VERSION%>"%VERSION_FILE%"
 set "VERSIONED_IMAGE=%OTA_DIR%\RouteurSolaireESP32_littlefs_%BUILD_VERSION%.bin"
 
@@ -77,6 +83,7 @@ echo Image LittleFS horodatee:
 echo %VERSIONED_IMAGE%
 echo.
 echo Tu peux utiliser ce fichier pour l'OTA LittleFS depuis la page Secours.
+echo Cette image ne contient pas /config/system.json utilisateur.
 echo.
 choice /C ON /N /M "Veux-tu aussi televerser maintenant sur %PORT% ? [O/N] "
 if errorlevel 2 (

@@ -8,9 +8,10 @@ if errorlevel 1 (
   pause
   exit /b 1
 )
-set "PARTITION_NAME=partitions_ota_1m5app_960k_littlefs"
+set "PARTITION_NAME=partitions_recovery_main_4MB"
 set "PARTITION_FILE=%CD%\%PARTITION_NAME%.csv"
-set "MAX_APP_SIZE=1572864"
+set "MAX_APP_SIZE=1966080"
+set "MAIN_APP_OFFSET=0x120000"
 set "BUILD_DIR=%CD%\build\esp32.esp32.esp32"
 set "OTA_DIR=%CD%\build\ota"
 set "FIRMWARE_BIN=%BUILD_DIR%\RouteurSolaireESP32.ino.bin"
@@ -44,7 +45,7 @@ if not defined BUILD_VERSION (
 )
 
 echo ==================================================
-echo Compilation et televersement firmware OTA custom
+echo Compilation et televersement firmware principal ota_0
 echo Port      : %PORT%
 echo Partition : %PARTITION_NAME%
 echo App max   : %MAX_APP_SIZE% octets
@@ -53,16 +54,41 @@ echo ==================================================
 echo Ferme le moniteur serie Arduino IDE avant de continuer.
 echo.
 
-"%ARDUINO_CLI%" compile --upload -p %PORT% --fqbn esp32:esp32:esp32:PartitionScheme=custom --build-path "%BUILD_DIR%" --build-property build.partitions=%PARTITION_NAME% --build-property upload.maximum_size=%MAX_APP_SIZE% .
+"%ARDUINO_CLI%" compile --fqbn esp32:esp32:esp32:PartitionScheme=custom --build-path "%BUILD_DIR%" --build-property build.partitions=%PARTITION_NAME% --build-property upload.maximum_size=%MAX_APP_SIZE% .
 if errorlevel 1 (
   echo.
-  echo ERREUR: compilation ou televersement firmware echoue.
+  echo ERREUR: compilation firmware echouee.
+  pause
+  exit /b 1
+)
+
+if not exist "%FIRMWARE_BIN%" (
+  echo ERREUR: firmware compile introuvable:
+  echo %FIRMWARE_BIN%
+  pause
+  exit /b 1
+)
+
+if not exist "%ESPTOOL%" (
+  echo ERREUR: esptool introuvable:
+  echo %ESPTOOL%
   pause
   exit /b 1
 )
 
 echo.
-echo Firmware televerse avec succes.
+echo Ecriture firmware principal dans ota_0 uniquement...
+echo Offset ota_0 : %MAIN_APP_OFFSET%
+"%ESPTOOL%" --chip esp32 --port %PORT% --baud 921600 --before default_reset --after hard_reset write_flash -z %MAIN_APP_OFFSET% "%FIRMWARE_BIN%"
+if errorlevel 1 (
+  echo.
+  echo ERREUR: televersement firmware ota_0 echoue.
+  pause
+  exit /b 1
+)
+
+echo.
+echo Firmware principal ota_0 televerse avec succes.
 if exist "%FIRMWARE_BIN%" (
   copy /Y "%FIRMWARE_BIN%" "%OTA_FIRMWARE_BIN%" >nul
   copy /Y "%FIRMWARE_BIN%" "%OTA_DIR%\RouteurSolaireESP32_firmware_%BUILD_VERSION%.bin" >nul

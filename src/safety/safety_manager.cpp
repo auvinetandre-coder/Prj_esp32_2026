@@ -169,14 +169,18 @@ bool SafetyManager::ticTimedOut(uint32_t now, uint32_t timeoutMs) {
 
 bool SafetyManager::jsyConfigured() {
   for (JsonObject sensor : config.sensors()) {
-    if (String(sensor["id"] | "") == "jsy_grid") return sensor["enabled"] | false;
+    String id = sensor["id"] | "";
+    String type = sensor["type"] | "";
+    if (id == "jsy_grid" || type == "JSY-MK-194T") return sensor["enabled"] | false;
   }
   return false;
 }
 
 bool SafetyManager::ticConfigured() {
   for (JsonObject sensor : config.sensors()) {
-    if (String(sensor["id"] | "") == "tic_linky") return sensor["enabled"] | false;
+    String id = sensor["id"] | "";
+    String type = sensor["type"] | "";
+    if (id == "tic_linky" || type == "TIC Linky") return sensor["enabled"] | false;
   }
   return false;
 }

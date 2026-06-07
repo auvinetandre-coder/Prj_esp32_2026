@@ -20,6 +20,22 @@ static const RuleEngine::MeasureDef RULE_MEASURES[] = {
   {"JSY-MK-194T", "powerFactor2", RuleEngine::MEASURE_NUMBER, "", ""},
   {"JSY-MK-194T", "powerFactor", RuleEngine::MEASURE_NUMBER, "", ""},
   {"JSY-MK-194T", "frequencyHz", RuleEngine::MEASURE_NUMBER, "Hz", ""},
+  {"JSY-MK-194T", "CH1_CURR", RuleEngine::MEASURE_NUMBER, "A", ""},
+  {"JSY-MK-194T", "CH1_POWER", RuleEngine::MEASURE_NUMBER, "W", ""},
+  {"JSY-MK-194T", "CH1_PF", RuleEngine::MEASURE_NUMBER, "", ""},
+  {"JSY-MK-194T", "CH1_ENERGY_POS", RuleEngine::MEASURE_NUMBER, "Wh", ""},
+  {"JSY-MK-194T", "CH1_ENERGY_NEG", RuleEngine::MEASURE_NUMBER, "Wh", ""},
+  {"JSY-MK-194T", "CH1_EPOS", RuleEngine::MEASURE_NUMBER, "Wh", ""},
+  {"JSY-MK-194T", "CH1_ENEG", RuleEngine::MEASURE_NUMBER, "Wh", ""},
+  {"JSY-MK-194T", "CH1_DIR", RuleEngine::MEASURE_NUMBER, "", ""},
+  {"JSY-MK-194T", "CH2_CURR", RuleEngine::MEASURE_NUMBER, "A", ""},
+  {"JSY-MK-194T", "CH2_POWER", RuleEngine::MEASURE_NUMBER, "W", ""},
+  {"JSY-MK-194T", "CH2_PF", RuleEngine::MEASURE_NUMBER, "", ""},
+  {"JSY-MK-194T", "CH2_ENERGY_POS", RuleEngine::MEASURE_NUMBER, "Wh", ""},
+  {"JSY-MK-194T", "CH2_ENERGY_NEG", RuleEngine::MEASURE_NUMBER, "Wh", ""},
+  {"JSY-MK-194T", "CH2_EPOS", RuleEngine::MEASURE_NUMBER, "Wh", ""},
+  {"JSY-MK-194T", "CH2_ENEG", RuleEngine::MEASURE_NUMBER, "Wh", ""},
+  {"JSY-MK-194T", "CH2_DIR", RuleEngine::MEASURE_NUMBER, "", ""},
   {"JSY-MK-194T", "available", RuleEngine::MEASURE_BOOL, "", ""},
   {"TIC Linky", "apparentPowerVA", RuleEngine::MEASURE_NUMBER, "VA", ""},
   {"TIC Linky", "gridPowerW", RuleEngine::MEASURE_NUMBER, "W", ""},
@@ -70,7 +86,7 @@ void RuleEngine::loop() {
 }
 
 void RuleEngine::loop(uint32_t now) {
-  evaluateRules(now);
+  lastDecision = evaluateDecision(now);
 }
 
 void RuleEngine::loadRules() {
@@ -82,15 +98,26 @@ void RuleEngine::evaluate(uint32_t now) {
 }
 
 void RuleEngine::evaluateRules(uint32_t now) {
+  lastDecision = evaluateDecision(now);
+}
+
+RuleEngine::RuleDecision RuleEngine::evaluateDecision(uint32_t now) {
+  RuleDecision decision;
   if (state.safetyTripped) {
     pid.reset();
-    return;
+    decision.reason = "Safety active";
+    lastRuleCount = 0;
+    return decision;
   }
   uint8_t count = 0;
   uint8_t order[MAX_RULES];
   for (JsonObject rule : config.rules()) {
-    if (count < MAX_RULES) order[count++] = count;
+    if (count < MAX_RULES) {
+      order[count] = count;
+      count++;
+    }
   }
+  lastRuleCount = count;
 
   for (uint8_t i = 0; i < count; i++) {
     for (uint8_t j = i + 1; j < count; j++) {
@@ -119,14 +146,25 @@ void RuleEngine::evaluateRules(uint32_t now) {
       if (logic == "OR") matched = matched || ok;
       else matched = matched && ok;
     }
-    if (!matched) continue;
-    for (JsonObject action : rule["actions"].as<JsonArray>()) {
+    JsonArray actions = matched ? rule["actions"].as<JsonArray>() : rule["elseActions"].as<JsonArray>();
+    if (actions.isNull()) actions = matched ? rule["then"].as<JsonArray>() : rule["else"].as<JsonArray>();
+    if (actions.isNull()) continue;
+    decision.matched = matched;
+    decision.elseBranch = !matched;
+    decision.ruleId = rule["id"] | "";
+    decision.ruleName = rule["name"] | rule["id"] | "regle";
+    decision.priority = rule["priority"] | 0;
+    decision.reason = String("Regle ") + decision.ruleName + (matched ? " ALORS" : " SINON");
+    for (JsonObject action : actions) {
       String command = action["command"] | "";
       if (command == "setPowerFromSurplus" || command == "setActuatorPercentFromSurplus") surplusRegulationActive = true;
-      executeAction(action, rule["name"] | rule["id"] | "regle");
+      if (actionToDecision(action, decision.ruleName, decision)) break;
     }
+    if (decision.hasCommand) break;
   }
   if (!surplusRegulationActive) pid.reset();
+  if (!decision.hasCommand && !decision.ruleName.length()) decision.reason = "Aucune regle active";
+  return decision;
 }
 
 bool RuleEngine::evaluateCondition(JsonObject condition) {
@@ -134,25 +172,34 @@ bool RuleEngine::evaluateCondition(JsonObject condition) {
 }
 
 void RuleEngine::executeAction(JsonObject action, const String &ruleName) {
-  if (state.safetyTripped) return;
+  RuleDecision ignored;
+  actionToDecision(action, ruleName, ignored);
+}
+
+bool RuleEngine::actionToDecision(JsonObject action, const String &ruleName, RuleDecision &decision) {
+  if (state.safetyTripped) return false;
   String command = action["command"] | "";
   String actuatorId = action["actuatorId"] | "";
 
   if (command == "logEvent") {
     state.addLog(String("Regle ") + ruleName + ": " + String(action["message"] | "evenement"));
-    return;
+    return false;
   }
 
   if (command == "setSafetyWarning") {
     state.safetyLevel = "WARNING";
     state.safetyReason = action["message"] | "Alerte regle";
     state.addLog(String("Regle ") + ruleName + ": safety warning");
-    return;
+    return false;
   }
 
   if (command == "setMode") {
-    actuators.setMode(actuatorId, action["mode"] | action["value"] | "OFF");
-    return;
+    decision.hasCommand = true;
+    decision.actuatorId = actuatorId;
+    decision.command = "setMode";
+    decision.mode = action["mode"] | action["value"] | "OFF";
+    decision.reason = decision.mode;
+    return true;
   }
 
   float value = action["value"] | 0.0f;
@@ -168,9 +215,12 @@ void RuleEngine::executeAction(JsonObject action, const String &ruleName) {
     command = "setPower";
   }
 
-  if (actuators.command(actuatorId, command, value)) {
-    logCommandChange(actuatorId + "." + command, value, ruleName);
-  }
+  decision.hasCommand = actuatorId.length() && command.length();
+  decision.actuatorId = actuatorId;
+  decision.command = command;
+  decision.commandPercent = constrain(value, 0.0f, 100.0f);
+  if (decision.hasCommand) logCommandChange(actuatorId + "." + command, value, ruleName);
+  return decision.hasCommand;
 }
 
 void RuleEngine::printRulesStatus() {
@@ -228,6 +278,20 @@ bool RuleEngine::validateRulesDocument(JsonDocument &doc, String &errorsJson) {
 
 float RuleEngine::sensorValue(const String &sensorId, const String &variable) {
   if (sensorId == "jsy_grid" && variable == "activePower") return state.gridPowerW;
+  if (sensorId == "jsy_grid" && variable == "voltageV") return state.gridVoltageV;
+  if (sensorId == "jsy_grid" && variable == "frequencyHz") return state.gridFrequencyHz;
+  if (sensorId == "jsy_grid" && variable == "CH1_CURR") return state.currentA1;
+  if (sensorId == "jsy_grid" && variable == "CH1_POWER") return state.activePowerW1;
+  if (sensorId == "jsy_grid" && variable == "CH1_PF") return state.powerFactor1;
+  if (sensorId == "jsy_grid" && (variable == "CH1_EPOS" || variable == "CH1_ENERGY_POS")) return state.jsyImportEnergyWh1;
+  if (sensorId == "jsy_grid" && (variable == "CH1_ENEG" || variable == "CH1_ENERGY_NEG")) return state.jsyExportEnergyWh1;
+  if (sensorId == "jsy_grid" && variable == "CH1_DIR") return state.energyDirection1 == "injection" ? -1.0f : 1.0f;
+  if (sensorId == "jsy_grid" && variable == "CH2_CURR") return state.currentA2;
+  if (sensorId == "jsy_grid" && variable == "CH2_POWER") return state.activePowerW2;
+  if (sensorId == "jsy_grid" && variable == "CH2_PF") return state.powerFactor2;
+  if (sensorId == "jsy_grid" && (variable == "CH2_EPOS" || variable == "CH2_ENERGY_POS")) return state.jsyImportEnergyWh2;
+  if (sensorId == "jsy_grid" && (variable == "CH2_ENEG" || variable == "CH2_ENERGY_NEG")) return state.jsyExportEnergyWh2;
+  if (sensorId == "jsy_grid" && variable == "CH2_DIR") return state.energyDirection2 == "injection" ? -1.0f : 1.0f;
   if (sensorId == "jsy_grid" && variable == "activePowerW1") return state.activePowerW1;
   if (sensorId == "jsy_grid" && variable == "activePowerW2") return state.activePowerW2;
   if (sensorId == "jsy_grid" && variable == "voltageV1") return state.voltageV1;
@@ -351,6 +415,18 @@ float RuleEngine::numericMeasureValue(const String &source, const String &measur
     if (measure == "powerFactor" || measure == "powerFactor1") return state.powerFactor1;
     if (measure == "powerFactor2") return state.powerFactor2;
     if (measure == "frequencyHz") return state.gridFrequencyHz;
+    if (measure == "CH1_CURR") return state.currentA1;
+    if (measure == "CH1_POWER") return state.activePowerW1;
+    if (measure == "CH1_PF") return state.powerFactor1;
+    if (measure == "CH1_EPOS" || measure == "CH1_ENERGY_POS") return state.jsyImportEnergyWh1;
+    if (measure == "CH1_ENEG" || measure == "CH1_ENERGY_NEG") return state.jsyExportEnergyWh1;
+    if (measure == "CH1_DIR") return state.energyDirection1 == "injection" ? -1.0f : 1.0f;
+    if (measure == "CH2_CURR") return state.currentA2;
+    if (measure == "CH2_POWER") return state.activePowerW2;
+    if (measure == "CH2_PF") return state.powerFactor2;
+    if (measure == "CH2_EPOS" || measure == "CH2_ENERGY_POS") return state.jsyImportEnergyWh2;
+    if (measure == "CH2_ENEG" || measure == "CH2_ENERGY_NEG") return state.jsyExportEnergyWh2;
+    if (measure == "CH2_DIR") return state.energyDirection2 == "injection" ? -1.0f : 1.0f;
     if (measure == "available") return state.jsyOnline ? 1 : 0;
   }
   if (source == "TIC Linky") {

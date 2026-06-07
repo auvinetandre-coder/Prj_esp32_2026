@@ -24,6 +24,7 @@ public:
   void unlockSafety();
   void stopCritical();
   bool criticalControlAllowed();
+  void runtimeToJson(JsonArray out);
   void updateSSR(JsonObject actuator, uint32_t now);
   void updateRobotDyn(JsonObject actuator, uint32_t now);
   void printStatus();
@@ -71,6 +72,7 @@ private:
   esp_timer_handle_t triacOffTimer = nullptr;
 
   Actuator *channelFor(const String &id);
+  Actuator *channelForExisting(const String &id);
   bool findActuator(const String &id, JsonObject &out);
   void syncChannelFromConfig(Actuator *channel, JsonObject actuator);
   void applyLocal(JsonObject actuator, uint32_t now);
