@@ -150,7 +150,17 @@ void SensorManager::applyGridPowerSource() {
     if (state.jsyOnline && !isnan(state.jsyGridPowerW)) selected = state.jsyGridPowerW;
   }
 
-  if (isnan(selected)) return;
+  if (isnan(selected)) {
+    state.gridPowerSource = source;
+    state.gridPowerRawW = NAN;
+    state.gridPowerFilteredW = NAN;
+    state.gridPowerW = NAN;
+    state.gridEnergyDirection = "unknown";
+    state.injectionW = 0;
+    state.consumptionW = 0;
+    state.surplusW = 0;
+    return;
+  }
   state.gridPowerRawW = selected;
   const float alpha = constrain(config.system()["router"]["alphaFilter"] | 0.25f, 0.01f, 1.0f);
   if (isnan(state.gridPowerFilteredW)) state.gridPowerFilteredW = selected;
@@ -179,7 +189,10 @@ bool SensorManager::updateRemoteSensor(const String &sourceMac, const EspNowSens
   slot->sensorType = packet.sensorType;
   slot->origin = SENSOR_ORIGIN_ESPNOW;
   slot->ok = packet.sensorOk;
-  if (packet.sensorOk) slot->timedOut = false;
+  if (packet.sensorOk) {
+    slot->timedOut = false;
+    slot->nodeLost = false;
+  }
   slot->lastUpdateMs = millis();
   updateRemotePacketLoss(*slot, packet.sequence);
   for (uint8_t i = 0; i < packet.valueCount && i < ESPNOW_MAX_SENSOR_VALUES; i++) {
@@ -191,6 +204,7 @@ bool SensorManager::updateRemoteSensor(const String &sourceMac, const EspNowSens
   }
 
   if (wasTimedOut && packet.sensorOk) {
+    state.addLog(String("SENSOR RESTORED remoteMac=") + sourceMac + " sensorId=" + String(slot->sensorId));
     state.addLog(String("ESP-NOW capteur distant revenu: node=") + remoteNodeLabel(*slot) + " nodeId=" + slot->nodeId + " sensorId=" + slot->sensorId + " name=" + slot->sensorName);
   }
   applyRemoteSensorToState(*slot);
@@ -211,7 +225,10 @@ bool SensorManager::updateRemoteSensorFast(const String &sourceMac, const EspNow
   slot->sensorType = packet.sensorType;
   slot->origin = SENSOR_ORIGIN_ESPNOW;
   slot->ok = packet.sensorOk;
-  if (packet.sensorOk) slot->timedOut = false;
+  if (packet.sensorOk) {
+    slot->timedOut = false;
+    slot->nodeLost = false;
+  }
   slot->lastUpdateMs = millis();
   updateRemotePacketLoss(*slot, packet.sequence);
 
@@ -233,6 +250,7 @@ bool SensorManager::updateRemoteSensorFast(const String &sourceMac, const EspNow
   }
 
   if (wasTimedOut && packet.sensorOk) {
+    state.addLog(String("SENSOR RESTORED remoteMac=") + sourceMac + " sensorId=" + String(slot->sensorId));
     state.addLog(String("ESP-NOW capteur distant revenu: node=") + remoteNodeLabel(*slot) + " nodeId=" + slot->nodeId + " sensorId=" + slot->sensorId + " name=" + slot->sensorName);
   }
   applyRemoteSensorToState(*slot);
@@ -264,7 +282,7 @@ bool SensorManager::updateRemoteSensorDiscovery(const String &sourceMac, const E
     espNowCopyFixedText(value.unit, sizeof(value.unit), packet.values[i].unit);
     mergeRemoteValue(*slot, value);
   }
-  syncConfiguredRemoteSensorRole(*slot);
+  syncConfiguredRemoteSensorMetadata(*slot);
   return true;
 }
 
@@ -288,10 +306,29 @@ void SensorManager::checkRemoteSensorTimeouts(uint32_t now) {
     if (!sensor.used || sensor.timedOut || !sensor.ok || !sensor.lastUpdateMs) continue;
     if (now < sensor.lastUpdateMs) continue;
     const uint32_t ageMs = now - sensor.lastUpdateMs;
-    if (ageMs <= remoteTimeoutForType(sensor.sensorType)) continue;
+    const uint32_t timeoutMs = remoteTimeoutForSensor(sensor);
+    if (ageMs <= timeoutMs) continue;
     sensor.ok = false;
     sensor.timedOut = true;
-    state.addLog(String("ESP-NOW capteur distant perdu: node=") + remoteNodeLabel(sensor) + " nodeId=" + sensor.nodeId + " sensorId=" + sensor.sensorId + " name=" + sensor.sensorName + " ageMs=" + String(ageMs) + " timeoutMs=" + String(remoteTimeoutForType(sensor.sensorType)));
+    applyRemoteSensorLostToState(sensor);
+    state.addLog(String("ESPNOW SENSOR STALE remoteMac=") + sensor.sourceMac + " sensorId=" + String(sensor.sensorId) + " type=" + espNowSensorTypeText(sensor.sensorType) + " ageMs=" + String(ageMs) + " timeoutMs=" + String(timeoutMs));
+  }
+}
+
+void SensorManager::setRemoteNodeLost(const String &sourceMac, bool lost) {
+  for (RemoteSensorRuntime &sensor : remoteSensors) {
+    if (!sensor.used || !sensor.sourceMac.equalsIgnoreCase(sourceMac)) continue;
+    if (lost) {
+      if (!sensor.nodeLost) {
+        state.addLog(String("SENSOR LOST remoteMac=") + sourceMac + " sensorId=" + String(sensor.sensorId));
+      }
+      sensor.nodeLost = true;
+      sensor.ok = false;
+      sensor.timedOut = true;
+      applyRemoteSensorLostToState(sensor);
+    } else {
+      sensor.nodeLost = false;
+    }
   }
 }
 
@@ -305,11 +342,27 @@ void SensorManager::remoteSensorsToJson(JsonArray out, bool configuredOnly) {
     item["origin"] = "ESP-NOW";
     if (!configuredSensor.isNull()) {
       item["id"] = configuredSensor["id"] | "";
-      item["name"] = configuredSensor["name"] | configuredSensor["id"] | sensor.sensorName;
+      const char *localName = configuredSensor["localName"] | "";
+      const char *remoteName = configuredSensor["remoteName"] | sensor.sensorName;
+      const char *displayName = localName[0] ? localName : (remoteName[0] ? remoteName : (configuredSensor["name"] | configuredSensor["id"] | sensor.sensorName));
+      item["localName"] = localName;
+      item["remoteName"] = remoteName;
+      item["displayName"] = displayName;
+      item["name"] = displayName;
       item["type"] = configuredSensor["type"] | espNowSensorTypeText(sensor.sensorType);
-      item["role"] = sensor.sensorRole[0] ? sensor.sensorRole : (configuredSensor["role"] | "");
+      item["remoteType"] = configuredSensor["remoteType"] | espNowSensorTypeText(sensor.sensorType);
+      item["remoteSensorType"] = configuredSensor["remoteSensorType"] | sensor.sensorType;
+      const char *localRole = configuredSensor["localRole"] | "";
+      const char *remoteRole = configuredSensor["remoteRole"] | sensor.sensorRole;
+      const char *fallbackRole = configuredSensor["role"] | sensor.sensorRole;
+      item["localRole"] = localRole;
+      item["remoteRole"] = remoteRole;
+      item["displayRole"] = localRole[0] ? localRole : (remoteRole[0] ? remoteRole : fallbackRole);
+      item["role"] = item["displayRole"];
       item["configured"] = true;
       if (configuredSensor["channels"].is<JsonArray>()) item["channels"].set(configuredSensor["channels"]);
+      if (configuredSensor["valueKeys"].is<JsonArray>()) item["valueKeys"].set(configuredSensor["valueKeys"]);
+      if (configuredSensor["units"].is<JsonObject>()) item["units"].set(configuredSensor["units"]);
     } else {
       item["configured"] = false;
       String fallbackId = String("espnow_") + remoteMacSuffix(sensor.sourceMac) + "_" + String(sensor.sensorId);
@@ -332,15 +385,20 @@ void SensorManager::remoteSensorsToJson(JsonArray out, bool configuredOnly) {
     item["sensorType"] = sensor.sensorType;
     item["sensorTypeText"] = espNowSensorTypeText(sensor.sensorType);
     const bool neverSeen = sensor.lastUpdateMs == 0;
-    const bool timedOut = sensor.timedOut || neverSeen;
+    const bool timedOut = sensor.timedOut || sensor.nodeLost || neverSeen;
     item["ok"] = sensor.ok && !timedOut;
     item["timedOut"] = timedOut;
     item["neverSeen"] = neverSeen;
+    item["nodeOk"] = !sensor.nodeLost;
+    item["nodeLost"] = sensor.nodeLost;
+    item["state"] = sensor.nodeLost ? "LOST" : (timedOut ? "STALE" : (sensor.ok ? "OK" : "ERROR"));
     item["lastSequence"] = sensor.lastSequence;
     item["lostPackets"] = sensor.lostPackets;
     item["receivedPackets"] = sensor.receivedPackets;
     item["packetLossPercent"] = sensor.receivedPackets ? (100.0f * sensor.lostPackets) / (sensor.receivedPackets + sensor.lostPackets) : 0.0f;
-    item["lastError"] = sensor.lastError;
+    if (sensor.nodeLost) item["lastError"] = "NODE_LOST";
+    else item["lastError"] = sensor.lastError;
+    item["timeoutMs"] = remoteTimeoutForSensor(sensor);
     item["rssiDbm"] = sensor.rssiDbm;
     if (neverSeen) item["ageMs"] = nullptr;
     else item["ageMs"] = now >= sensor.lastUpdateMs ? now - sensor.lastUpdateMs : 0;
@@ -388,6 +446,16 @@ void SensorManager::remoteSensorsToJson(JsonArray out, bool configuredOnly) {
     item["origin"] = "ESP-NOW";
     item["enabled"] = true;
     item["configured"] = true;
+    const char *localName = cfg["localName"] | "";
+    const char *remoteName = cfg["remoteName"] | "";
+    const char *localRole = cfg["localRole"] | "";
+    const char *remoteRole = cfg["remoteRole"] | "";
+    item["localName"] = localName;
+    item["remoteName"] = remoteName;
+    item["displayName"] = localName[0] ? localName : (remoteName[0] ? remoteName : (cfg["name"] | cfgId.c_str()));
+    item["localRole"] = localRole;
+    item["remoteRole"] = remoteRole;
+    item["displayRole"] = localRole[0] ? localRole : (remoteRole[0] ? remoteRole : (cfg["role"] | ""));
     item["ok"] = false;
     item["timedOut"] = true;
     item["neverSeen"] = true;
@@ -402,15 +470,33 @@ void SensorManager::remoteSensorsToJson(JsonArray out, bool configuredOnly) {
   }
 }
 
-uint32_t SensorManager::remoteTimeoutForType(uint8_t sensorType) {
+uint32_t SensorManager::getEspNowSensorTimeoutMs(uint8_t sensorType) {
   switch (sensorType) {
-    case SENSOR_JSY: return 1000UL;
-    case SENSOR_LINKY: return 8000UL;
+    case SENSOR_JSY: return 5000UL;
+    case SENSOR_LINKY: return 15000UL;
     case SENSOR_DS18B20:
     case SENSOR_TEMP_HUM: return 30000UL;
-    case SENSOR_BATTERY: return 15000UL;
+    case SENSOR_BATTERY: return 30000UL;
+    case SENSOR_SOLAR: return 30000UL;
     default: return REMOTE_SENSOR_TIMEOUT_MS;
   }
+}
+
+uint32_t SensorManager::remoteTimeoutForSensor(const RemoteSensorRuntime &sensor) {
+  uint8_t type = sensor.sensorType;
+  if (type == SENSOR_UNKNOWN && sensor.sensorId >= 20 && sensor.sensorId <= 22) type = SENSOR_DS18B20;
+  uint32_t timeoutMs = getEspNowSensorTimeoutMs(type);
+  JsonObject cfg = configuredEspNowSensorFor(sensor);
+  if (!cfg.isNull()) {
+    uint32_t announcedIntervalMs = cfg["remoteExportIntervalMs"] | 0UL;
+    if (!announcedIntervalMs) announcedIntervalMs = cfg["espNowExportIntervalMs"] | 0UL;
+    if (announcedIntervalMs > 0) timeoutMs = max(timeoutMs, announcedIntervalMs * 3UL);
+    uint32_t explicitTimeoutMs = cfg["remoteTimeoutMs"] | 0UL;
+    if (!explicitTimeoutMs) explicitTimeoutMs = cfg["espNowTimeoutMs"] | 0UL;
+    if (explicitTimeoutMs > 0) timeoutMs = max(timeoutMs, explicitTimeoutMs);
+  }
+  if (type == SENSOR_DS18B20 || type == SENSOR_TEMP_HUM || type == SENSOR_UNKNOWN) timeoutMs = max(timeoutMs, 30000UL);
+  return timeoutMs;
 }
 
 void SensorManager::updateRemotePacketLoss(RemoteSensorRuntime &sensor, uint32_t sequence) {
@@ -524,40 +610,96 @@ JsonObject SensorManager::configuredEspNowSensorFor(const RemoteSensorRuntime &r
     String mac = sensor["mac"] | "";
     if (!mac.equalsIgnoreCase(remote.sourceMac)) continue;
     if (sensor["remoteSensorId"].is<uint8_t>() && (sensor["remoteSensorId"] | 0) != remote.sensorId) continue;
-
-    String type = sensor["type"] | "";
-    type.toUpperCase();
-    bool typeMatches = false;
-    if ((type.indexOf("TIC") >= 0 || type.indexOf("LINKY") >= 0) && remote.sensorType == SENSOR_LINKY) typeMatches = true;
-    if (type.indexOf("JSY") >= 0 && remote.sensorType == SENSOR_JSY) typeMatches = true;
-    if ((type.indexOf("DS18") >= 0 || type.indexOf("TEMP") >= 0) && (remote.sensorType == SENSOR_DS18B20 || remote.sensorType == SENSOR_TEMP_HUM)) typeMatches = true;
-    if (type.indexOf("BAT") >= 0 && remote.sensorType == SENSOR_BATTERY) typeMatches = true;
-    if ((type.indexOf("SOLAR") >= 0 || type.indexOf("SOLAIRE") >= 0) && remote.sensorType == SENSOR_SOLAR) typeMatches = true;
-    if (!typeMatches && type.length()) continue;
     return sensor;
   }
   return JsonObject();
 }
 
-bool SensorManager::syncConfiguredRemoteSensorRole(const RemoteSensorRuntime &sensor) {
-  String sourceRole = sensor.sensorRole;
-  sourceRole.trim();
-  if (!sourceRole.length()) return false;
-
+bool SensorManager::syncConfiguredRemoteSensorMetadata(const RemoteSensorRuntime &sensor) {
   JsonObject configSensor = configuredEspNowSensorFor(sensor);
   if (configSensor.isNull()) return false;
 
-  String currentRole = configSensor["role"] | "";
-  currentRole.trim();
-  if (currentRole == sourceRole) return false;
+  bool changed = false;
+  bool skippedOverride = false;
 
-  configSensor["role"] = sourceRole;
-  if (!config.saveSensorsConfig()) {
-    state.addLog(String("ESP-NOW synchro role echec: mac=") + sensor.sourceMac + " sensorId=" + String(sensor.sensorId) + " role=" + sourceRole);
-    return false;
+  String sourceName = sensor.sensorName;
+  sourceName.trim();
+  String currentName = configSensor["name"] | "";
+  currentName.trim();
+  String localName = configSensor["localName"] | "";
+  localName.trim();
+  String remoteName = configSensor["remoteName"] | "";
+  remoteName.trim();
+  if (!remoteName.length() && currentName.length()) {
+    remoteName = currentName;
+    configSensor["remoteName"] = remoteName;
+    changed = true;
+  }
+  if (sourceName.length() && remoteName != sourceName) {
+    state.addLog(String("ESPNOW SENSOR META UPDATE remoteMac=") + sensor.sourceMac + " sensorId=" + String(sensor.sensorId) + " name old=" + remoteName + " new=" + sourceName);
+    configSensor["remoteName"] = sourceName;
+    changed = true;
+    if (!localName.length()) configSensor["name"] = sourceName;
+    else skippedOverride = true;
   }
 
-  state.addLog(String("ESP-NOW role synchronise: mac=") + sensor.sourceMac + " sensorId=" + String(sensor.sensorId) + " " + currentRole + " -> " + sourceRole);
+  String sourceRole = sensor.sensorRole;
+  sourceRole.trim();
+  String currentRole = configSensor["role"] | "";
+  currentRole.trim();
+  String localRole = configSensor["localRole"] | "";
+  localRole.trim();
+  String remoteRole = configSensor["remoteRole"] | "";
+  remoteRole.trim();
+  if (!remoteRole.length() && currentRole.length()) {
+    remoteRole = currentRole;
+    configSensor["remoteRole"] = remoteRole;
+    changed = true;
+  }
+  if (sourceRole.length() && remoteRole != sourceRole) {
+    state.addLog(String("ESPNOW SENSOR META UPDATE remoteMac=") + sensor.sourceMac + " sensorId=" + String(sensor.sensorId) + " role old=" + remoteRole + " new=" + sourceRole);
+    configSensor["remoteRole"] = sourceRole;
+    changed = true;
+    if (!localRole.length()) configSensor["role"] = sourceRole;
+    else skippedOverride = true;
+  }
+
+  String remoteType = espNowSensorTypeText(sensor.sensorType);
+  if (remoteType.length() && String(configSensor["remoteType"] | "") != remoteType) {
+    configSensor["remoteType"] = remoteType;
+    configSensor["remoteSensorType"] = sensor.sensorType;
+    changed = true;
+  }
+
+  String valueSignature;
+  for (uint8_t i = 0; i < sensor.valueCount && i < MAX_REMOTE_SENSOR_VALUES; i++) {
+    const char *key = sensor.values[i].key[0] ? sensor.values[i].key : "VALUE";
+    if (valueSignature.length()) valueSignature += ",";
+    valueSignature += key;
+    valueSignature += ":";
+    valueSignature += sensor.values[i].unit;
+  }
+  if (sensor.valueCount > 0 && String(configSensor["remoteValueSignature"] | "") != valueSignature) {
+    configSensor["remoteValueSignature"] = valueSignature;
+    JsonArray keys = configSensor["valueKeys"].to<JsonArray>();
+    keys.clear();
+    JsonObject units = configSensor["units"].to<JsonObject>();
+    units.clear();
+    for (uint8_t i = 0; i < sensor.valueCount && i < MAX_REMOTE_SENSOR_VALUES; i++) {
+      const char *key = sensor.values[i].key[0] ? sensor.values[i].key : "VALUE";
+      keys.add(key);
+      if (sensor.values[i].unit[0]) units[key] = sensor.values[i].unit;
+    }
+    changed = true;
+  }
+
+  if (skippedOverride) state.addLog("ESPNOW SENSOR META SKIP local override active");
+  if (!changed) return false;
+
+  if (!config.saveSensorsConfig()) {
+    state.addLog(String("ESP-NOW synchro meta echec: mac=") + sensor.sourceMac + " sensorId=" + String(sensor.sensorId));
+    return false;
+  }
   return true;
 }
 
@@ -567,7 +709,39 @@ void SensorManager::applyRemoteSensorToState(const RemoteSensorRuntime &sensor) 
   }
 }
 
+void SensorManager::applyRemoteSensorLostToState(const RemoteSensorRuntime &sensor) {
+  JsonObject configSensor = configuredEspNowSensorFor(sensor);
+  if (configSensor.isNull()) return;
+
+  if (sensor.sensorType == SENSOR_LINKY) {
+    state.ticAvailable = false;
+    state.ticStatus = "ESP_NOW_NODE_LOST";
+    return;
+  }
+
+  if (sensor.sensorType == SENSOR_JSY) {
+    state.jsyOnline = false;
+    state.jsyLastError = "ESP_NOW_NODE_LOST";
+    return;
+  }
+
+  if (sensor.sensorType == SENSOR_DS18B20 || sensor.sensorType == SENSOR_TEMP_HUM) {
+    String role = sensor.sensorRole;
+    if (!role.length()) role = configSensor["role"] | "";
+    role.toLowerCase();
+    if (role.indexOf("haut") >= 0 || role.indexOf("top") >= 0 || role == "ballon_haut") state.ds18b20Available[0] = false;
+    else if (role.indexOf("milieu") >= 0 || role.indexOf("middle") >= 0 || role == "ballon_milieu") state.ds18b20Available[1] = false;
+    else if (role.indexOf("bas") >= 0 || role.indexOf("bottom") >= 0 || role == "ballon_bas") state.ds18b20Available[2] = false;
+    return;
+  }
+
+  if (sensor.sensorType == SENSOR_BATTERY) {
+    state.batteryOnline = false;
+  }
+}
+
 void SensorManager::applyRemoteValueToState(const RemoteSensorRuntime &sensor, const EspNowSensorValue &value) {
+  if (sensor.nodeLost || sensor.timedOut || !sensor.ok) return;
   JsonObject configSensor = configuredEspNowSensorFor(sensor);
   if (configSensor.isNull()) return;
 

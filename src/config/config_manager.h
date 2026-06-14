@@ -24,7 +24,7 @@ public:
   bool backupConfigToNvs();
   bool restoreConfigFromNvs();
   void printConfigSummary();
-  bool replaceFile(const char *path, const String &json, bool allowEmpty = false);
+  bool replaceFile(const char *path, const String &json, bool allowEmpty = false, bool allowWifiClear = false);
   String lastError() const { return configLastError; }
   void setLastError(const String &error) { configLastError = error; }
 
@@ -48,6 +48,7 @@ private:
   DynamicJsonDocument rulesConfig{12288};
   String configLastError = "";
   bool allowEmptyConfigWrite = false;
+  bool allowWifiClearConfigWrite = false;
 
   bool loadOrDefault(const char *path, DynamicJsonDocument &doc, void (ConfigManager::*defaults)());
   bool saveDoc(const char *path, DynamicJsonDocument &doc);

@@ -291,8 +291,20 @@ void ActuatorManager::runtimeToJson(JsonArray out) {
     const bool channelSafetyLocked = safetyLocked || (channel && channel->safetyLocked) || (critical && state.safetyTripped);
     const bool commandTimedOut = enabled && commandPercent > 0.0f && lastCommandMs &&
       now >= lastCommandMs && now - lastCommandMs > timeoutMs;
-    const bool remoteIncomplete = remote && String(actuator["mac"] | "").length() == 0;
-    const bool ok = enabled && !channelSafetyLocked && !commandTimedOut && !remoteIncomplete;
+    const String remoteMac = actuator["mac"] | "";
+    const bool remoteIncomplete = remote && remoteMac.length() == 0;
+    const bool remoteNodeKnown = !remote || (!remoteIncomplete && espnow.isNodeKnown(remoteMac));
+    const bool remoteNodeOk = !remote || (!remoteIncomplete && espnow.isNodeOk(remoteMac));
+    const bool remoteNodeLost = remote && !remoteNodeOk;
+    if (remote && channel) {
+      if (remoteNodeLost && !channel->remoteNodeLost) {
+        state.addLog(String("ACTUATOR LOST remoteMac=") + remoteMac + " actuatorId=" + String(actuator["remoteActuatorId"] | id.c_str()));
+      } else if (!remoteNodeLost && channel->remoteNodeLost) {
+        state.addLog(String("ACTUATOR RESTORED remoteMac=") + remoteMac + " actuatorId=" + String(actuator["remoteActuatorId"] | id.c_str()));
+      }
+      channel->remoteNodeLost = remoteNodeLost;
+    }
+    const bool ok = enabled && !channelSafetyLocked && !commandTimedOut && !remoteIncomplete && !remoteNodeLost;
 
     String type = actuator["type"] | "SSR";
     String normalizedType = type;
@@ -319,7 +331,8 @@ void ActuatorManager::runtimeToJson(JsonArray out) {
     item["ok"] = ok;
     if (lastCommandMs) item["ageMs"] = now >= lastCommandMs ? now - lastCommandMs : 0;
     else item["ageMs"] = nullptr;
-    item["timedOut"] = commandTimedOut || remoteIncomplete;
+    item["timedOut"] = commandTimedOut || remoteIncomplete || remoteNodeLost;
+    item["state"] = remoteNodeLost ? "LOST" : (commandTimedOut ? "STALE" : (ok ? "OK" : "DEGRADED"));
     item["critical"] = critical;
     item["safetyLocked"] = channelSafetyLocked;
     item["mode"] = mode;
@@ -342,11 +355,12 @@ void ActuatorManager::runtimeToJson(JsonArray out) {
     else item["lastCommandMs"] = nullptr;
     item["lastAckMs"] = nullptr;
     item["ackStatus"] = remote ? "NOT_SUPPORTED" : "LOCAL";
-    item["nodeOk"] = remote ? !remoteIncomplete : true;
-    item["discovered"] = !remote || !remoteIncomplete;
+    item["nodeOk"] = remote ? remoteNodeOk : true;
+    item["nodeLost"] = remoteNodeLost;
+    item["discovered"] = !remote || remoteNodeKnown;
     item["commandSent"] = remote && lastCommandMs > 0;
     item["commandAcked"] = false;
-    item["lastError"] = remoteIncomplete ? "REMOTE_MAC_MISSING" : (commandTimedOut ? "COMMAND_TIMEOUT" : "");
+    item["lastError"] = remoteIncomplete ? "REMOTE_MAC_MISSING" : (remoteNodeLost ? "NODE_LOST" : (commandTimedOut ? "COMMAND_TIMEOUT" : ""));
     JsonObject values = item["values"].to<JsonObject>();
     values["commandPercent"] = commandPercent;
     values["outputPercent"] = outputPercent;

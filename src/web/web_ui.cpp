@@ -1329,7 +1329,8 @@ void WebUi::saveConfig(const char *name, const char *path) {
       newCount = check["actuators"].as<JsonArray>().size();
     }
   }
-  bool ok = config.replaceFile(path, server.arg("plain"), allowEmpty);
+  bool allowWifiClear = strcmp(name, "system") == 0 && (server.arg("clearWifi") == "true" || server.arg("clearWifi") == "1");
+  bool ok = config.replaceFile(path, server.arg("plain"), allowEmpty, allowWifiClear);
   if (ok && strcmp(name, "device") == 0) state.begin(config);
   if (ok && strcmp(name, "system") == 0) {
     state.simulationType = config.system()["simulation"]["mode"] | state.simulationType.c_str();

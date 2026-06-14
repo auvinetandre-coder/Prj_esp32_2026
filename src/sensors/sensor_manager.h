@@ -25,6 +25,7 @@ public:
   bool updateRemoteSensorDiscovery(const String &sourceMac, const EspNowSensorDiscoveryPacket &packet);
   void updateRemoteDiagnostic(const String &sourceMac, const EspNowDiagnosticPacket &packet);
   void checkRemoteSensorTimeouts(uint32_t now);
+  void setRemoteNodeLost(const String &sourceMac, bool lost);
   void remoteSensorsToJson(JsonArray out, bool configuredOnly = false);
 
   struct RemoteSensorRuntime {
@@ -41,6 +42,7 @@ public:
     SensorOrigin origin = SENSOR_ORIGIN_ESPNOW;
     bool ok = false;
     bool timedOut = false;
+    bool nodeLost = false;
     uint32_t lastUpdateMs = 0;
     uint32_t lastDiscoveryMs = 0;
     uint32_t lastDiagnosticMs = 0;
@@ -56,7 +58,7 @@ public:
 private:
   static const uint8_t MAX_REMOTE_SENSORS = 16;
   static const uint8_t MAX_REMOTE_SENSOR_VALUES = 16;
-  static const uint32_t REMOTE_SENSOR_TIMEOUT_MS = 5000UL;
+  static const uint32_t REMOTE_SENSOR_TIMEOUT_MS = 30000UL;
   ConfigManager &config;
   RuntimeState &state;
   DS18B20Manager ds18b20;
@@ -73,11 +75,13 @@ private:
   void applyGridPowerSource();
   RemoteSensorRuntime *findOrCreateRemoteSensor(uint8_t nodeId, uint8_t sensorId, const String &sourceMac);
   void applyRemoteSensorToState(const RemoteSensorRuntime &sensor);
+  void applyRemoteSensorLostToState(const RemoteSensorRuntime &sensor);
   void applyRemoteValueToState(const RemoteSensorRuntime &sensor, const EspNowSensorValue &value);
   void mergeRemoteValue(RemoteSensorRuntime &sensor, const EspNowSensorValue &value);
   JsonObject configuredEspNowSensorFor(const RemoteSensorRuntime &sensor);
-  bool syncConfiguredRemoteSensorRole(const RemoteSensorRuntime &sensor);
-  uint32_t remoteTimeoutForType(uint8_t sensorType);
+  bool syncConfiguredRemoteSensorMetadata(const RemoteSensorRuntime &sensor);
+  uint32_t getEspNowSensorTimeoutMs(uint8_t sensorType);
+  uint32_t remoteTimeoutForSensor(const RemoteSensorRuntime &sensor);
   void updateRemotePacketLoss(RemoteSensorRuntime &sensor, uint32_t sequence);
   void setDefaultValueMetadata(EspNowSensorValue &value);
   String remoteMacSuffix(const String &mac) const;

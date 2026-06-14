@@ -74,6 +74,7 @@ void EspNowManager::loop() {
   publishLocalSensorsIfNeeded(now);
   publishLocalSensorDiscoveryIfNeeded(now);
   publishDiagnosticIfNeeded(now);
+  updateDiscoveredNodeLoss(now);
 }
 
 bool EspNowManager::addBroadcastPeer() {
@@ -366,6 +367,43 @@ void EspNowManager::markDiscoveredNodeFrame(EspNowDiscoveredNode &node, uint8_t 
   node.lastFrameMs = now;
   node.lastSeenMs = now;
   if (frameType == ESPNOW_PACKET_DISCOVERY || frameType == ESPNOW_PACKET_DIAGNOSTIC) node.lastHeartbeatMs = now;
+}
+
+bool EspNowManager::isNodeKnown(const String &mac) {
+  for (uint8_t i = 0; i < ESPNOW_MAX_DISCOVERED_NODES; i++) {
+    if (!discoveredNodes[i].used) continue;
+    if (macToString(discoveredNodes[i].mac).equalsIgnoreCase(mac)) return true;
+  }
+  return false;
+}
+
+bool EspNowManager::isNodeOk(const String &mac, uint32_t maxAgeMs) {
+  const uint32_t now = millis();
+  for (uint8_t i = 0; i < ESPNOW_MAX_DISCOVERED_NODES; i++) {
+    if (!discoveredNodes[i].used) continue;
+    if (!macToString(discoveredNodes[i].mac).equalsIgnoreCase(mac)) continue;
+    return discoveredNodes[i].lastSeenMs && now >= discoveredNodes[i].lastSeenMs && (now - discoveredNodes[i].lastSeenMs) <= maxAgeMs;
+  }
+  return false;
+}
+
+void EspNowManager::updateDiscoveredNodeLoss(uint32_t now) {
+  for (uint8_t i = 0; i < ESPNOW_MAX_DISCOVERED_NODES; i++) {
+    EspNowDiscoveredNode &node = discoveredNodes[i];
+    if (!node.used) continue;
+    const bool nodeOk = node.lastSeenMs && now >= node.lastSeenMs && (now - node.lastSeenMs) <= 30000UL;
+    if (!nodeOk && !node.lossReported) {
+      node.lossReported = true;
+      String mac = macToString(node.mac);
+      state.addLog(String("ESPNOW NODE LOST mac=") + mac);
+      if (sensorManager) sensorManager->setRemoteNodeLost(mac, true);
+    } else if (nodeOk && node.lossReported) {
+      node.lossReported = false;
+      String mac = macToString(node.mac);
+      state.addLog(String("ESPNOW NODE RESTORED mac=") + mac);
+      if (sensorManager) sensorManager->setRemoteNodeLost(mac, false);
+    }
+  }
 }
 
 String EspNowManager::statusJson() {

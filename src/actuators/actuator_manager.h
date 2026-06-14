@@ -46,6 +46,7 @@ private:
     uint32_t cycleMs = 1000;
     uint32_t cycleStartMs = 0;
     uint32_t lastCommandMs = 0;
+    bool remoteNodeLost = false;
     bool safetyLocked = false;
   };
 

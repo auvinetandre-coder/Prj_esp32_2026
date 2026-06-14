@@ -288,35 +288,45 @@ JsonArray ConfigManager::sensors() { return sensorsConfig["sensors"].as<JsonArra
 JsonArray ConfigManager::actuators() { return actuatorsConfig["actuators"].as<JsonArray>(); }
 JsonArray ConfigManager::rules() { return rulesConfig["rules"].as<JsonArray>(); }
 
-bool ConfigManager::replaceFile(const char *path, const String &json, bool allowEmpty) {
+bool ConfigManager::replaceFile(const char *path, const String &json, bool allowEmpty, bool allowWifiClear) {
   configLastError = "";
   bool previousAllowEmpty = allowEmptyConfigWrite;
+  bool previousAllowWifiClear = allowWifiClearConfigWrite;
   allowEmptyConfigWrite = allowEmpty;
+  allowWifiClearConfigWrite = allowWifiClear;
   DynamicJsonDocument temp(32768);
   DeserializationError err = deserializeJson(temp, json);
   if (err) {
     configLastError = String("JSON invalide: ") + err.c_str();
     allowEmptyConfigWrite = previousAllowEmpty;
+    allowWifiClearConfigWrite = previousAllowWifiClear;
     return false;
   }
   if (temp.overflowed()) {
     configLastError = "Memoire JSON insuffisante pour charger la configuration";
     allowEmptyConfigWrite = previousAllowEmpty;
+    allowWifiClearConfigWrite = previousAllowWifiClear;
     return false;
   }
   if (strcmp(path, SYSTEM_PATH) == 0) {
-    preserveExistingWifiConfig(temp);
+    if (allowWifiClear) {
+      Serial.println(F("WiFi config clear explicite autorise pour /config/system.json."));
+    } else {
+      preserveExistingWifiConfig(temp);
+    }
     migrateSystemWifiConfig(temp, "save");
   }
   if (!validateDoc(path, temp)) {
     configLastError = String("Structure invalide pour ") + path;
     allowEmptyConfigWrite = previousAllowEmpty;
+    allowWifiClearConfigWrite = previousAllowWifiClear;
     return false;
   }
   if (wouldEraseUserConfig(path, temp)) {
     configLastError = String("Sauvegarde refusee: risque d'ecraser une configuration utilisateur existante avec une configuration vide: ") + path;
     Serial.println(configLastError);
     allowEmptyConfigWrite = previousAllowEmpty;
+    allowWifiClearConfigWrite = previousAllowWifiClear;
     return false;
   }
   backupUserConfigFile(path);
@@ -328,10 +338,21 @@ bool ConfigManager::replaceFile(const char *path, const String &json, bool allow
   else {
     configLastError = String("Chemin config inconnu: ") + path;
     allowEmptyConfigWrite = previousAllowEmpty;
+    allowWifiClearConfigWrite = previousAllowWifiClear;
     return false;
   }
   bool ok = saveDoc(path, temp);
+  if (ok && allowWifiClear && strcmp(path, SYSTEM_PATH) == 0 && !systemWifiPresent(temp)) {
+    Preferences prefs;
+    if (prefs.begin(CONFIG_BACKUP_NAMESPACE, false)) {
+      prefs.putBool("valid", false);
+      prefs.putBool("pending", false);
+      prefs.end();
+      Serial.println(F("Backup NVS WiFi invalide apres effacement explicite."));
+    }
+  }
   allowEmptyConfigWrite = previousAllowEmpty;
+  allowWifiClearConfigWrite = previousAllowWifiClear;
   return ok;
 }
 
@@ -624,6 +645,7 @@ bool ConfigManager::preserveExistingWifiConfig(DynamicJsonDocument &incoming) {
 
 bool ConfigManager::wouldEraseUserConfig(const char *path, DynamicJsonDocument &doc) {
   if (allowEmptyConfigWrite) return false;
+  if (allowWifiClearConfigWrite && strcmp(path, SYSTEM_PATH) == 0) return false;
   if (!LittleFS.exists(path) || !configLooksEmpty(path, doc)) return false;
   File file = LittleFS.open(path, "r");
   if (!file) return false;

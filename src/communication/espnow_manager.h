@@ -92,6 +92,8 @@ public:
   void sendAllActuatorDiscovery();
   void sendSensorFastData(uint8_t sensorId);
   void sendSensorDiagnostic(uint8_t sensorId);
+  bool isNodeKnown(const String &mac);
+  bool isNodeOk(const String &mac, uint32_t maxAgeMs = 30000UL);
 
 private:
   static const uint8_t MAX_EXPORT_RUNTIME_SLOTS = 12;
@@ -142,6 +144,7 @@ private:
   EspNowDiscoveredNode *rememberDiscoveredNode(const uint8_t *mac, const EspNowDiscoveryPacket &packet);
   EspNowDiscoveredNode *findOrCreateDiscoveredNode(const uint8_t *mac, uint8_t nodeId, const char *nodeName, bool updateNodeId = true);
   void markDiscoveredNodeFrame(EspNowDiscoveredNode &node, uint8_t frameType, uint32_t now);
+  void updateDiscoveredNodeLoss(uint32_t now);
   void publishLocalSensorsIfNeeded(uint32_t now);
   void publishLocalSensorDiscoveryIfNeeded(uint32_t now);
   void publishDiagnosticIfNeeded(uint32_t now);

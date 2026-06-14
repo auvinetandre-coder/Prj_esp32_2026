@@ -252,6 +252,7 @@ struct EspNowDiscoveredNode {
   uint32_t receivedCount = 0;
   uint32_t lostPackets = 0;
   uint8_t lastError = 0;
+  bool lossReported = false;
 };
 
 struct EspNowDiscoveredActuator {

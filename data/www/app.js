@@ -69,6 +69,7 @@ while (dashHistory.length > historyMaxPoints) dashHistory.shift();
 var dirtyPages = {};
 var lastSensorDeleteId = "";
 var lastActuatorDeleteId = "";
+var systemAdvancedOpen = false;
 var state = {
   ok: false,
   networkMode: "chargement",
@@ -2921,7 +2922,7 @@ function normalizeActiveSensor(sensor) {
   sensor = sensor || {};
   var origin = sensor.origin || sensor.source || (sensor.mac ? "ESP-NOW" : "LOCAL");
   origin = String(origin).toUpperCase() === "ESPNOW" ? "ESP-NOW" : String(origin || "LOCAL").toUpperCase();
-  var name = sensor.name || sensor.sensorName || sensor.id || ("sensorId " + (sensor.sensorId == null ? "-" : sensor.sensorId));
+  var name = sensor.displayName || sensor.localName || sensor.name || sensor.remoteName || sensor.sensorName || sensor.id || ("sensorId " + (sensor.sensorId == null ? "-" : sensor.sensorId));
   var type = sensor.type || sensor.sensorTypeText || sensor.sensorType || "-";
   return {
     id: sensor.id || sensor.sensorId || name,
@@ -2932,10 +2933,15 @@ function normalizeActiveSensor(sensor) {
     disabled: sensor.enabled === false,
     ageMs: sensor.ageMs,
     timedOut: sensor.timedOut === true,
+    nodeLost: sensor.nodeLost === true,
+    nodeOk: sensor.nodeOk,
+    state: sensor.state || "",
+    lastError: sensor.lastError || "",
+    remoteMac: sensor.remoteMac || sensor.mac || "",
     neverSeen: sensor.neverSeen === true,
     lastSeenMs: sensor.lastSeenMs,
     lastUpdateMs: sensor.lastUpdateMs,
-    role: sensor.role || sensor.sensorRole || "",
+    role: sensor.displayRole || sensor.localRole || sensor.role || sensor.remoteRole || sensor.sensorRole || "",
     usage: sensor.usage || sensor.sensorUsage || "",
     location: sensor.location || sensor.sensorLocation || "",
     values: normalizeSensorValues(sensor.values)
@@ -3030,6 +3036,7 @@ function sensorStatusInfo(sensor) {
   if (!sensor) return {key:"unknown", rank:4, cls:"muted", label:"Inconnu", detail:"etat indisponible", stale:false};
   if (sensor.disabled) return {key:"disabled", rank:4, cls:"muted", label:"Desactive", detail:"capteur desactive", stale:true};
   if (sensor.neverSeen) return {key:"neverSeen", rank:3, cls:"bad", label:"Jamais recu", detail:"aucune mesure recue", stale:true};
+  if (sensor.nodeLost) return {key:"lost", rank:2, cls:"bad", label:"Perdu", detail:"noeud ESP-NOW perdu depuis " + ageLabel(sensor.ageMs), stale:true};
   if (sensor.timedOut) return {key:"lost", rank:2, cls:"bad", label:"Perdu", detail:"timeout depuis " + ageLabel(sensor.ageMs), stale:true};
   if (!sensor.ok) return {key:"lost", rank:2, cls:"bad", label:"Perdu", detail:"mesure invalide", stale:true};
   if (hasValue(sensor.ageMs) && Number(sensor.ageMs) > sensorStaleLimitMs(sensor)) {
@@ -3970,7 +3977,7 @@ function drawSensorsPage() {
   sensors.forEach(function (s, i) {
     ensureJsyChannels(s);
     var live = genericSensorState(s);
-    rows += '<tr class="' + esc(live.cls) + '"><td>' + esc(s.name || s.id) + '</td><td>' + esc(s.type) + '</td><td>' + sensorRoleText(s) + '</td><td>' + pinText(s) + '</td><td>' + sensorStatusBadge(live, sensorDetailTip(s, live)) + '</td><td class="actions"><button onclick="editSensor(' + i + ')">Modifier</button><button onclick="toggleSensor(' + i + ')">' + (s.enabled !== false ? "Desactiver" : "Activer") + '</button><button class="danger" onclick="deleteSensor(' + i + ')">Supprimer</button></td></tr>';
+    rows += '<tr class="' + esc(live.cls) + '"><td>' + sensorNameCell(s) + '</td><td>' + esc(s.type) + '</td><td>' + sensorRoleText(s) + '</td><td>' + pinText(s) + '</td><td>' + sensorStatusBadge(live, sensorDetailTip(s, live)) + '</td><td class="actions"><button onclick="editSensor(' + i + ')">Modifier</button><button onclick="toggleSensor(' + i + ')">' + (s.enabled !== false ? "Desactiver" : "Activer") + '</button><button class="danger" onclick="deleteSensor(' + i + ')">Supprimer</button></td></tr>';
   });
   ds.forEach(function (s, i) {
     var temp = dsTemperature(i);
@@ -3980,6 +3987,16 @@ function drawSensorsPage() {
     rows += '<tr class="' + esc(cls) + '"><td>' + esc(s.name || s.id) + '</td><td>DS18B20</td><td>' + esc(s.role) + '</td><td>GPIO ' + esc((cache.sensors.oneWireBus || {}).gpio || 13) + '</td><td>' + sensorStatusBadge({cls:cls, text:statusText}, dsSensorDetailTip(s, i, temp, available)) + '</td><td class="actions"><button onclick="editDsSensor(' + i + ')">Modifier</button><button onclick="toggleDsSensor(' + i + ')">' + (s.enabled !== false ? "Desactiver" : "Activer") + '</button><button class="danger" onclick="deleteDsSensor(' + i + ')">Supprimer</button></td></tr>';
   });
   $("app").innerHTML = banner() + '<h1>Capteurs</h1>' + dirtyNotice("sensors") + '<div class="toolbar"><button onclick="newSensor()">Ajouter capteur</button><button onclick="saveSensors()">Sauvegarder</button><button onclick="jsonEditor(\'sensors\')">JSON avance</button></div>' + oneWireBusPanel() + remoteAvailableSensorsPanel() + '<section id="sensorForm"></section><table><tr><th>Nom</th><th>Type</th><th>Role</th><th>Bus/GPIO</th><th>Etat/Valeur</th><th>Actions</th></tr>' + rows + '</table><pre id="scan"></pre>';
+}
+
+function sensorDisplayName(s) {
+  return (s && (s.localName || s.displayName || s.name || s.remoteName || s.id)) || "";
+}
+
+function sensorNameCell(s) {
+  var name = sensorDisplayName(s);
+  var remote = s && s.remoteName && s.remoteName !== name ? '<br><small>remote: ' + esc(s.remoteName) + '</small>' : "";
+  return esc(name) + remote;
 }
 
 function oneWireBusPanel() {
@@ -4038,8 +4055,14 @@ function sensorDetailTip(s, live) {
   html += tipLine("Source", (s.source || "local").toUpperCase(), "");
   html += tipLine("Role", s.role || "N/A", "");
   if ((s.source || "") === "espnow") {
+    var remote = remoteSensorForConfig(s);
     html += tipLine("MAC", s.mac || "N/A", "");
     if (s.remoteSensorId != null && s.remoteSensorId !== "") html += tipLine("sensorId", s.remoteSensorId, "");
+    if (remote) {
+      html += tipLine("Derniere mesure", hasValue(remote.ageMs) ? ageLabel(remote.ageMs) : "jamais", "");
+      html += tipLine("Timeout capteur", hasValue(remote.timeoutMs) ? ageLabel(remote.timeoutMs) : "N/A", "");
+      html += tipLine("Etat noeud", remote.nodeLost ? "perdu" : "OK", "", remote.nodeLost ? "bad" : "ok");
+    }
   }
   html += sensorValueTipLines(s);
   return html;
@@ -4098,6 +4121,15 @@ function genericSensorState(s) {
   var type = s.type || "";
   var source = s.source || "";
   if (source === "espnow") {
+    var remote = remoteSensorForConfig(s);
+    if (remote) {
+      var remoteAge = hasValue(remote.ageMs) ? ageLabel(remote.ageMs) : "jamais";
+      var remoteTimeout = hasValue(remote.timeoutMs) ? " / timeout " + ageLabel(remote.timeoutMs) : "";
+      if (remote.nodeLost) return {cls:"bad", text:"Perdu", detail:"noeud ESP-NOW perdu, mesure " + remoteAge + remoteTimeout};
+      if (remote.timedOut || remote.ok === false) return {cls:"bad", text:"Perdu", detail:(remote.lastError || "mesure ESP-NOW stale") + ", age " + remoteAge + remoteTimeout};
+      if (hasValue(remote.ageMs) && Number(remote.ageMs) > sensorStaleLimitMs({type:type})) return {cls:"warn", text:"Ancien", detail:"age " + ageLabel(remote.ageMs)};
+      return {cls:"ok", text:"OK", detail:"ESP-NOW age " + ageLabel(remote.ageMs)};
+    }
     if (id === "jsy_grid" || type === "JSY-MK-194T") return state.jsyOnline ? {cls:"ok", text:"OK", detail:"ESP-NOW JSY"} : {cls:"bad", text:"Erreur", detail:"JSY ESP-NOW absent"};
     if (id === "tic_linky" || type === "TIC Linky") return state.ticAvailable ? {cls:"ok", text:"OK", detail:"ESP-NOW Linky"} : {cls:"warn", text:"Absent", detail:"Linky ESP-NOW non lu"};
     if (type === "Battery") return state.batteryOnline ? {cls:"ok", text:"OK", detail:"ESP-NOW batterie"} : {cls:"warn", text:"Attente", detail:"batterie ESP-NOW non lue"};
@@ -4129,7 +4161,9 @@ function isSolarRouterReferenceSensor(s) {
 
 function sensorRoleText(s) {
   if ((s.source || "") === "espnow") {
-    return esc(remoteSensorRoleForConfig(s)) + (isSolarRouterReferenceSensor(s) ? ' <span class="badge ok">Reference routeur</span>' : "");
+    var role = s.localRole || s.displayRole || s.role || s.remoteRole || remoteSensorRoleForConfig(s);
+    var remote = s.remoteRole && s.remoteRole !== role ? ' <span class="badge muted">remote: ' + esc(s.remoteRole) + '</span>' : "";
+    return esc(role || "") + remote + (isSolarRouterReferenceSensor(s) ? ' <span class="badge ok">Reference routeur</span>' : "");
   }
   if ((s.id || "") === "jsy_grid" || (s.type || "") === "JSY-MK-194T") {
     var channels = s.channels || [];
@@ -4298,11 +4332,24 @@ async function addDiscoveredRemoteSensor(index) {
   if (isRemoteSensorConfigured(sensor)) return;
   cache.sensors = cache.sensors || await api("/api/sensors");
   cache.sensors.sensors = cache.sensors.sensors || [];
+  var units = {};
+  remoteSensorValueList(sensor).forEach(function (v) {
+    var key = v.key || valueTypeLabel(v.valueType);
+    if (key && v.unit) units[key] = v.unit;
+  });
   var item = {
     id: remoteSensorGeneratedId(sensor),
     name: sensor.sensorName || remoteSensorConfigType(sensor),
+    localName: "",
+    remoteName: sensor.sensorName || remoteSensorConfigType(sensor),
     type: remoteSensorConfigType(sensor),
     role: remoteSensorConfigRole(sensor),
+    localRole: "",
+    remoteRole: remoteSensorConfigRole(sensor),
+    remoteType: sensor.sensorTypeText || remoteSensorConfigType(sensor),
+    remoteSensorType: sensor.sensorType,
+    valueKeys: remoteSensorValueList(sensor).map(function (v) { return v.key || valueTypeLabel(v.valueType); }).filter(Boolean),
+    units: units,
     source: "espnow",
     mac: sensor.mac || "",
     remoteNode: sensor.nodeName || "",
@@ -4352,7 +4399,7 @@ function remoteSensorValue(s, key) {
 
 function remoteSensorRoleForConfig(s) {
   var sensor = remoteSensorForConfig(s);
-  return remoteSensorDiscoveryRole(sensor) || s.role || "";
+  return s.localRole || s.displayRole || s.role || s.remoteRole || remoteSensorDiscoveryRole(sensor) || "";
 }
 
 function temperatureValueForRole(role) {
@@ -4419,7 +4466,7 @@ function sensorFormHtml(kind, index, s) {
   var isLocalTic = isTic && !isEspNow;
   var channels = s.channels || defaultJsyChannels();
   var roleOptions = sensorRolesForType(type);
-  var selectedRole = isEspNow ? remoteSensorRoleForConfig(s) : (s.role || "");
+  var selectedRole = isEspNow ? (s.localRole || s.displayRole || s.role || s.remoteRole || remoteSensorRoleForConfig(s)) : (s.role || "");
   if (selectedRole && roleOptions.indexOf(selectedRole) < 0) roleOptions = [selectedRole].concat(roleOptions);
   var ticMode = s.mode || "historique";
   var ticBaudrate = s.baudrate || (ticMode === "standard" ? 9600 : 1200);
@@ -4452,7 +4499,7 @@ function sensorFormHtml(kind, index, s) {
   advancedHtml += '</details>';
   return '<h2>' + (index >= 0 ? "Modifier" : "Ajouter") + ' ' + (isDs ? "DS18B20" : "capteur") + '</h2><input id="sensorKind" type="hidden" value="' + kind + '"><input id="sensorIndex" type="hidden" value="' + index + '">' +
     '<div class="form">' +
-    textField("sensorName", "Nom", s.name || "") +
+    textField("sensorName", "Nom", sensorDisplayName(s)) +
     typeHtml +
     roleHtml +
     sourceHtml +
@@ -4641,6 +4688,7 @@ function collectSensorFormItem(index) {
   var kind = $("sensorKind").value;
   var type = $("sensorType").value;
   var name = $("sensorName").value;
+  var previous = kind === "sensor" && index >= 0 ? ((cache.sensors.sensors || [])[index] || {}) : {};
   var item = {
     id: $("sensorId").value || uniqueSensorId(name || type, index, kind),
     name: name,
@@ -4667,6 +4715,17 @@ function collectSensorFormItem(index) {
   }
   item.mac = $("sensorMac").value;
   if (item.source === "espnow") {
+    item.remoteName = previous.remoteName || "";
+    item.remoteRole = previous.remoteRole || "";
+    item.remoteType = previous.remoteType || "";
+    item.remoteSensorType = previous.remoteSensorType;
+    item.valueKeys = previous.valueKeys;
+    item.units = previous.units;
+    item.remoteValueSignature = previous.remoteValueSignature;
+    item.localName = name && name !== item.remoteName ? name : (previous.localName || "");
+    item.name = item.localName || item.remoteName || name;
+    item.localRole = item.role && item.role !== item.remoteRole ? item.role : (previous.localRole || "");
+    item.role = item.localRole || item.remoteRole || item.role;
     item.remoteKey = $("sensorRemoteKey") ? $("sensorRemoteKey").value : "ALL";
     item.key = item.remoteKey;
     item.remoteNode = $("sensorRemoteNode") ? $("sensorRemoteNode").value : "";
@@ -4702,6 +4761,7 @@ function applySensorForm() {
   var index = Number($("sensorIndex").value);
   var type = $("sensorType").value;
   var name = $("sensorName").value;
+  var previous = kind === "sensor" && index >= 0 ? ((cache.sensors.sensors || [])[index] || {}) : {};
   var item = {
     id: $("sensorId").value || uniqueSensorId(name || type, index, kind),
     name: name,
@@ -4729,6 +4789,17 @@ function applySensorForm() {
     }
     item.mac = $("sensorMac").value;
     if (item.source === "espnow") {
+      item.remoteName = previous.remoteName || "";
+      item.remoteRole = previous.remoteRole || "";
+      item.remoteType = previous.remoteType || "";
+      item.remoteSensorType = previous.remoteSensorType;
+      item.valueKeys = previous.valueKeys;
+      item.units = previous.units;
+      item.remoteValueSignature = previous.remoteValueSignature;
+      item.localName = name && name !== item.remoteName ? name : (previous.localName || "");
+      item.name = item.localName || item.remoteName || name;
+      item.localRole = item.role && item.role !== item.remoteRole ? item.role : (previous.localRole || "");
+      item.role = item.localRole || item.remoteRole || item.role;
       item.remoteKey = $("sensorRemoteKey") ? $("sensorRemoteKey").value : "ALL";
       item.key = item.remoteKey;
       item.remoteNode = $("sensorRemoteNode") ? $("sensorRemoteNode").value : "";
@@ -5768,7 +5839,7 @@ async function settingsPage() {
       textField("wifiSsid", "SSID WiFi", w.ssid || s.wifiSsid || "") +
       passwordField("wifiPassword", "Mot de passe WiFi") +
       selectField("keepAp", "AP local toujours actif", w.keepFallbackApAlwaysOn !== false) +
-    '</div>' + miniState("IP box", state.stationIp || state.localIp || "-", "info") + miniState("IP AP", state.apIp || "-", "info") + miniState("RSSI", state.rssi == null ? "-" : state.rssi + " dBm", state.wifiConnected ? "ok" : "warn") + '</section>' +
+    '</div>' + miniState("IP box", state.stationIp || state.localIp || "-", "info") + miniState("IP AP", state.apIp || "-", "info") + miniState("RSSI", state.rssi == null ? "-" : state.rssi + " dBm", state.wifiConnected ? "ok" : "warn") + '<p><button class="danger" onclick="clearWifiConfig()">Effacer WiFi</button></p></section>' +
     '<section class="panel"><h2>Acces Web</h2><div class="form">' +
       selectField("webAuthEnabled", "Login active", auth.enabled !== false) +
       textField("webAuthUser", "Utilisateur", auth.username || "admin") +
@@ -5919,6 +5990,21 @@ async function saveSettings() {
   state.role = d.role || state.role;
   state.gridPowerSource = s.router.gridPowerSource || state.gridPowerSource;
   alert("Parametres sauvegardes");
+  await refresh();
+}
+
+async function clearWifiConfig() {
+  if (!confirm("Effacer la configuration WiFi maison ? L ESP32 redemarrera en AP fallback si aucun WiFi n est configure.")) return;
+  var s = cache.system || await api("/api/system");
+  s.wifi = s.wifi || {};
+  s.wifi.ssid = "";
+  s.wifi.password = "";
+  s.wifiSsid = "";
+  s.wifiPassword = "";
+  var response = await postJson("/api/system?clearWifi=true", s);
+  if (!response.ok) return alert("Effacement WiFi refuse: " + await response.text());
+  cache.system = s;
+  alert("Configuration WiFi effacee");
   await refresh();
 }
 
@@ -6446,7 +6532,7 @@ async function systemPage() {
     }).join("") : '<tr><td colspan="4">Aucun GPIO configure.</td></tr>') +
     '</table>';
   var advancedHtml =
-    '<details class="systemAdvanced"><summary>Details avances</summary>' +
+    '<details id="systemAdvanced" class="systemAdvanced" ' + (systemAdvancedOpen ? 'open ' : '') + 'ontoggle="setSystemAdvancedOpen(this.open)"><summary>Details avances</summary>' +
       '<div class="settingsGrid">' +
         dashboardBlock("Informations build", "compatibilite et diagnostic",
           '<div class="blockMetricGrid">' +
@@ -6525,6 +6611,10 @@ async function systemPage() {
     dashboardBlock("Actions systeme", "commandes locales",
       '<p><button class="danger" onclick="restartSystemPage()">Redemarrer ESP32</button> <button class="danger" onclick="bootRecoveryPage()">Passer en recovery</button></p><p class="muted">Le redemarrage normal reste sur ota_0. Le bouton recovery redemarre sur la factory recovery pour les mises a jour.</p>', "actions") +
     '</div>' + advancedHtml;
+}
+
+function setSystemAdvancedOpen(open) {
+  systemAdvancedOpen = !!open;
 }
 
 async function restartSystemPage() {
