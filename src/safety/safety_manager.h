@@ -41,15 +41,13 @@ private:
 
   void setLevel(SafetyLevel next, const String &cause, const String &details, uint32_t now);
   void applyCriticalCut(uint32_t now);
-  bool topTemperatureHigh(float safetyC);
-  bool topSensorMissing();
+  bool temperatureHigh(float safetyC);
+  bool primarySensorMissing();
   bool criticalDs18b20Missing();
   bool jsyTimedOut(uint32_t now, uint32_t timeoutMs);
   bool ticTimedOut(uint32_t now, uint32_t timeoutMs);
   bool jsyConfigured();
   bool ticConfigured();
-  bool doubleMasterRisk();
-  bool masterLost(uint32_t now, uint32_t takeoverTimeoutMs);
   bool configError();
   static const char *levelText(SafetyLevel value);
 };

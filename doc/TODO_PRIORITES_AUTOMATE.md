@@ -1,106 +1,53 @@
-# TODO_PRIORITES.md
+# Priorités AutomateManager / RuleEngine — 20 octobre 2026
 
-## P1 - Validation Recovery/Main
+Ce suivi spécialisé complète les [priorités globales](TODO_PRIORITES.md), sans les remplacer. Le [cadrage](AUTOMATE_RULEENGINE.md) distingue désormais code courant et historique ; l'[audit du 20 octobre](AUDIT_2026-10-20.md) détaille les preuves et tests. Chaque lot doit rester indépendant.
 
-- Valider le CSV `partitions_recovery_main_4MB.csv`.
-- Verifier le CSV reellement utilise dans `build/esp32.esp32.esp32/partitions.csv`.
-- Verifier `factory = 0x110000`, `ota_0 = 0x1E0000`, LittleFS = `0x100000`.
-- Compiler recovery et main.
-- Confirmer que le recovery et le main tiennent dans leurs partitions.
-- Tester boot recovery puis boot main.
-- Tester reboot normal du main sur `ota_0` et passage recovery explicite depuis le main.
+## Présent dans le code
 
-## P2 - BootManager
+- AutomateManager et états `BOOT`, `INIT`, `IDLE`, `AUTO_ROUTING`, `MANUAL_FORCE`, `SAFETY`, `ERROR`, `RECOVERY_REQUEST`.
+- Priorités sécurité/erreur/recovery/manuel/règles/routage/idle et état API observable.
+- Éditeur de règles Web avec conditions plates ET/OU, branches ALORS/SINON et liste vide sauvegardable.
+- Manuel Web maintenu sur une cible, OFF et retour AUTO ; libération de la précédente cible de règle.
+- Action `setPowerFromLinky` à cible +100 W avec gardes de production et disponibilité TIC.
+- PID fail-safe sur invalides et garde SSR contre commandes non finies.
 
-- Verifier les informations de partition affichees.
-- Verifier `setNextBootMain()`.
-- Verifier `setNextBootFactory()`.
-- Verifier le bouton ou endpoint de passage en recovery.
+Présent ne signifie pas validé sur matériel. L'état ERROR a une détection encore vide (`errorDetected()` retourne `false`). Le chemin Web recovery sélectionne directement la factory ; il ne garantit pas une transition observable RECOVERY_REQUEST dans l'automate.
 
-## P3 - Recovery minimal
+## Lot A — Autorité et coupure (P1)
 
-- Tester AP `RouteurSolaire_Recovery`.
-- Tester Wi-Fi local si identifiants disponibles.
-- Tester upload local `firmware.bin` vers `ota_0`.
-- Verifier que `factory`, NVS et `/config` restent intacts.
-- Surveiller la taille du recovery.
+- [ ] Priorité système OFF avant demandes non nulles, distincte du OFF manuel maintenu d'une cible.
+- [ ] Propriété/expiration des commandes radio dans l'arbitrage, sans écrasement au cycle suivant.
+- [ ] Arrêt des anciennes broches avant reconfiguration et absence de commandes distantes simulées non nulles.
+- [ ] Sécurité selon les capacités/rôles, sans obligation de deux SSR historiques pour tous les nœuds.
 
-## P4 - AutomateManager
+Réception : même résultat sûr depuis règle, manuel Web, MQTT et commande distante ; NODE_ACTUATOR et BACKUP passif ; tests GPIO réels sur banc basse tension.
 
-- Lire `AUTOMATE_RULEENGINE.md` avant de coder.
-- Creer `AutomateManager` uniquement dans le firmware principal.
-- Documenter son role exact cote main.
-- Definir les etats `BOOT`, `INIT`, `IDLE`, `AUTO_ROUTING`, `MANUAL_FORCE`, `SCHEDULE_FORCE`, `SAFETY`, `ERROR`, `RECOVERY_REQUEST`.
-- Centraliser les transitions de base.
-- Centraliser les priorites : `SAFETY`, `ERROR`, `RECOVERY_REQUEST`, `MANUAL_FORCE`, `SCHEDULE_FORCE`, `RULE_ENGINE`, `AUTO_ROUTING`, `IDLE`.
-- Garantir que `SafetyManager` garde la priorite absolue.
-- Produire une commande finale normalisee vers `ActuatorManager`.
-- Interdire le pilotage direct des actionneurs depuis `RuleEngine`, `PIDController`, `SolarRouter` ou `WebUi`.
-- Publier l'etat automate dans `RuntimeState`.
-- Ajouter l'etat automate dans `/api/state` si cela reste simple et non intrusif.
-- Interdire toute dependance recovery vers `AutomateManager`.
+## Lot B — Commandes et persistance (P2)
 
-## P5 - RuleEngine configurable
+- [ ] Une décision par actionneur, avec priorité/conflits explicites et limites mémoire.
+- [ ] Unité explicite watts/pourcentage ; 500 W sur 1500 W donnant environ 33,3 %.
+- [ ] Pas d'écriture persistante à chaque action `setMode` sans changement ; séparer mode d'exécution et sauvegarde.
+- [ ] Retour d'erreur cohérent du gestionnaire d'actionneurs vers automate/API.
 
-- Lire `AUTOMATE_RULEENGINE.md` avant de coder.
-- Ne pas coder un moteur complet avant stabilisation d'AutomateManager.
-- Preparer le point d'accroche pour une decision RuleEngine.
-- Prevoir une decision simple : `ruleActive`, `requestedMode`, `requestedCommandPercent`, `priority`, `reason`.
-- Prevoir a terme les regles `SI / ALORS / SINON`.
-- Prevoir les groupes `ET / OU`.
-- Prevoir l'imbrication de `SI` limitee a 2 niveaux.
-- Prevoir les conditions capteurs.
-- Prevoir les conditions systeme.
-- Prevoir les conditions horaires et calendrier.
-- Prevoir les variables virtuelles utilisateur.
-- Prevoir la simulation des regles depuis WebUI.
-- Garantir qu'aucune regle ne contourne `SafetyManager`.
+Réception : deux règles sur deux cibles et deux actions d'une règle ; conflits déterministes ; aucune écriture flash répétée sans demande persistante.
 
-## P6 - Alleger `webUi.loop`
+## Lot C — Temps et validité des mesures (P2)
 
-- Supprimer les traitements bloquants.
-- Limiter les recalculs inutiles.
-- Garder `/api/state` rapide.
-- Verifier heap et duree de loop.
+- [ ] Unifier les conditions horaires avec une heure civile valide ; ne pas exposer l'uptime comme heure de la journée.
+- [ ] Catalogue, validateur, éditeur et moteur sur le même contrat de conditions.
+- [ ] Source effective exacte et qualité de mesure provenant de SensorManager.
+- [ ] Distinguer consigne configurée, cible effective Linky, mesure et source de commande dans l'API.
 
-## P7 - Dashboard cockpit energie
+Réception : NTP absent/perdu, minuit, changement de fuseau, perte/retour TIC et production MQTT expirée ; absence de hausse sur doublon TIC ; maintien Linky borné et sécurité prioritaire.
 
-- Afficher tous les capteurs actifs.
-- Afficher achat/injection, routage, PID et temperature.
-- Afficher l'etat AutomateManager quand disponible.
-- Corriger les cas JSY/Linky/DS18B20 ESP-NOW.
-- Garder le dashboard leger.
+## Lot D — Validation et coût du moteur
 
-## P8 - ESP-NOW
+- [ ] Compiler les sources courantes et conserver tailles/empreintes/CSV utilisé, sans reprendre les anciennes mesures comme actuelles.
+- [ ] Livrer les sept scripts locaux ; tests bloc C++ traduit distincts de compilation/exécution ESP.
+- [ ] Tester contrats HTTP réels, coupure de source, variations de charge et commande distante.
+- [ ] Mesurer coût des recopies JSON et validations de règles à chaque cycle avant de déplacer ce travail à la sauvegarde.
+- [ ] Mesurer heap, fragmentation, durée de boucle et API sous réseau défaillant ; corriger watchdog et blocages.
 
-- Stabiliser discovery et heartbeat.
-- Ajouter ou verifier versions firmware/LittleFS.
-- Garder l'import manuel.
-- Ne jamais transporter de `.bin`.
+## Après stabilisation
 
-## P9 - MASTER/BACKUP
-
-- Clarifier les roles.
-- Detecter double MASTER.
-- Definir la strategie de bascule.
-- Remonter les alertes de redondance vers SafetyManager si critique.
-
-## P10 - PID et routage
-
-- Parametres PID propres.
-- Affichage erreur/sortie.
-- Anti-oscillation.
-- Rampes.
-- Deadband.
-- Le PID doit proposer une commande, pas appliquer directement les sorties.
-- AutomateManager doit arbitrer avant ActuatorManager.
-
-## P11 - Audit taille firmware
-
-- Mesurer main, recovery et LittleFS.
-- Lister les modules optionnels.
-- Ne rien supprimer sans validation.
-
-## P12 - Migration ESP32-S3
-
-- Etudier seulement apres validation Recovery/Main ESP32 4 MB.
+Groupes imbriqués limités à deux niveaux, variables utilisateur, calendrier et simulation complète d'une règle restent des évolutions, pas des fonctionnalités validées. Ne pas recréer l'éditeur Web déjà présent. Pas de suppression de module, refonte globale, changement de firmware par rôle ou dépendance de la recovery à l'automate.

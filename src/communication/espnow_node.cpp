@@ -16,8 +16,8 @@ bool EspNowNode::begin() {
   Serial.print(config.nodeName);
   Serial.print(F(" nodeId="));
   Serial.print(config.nodeId);
-  Serial.print(F(" roleFlags=0x"));
-  Serial.print(config.roleFlags, HEX);
+  Serial.print(F(" serviceFlags=0x"));
+  Serial.print(config.serviceFlags, HEX);
   Serial.print(F(" capabilityFlags=0x"));
   Serial.println(config.capabilityFlags, HEX);
 
@@ -64,7 +64,7 @@ bool EspNowNode::sendDiscovery() {
   packet.packetType = ESPNOW_PACKET_DISCOVERY;
   packet.nodeId = config.nodeId;
   espNowCopyFixedText(packet.nodeName, sizeof(packet.nodeName), config.nodeName);
-  packet.roleFlags = config.roleFlags;
+  packet.serviceFlags = config.serviceFlags;
   packet.capabilityFlags = config.capabilityFlags;
   packet.primarySensorType = config.primarySensorType;
   WiFi.macAddress(packet.mac);
@@ -211,8 +211,8 @@ void EspNowNode::printDiscoveredNodes(Stream &out) const {
     out.print(discovered[i].nodeId);
     out.print(F(" nodeName="));
     out.print(discovered[i].nodeName);
-    out.print(F(" roleFlags=0x"));
-    out.print(discovered[i].roleFlags, HEX);
+    out.print(F(" serviceFlags=0x"));
+    out.print(discovered[i].serviceFlags, HEX);
     out.print(F(" capabilityFlags=0x"));
     out.print(discovered[i].capabilityFlags, HEX);
     out.print(F(" primarySensor="));
@@ -256,7 +256,7 @@ EspNowDiscoveredNode *EspNowNode::rememberNode(const uint8_t *mac, const EspNowD
   memcpy(freeSlot->mac, mac, 6);
   freeSlot->nodeId = packet.nodeId;
   espNowCopyFixedText(freeSlot->nodeName, sizeof(freeSlot->nodeName), packet.nodeName);
-  freeSlot->roleFlags = packet.roleFlags;
+  freeSlot->serviceFlags = packet.serviceFlags;
   freeSlot->capabilityFlags = packet.capabilityFlags;
   freeSlot->primarySensorType = packet.primarySensorType;
   freeSlot->lastSeenMs = millis();

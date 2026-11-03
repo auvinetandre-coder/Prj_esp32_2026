@@ -29,6 +29,22 @@ if (Test-Path $counterFile) {
   }
 }
 
+# Les livraisons LittleFS peuvent avoir avance au-dela du compteur firmware.
+Get-ChildItem -LiteralPath $otaDir -File -Filter "RouteurSolaireESP32_*_$date-*.bin" | ForEach-Object {
+  if ($_.BaseName -match ('_' + $date + '-(\d+)$')) {
+    $number = [Math]::Max($number, [int]$Matches[1] + 1)
+  }
+}
+foreach ($marker in @('latest_version.txt', 'latest_littlefs_version.txt')) {
+  $markerPath = Join-Path $otaDir $marker
+  if (Test-Path -LiteralPath $markerPath) {
+    $value = (Get-Content -LiteralPath $markerPath -Raw).Trim()
+    if ($value -match ('^' + $date + '-(\d+)$')) {
+      $number = [Math]::Max($number, [int]$Matches[1] + 1)
+    }
+  }
+}
+
 Set-Content -Path $counterFile -Value $number -Encoding ASCII
 
 $version = "{0}-{1:00}" -f $date, $number

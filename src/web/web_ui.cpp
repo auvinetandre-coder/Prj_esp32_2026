@@ -14,18 +14,6 @@
 static const char *ROUTEUR_ACTIVE_FIRMWARE_MARKER = ROUTEUR_FIRMWARE_MARKER;
 static const char *RECOVERY_NVS_NAMESPACE = "recovery";
 
-static const char *configuredRedundancyRole(JsonObject device, DeviceRole role) {
-  const char *configured = device["redundancyRole"] | "";
-  if (configured && configured[0]) return configured;
-  return RuntimeState::redundancyRoleToString(role);
-}
-
-static const char *configuredFunctionalRole(JsonObject device, DeviceRole role) {
-  const char *configured = device["functionalRole"] | "";
-  if (configured && configured[0]) return configured;
-  return RuntimeState::functionalRoleToString(role);
-}
-
 static const char *wifiQualityLabel(int rssi) {
   if (rssi == 0) return "N/A";
   if (rssi >= -55) return "Excellent";
@@ -249,12 +237,7 @@ void WebUi::routes() {
     out["moduleName"] = deviceName;
     JsonObject deviceOut = out["device"].to<JsonObject>();
     deviceOut["name"] = deviceName;
-    deviceOut["redundancyRole"] = configuredRedundancyRole(device, state.role);
-    deviceOut["functionalRole"] = configuredFunctionalRole(device, state.role);
     out["nodeId"] = state.nodeId;
-    out["role"] = device["role"] | RuntimeState::roleToString(state.role);
-    out["redundancyRole"] = deviceOut["redundancyRole"];
-    out["functionalRole"] = deviceOut["functionalRole"];
     out["firmwareVersion"] = ROUTEUR_FIRMWARE_VERSION;
     out["littleFsVersion"] = readLittleFsTextFile("/www/littlefs_version.txt");
     out["buildTimestamp"] = ROUTEUR_BUILD_TIMESTAMP;
@@ -274,6 +257,7 @@ void WebUi::routes() {
     JsonObject out = doc.to<JsonObject>();
     out["ok"] = true;
     actuators.runtimeToJson(out["actuators"].to<JsonArray>());
+    appendActuatorMeasurements(out["actuators"].as<JsonArray>());
     sendJson(doc);
   });
   server.on("/api/dashboard/config", HTTP_GET, [this]() {
@@ -315,12 +299,12 @@ void WebUi::routes() {
     setNumber("injectionW", state.injectionW);
     setNumber("consumptionW", state.consumptionW);
     setNumber("surplusW", state.surplusW);
-    setNumber("targetW", router["gridSetpointW"] | 0.0f);
-    setNumber("deadbandW", router["deadbandW"] | 30.0f);
+    setNumber("targetW", isfinite(state.pidGridSetpointW) ? state.pidGridSetpointW : (router["gridSetpointW"] | 0.0f));
+    setNumber("deadbandW", state.pidDeadbandW);
     setNumber("pidErrorW", state.pidErrorW);
     setNumber("pidOutputPercent", state.pidOutputPercent);
     setNumber("commandPercent", state.commandPercent);
-    setNumber("heaterPowerW", state.heaterPowerW);
+    setNumber("outputPowerW", state.outputPowerW);
     setNumber("ssr1PowerPct", state.ssr1PowerPct);
     setNumber("ssr2PowerPct", state.ssr2PowerPct);
     setNumber("robotDynPowerPct", state.robotDynPowerPct);
@@ -332,10 +316,10 @@ void WebUi::routes() {
     out["robotDynPinHigh"] = state.robotDynPinHigh;
     out["ssr1"] = state.ssr1PowerPct > 0.5f;
     out["ssr2"] = state.ssr2PowerPct > 0.5f;
-    setNumber("temp1", isnan(state.ds18b20Temps[0]) || isinf(state.ds18b20Temps[0]) ? state.tankTopC : state.ds18b20Temps[0]);
-    setNumber("temp2", isnan(state.ds18b20Temps[1]) || isinf(state.ds18b20Temps[1]) ? state.tankMiddleC : state.ds18b20Temps[1]);
-    setNumber("temp3", isnan(state.ds18b20Temps[2]) || isinf(state.ds18b20Temps[2]) ? state.tankBottomC : state.ds18b20Temps[2]);
-    setNumber("tempSafety", router["tempSafetyMaxC"] | router["tankSafetyC"] | 70.0f);
+    setNumber("temp1", isnan(state.ds18b20Temps[0]) || isinf(state.ds18b20Temps[0]) ? state.temperature1C : state.ds18b20Temps[0]);
+    setNumber("temp2", isnan(state.ds18b20Temps[1]) || isinf(state.ds18b20Temps[1]) ? state.temperature2C : state.ds18b20Temps[1]);
+    setNumber("temp3", isnan(state.ds18b20Temps[2]) || isinf(state.ds18b20Temps[2]) ? state.temperature3C : state.ds18b20Temps[2]);
+    setNumber("tempSafety", router["tempSafetyMaxC"] | 70.0f);
     out["pidStatus"] = state.pidStatus;
     out["safetyLevel"] = state.safetyLevel;
     sendJson(doc);
@@ -350,11 +334,6 @@ void WebUi::routes() {
     out["moduleName"] = deviceName;
     JsonObject deviceOut = out["device"].to<JsonObject>();
     deviceOut["name"] = deviceName;
-    deviceOut["redundancyRole"] = configuredRedundancyRole(device, state.role);
-    deviceOut["functionalRole"] = configuredFunctionalRole(device, state.role);
-    out["role"] = device["role"] | RuntimeState::roleToString(state.role);
-    out["redundancyRole"] = deviceOut["redundancyRole"];
-    out["functionalRole"] = deviceOut["functionalRole"];
     out["firmwareVersion"] = ROUTEUR_FIRMWARE_VERSION;
     out["littleFsVersion"] = readLittleFsTextFile("/www/littlefs_version.txt");
     out["buildTimestamp"] = ROUTEUR_BUILD_TIMESTAMP;
@@ -386,7 +365,7 @@ void WebUi::routes() {
       file.close();
       return;
     }
-    server.send(200, "text/markdown", F("# RouteurSolaireESP32\n\nREADME embarque non trouve dans LittleFS.\n\nPour l'afficher completement depuis l'ESP32, placer README.md dans le dossier data puis televerser les donnees LittleFS.\n\nSections principales : presentation, roles MASTER/BACKUP/NODE, capteurs, actionneurs, interface Web, securites, simulation, cablage, installation Arduino IDE, diagnostic et avertissement 230 V.\n"));
+    server.send(200, "text/markdown", F("# RouteurSolaireESP32\n\nREADME embarque non trouve dans LittleFS.\n\nPour l'afficher completement depuis l'ESP32, placer README.md dans le dossier data puis televerser les donnees LittleFS.\n\nSections principales : presentation, capteurs, actionneurs, interface Web, securites, simulation, cablage, installation Arduino IDE, diagnostic et avertissement 230 V.\n"));
   });
   server.on("/api/device", HTTP_POST, [this]() { saveConfig("device", "/config/device.json"); });
   server.on("/api/system", HTTP_POST, [this]() { saveConfig("system", "/config/system.json"); });
@@ -407,10 +386,49 @@ void WebUi::routes() {
     String id = server.arg("id");
     String command = server.arg("command");
     float value = server.arg("value").toFloat();
+    String controlMode = server.arg("controlMode");
     if (!id.length()) {
       server.send(400, "application/json", "{\"ok\":false,\"error\":\"actuatorId manquant\"}");
       return;
     }
+    if (controlMode.length()) {
+      if (controlMode != "manual" && controlMode != "auto") {
+        server.send(400, "application/json", "{\"ok\":false,\"error\":\"Mode de commande invalide\"}");
+        return;
+      }
+      bool found = false;
+      bool enabled = false;
+      for (JsonObject actuator : config.actuators()) {
+        if (id == (actuator["id"] | "")) { found = true; enabled = actuator["enabled"] | false; }
+      }
+      if (!found || (controlMode == "manual" && !enabled)) {
+        server.send(400, "application/json", "{\"ok\":false,\"error\":\"Actionneur absent ou desactive\"}");
+        return;
+      }
+      if (controlMode == "manual") {
+        String raw = server.arg("value");
+        char *end = nullptr;
+        value = strtof(raw.c_str(), &end);
+        if (!raw.length() || !end || *end || !isfinite(value) || value < 0 || value > 100) {
+          server.send(400, "application/json", "{\"ok\":false,\"error\":\"Puissance attendue entre 0 et 100 %\"}");
+          return;
+        }
+        command = "setActuatorPercent";
+      } else {
+        if (state.manualCommandPersistent && state.manualCommandActuatorId != id) {
+          server.send(409, "application/json", "{\"ok\":false,\"error\":\"Un autre actionneur est en commande manuelle\"}");
+          return;
+        }
+        command = "stop";
+        value = 0;
+      }
+    }
+    if (controlMode.length() && !actuators.requestSharedControl(id, controlMode, value)) {
+      server.send(503, "application/json", "{\"ok\":false,\"error\":\"Commande partagee non envoyee\"}");
+      return;
+    }
+    state.manualCommandPersistent = controlMode == "manual";
+    state.manualCommandSimulationMode = state.simulationMode;
     state.manualCommandActuatorId = id;
     state.manualCommand = command.length() ? command : "setPower";
     state.manualCommandPercent = value;
@@ -679,8 +697,18 @@ void WebUi::sendJson(DynamicJsonDocument &doc) {
   server.send(200, "application/json", out);
 }
 
+void WebUi::appendActuatorMeasurements(JsonArray items) {
+  for (JsonObject item : items) {
+    const float measured = sensors.jsyRoleValue("load", "POWER", String(item["id"] | ""));
+    if (isfinite(measured)) item["measuredPowerW"] = measured;
+    else item["measuredPowerW"] = nullptr;
+    item["measurementAvailable"] = isfinite(measured);
+  }
+}
+
 void WebUi::sendStatusLite() {
   const uint32_t apiStateStartedMs = millis();
+  sensors.refreshMqttProduction();
   state.apiStateRequestCount++;
   DynamicJsonDocument doc(20480);
   JsonObject out = doc.to<JsonObject>();
@@ -722,13 +750,8 @@ void WebUi::sendStatusLite() {
   out["moduleName"] = deviceName;
   JsonObject deviceOut = out["device"].to<JsonObject>();
   deviceOut["name"] = deviceName;
-  deviceOut["redundancyRole"] = configuredRedundancyRole(device, state.role);
-  deviceOut["functionalRole"] = configuredFunctionalRole(device, state.role);
   out["deviceId"] = state.deviceId;
   out["nodeId"] = state.nodeId;
-  out["role"] = device["role"] | RuntimeState::roleToString(state.role);
-  out["redundancyRole"] = deviceOut["redundancyRole"];
-  out["functionalRole"] = deviceOut["functionalRole"];
   out["firmwareVersion"] = ROUTEUR_FIRMWARE_VERSION;
   out["littleFsVersion"] = readLittleFsTextFile("/www/littlefs_version.txt");
   out["buildTimestamp"] = ROUTEUR_BUILD_TIMESTAMP;
@@ -819,9 +842,9 @@ void WebUi::sendStatusLite() {
   setNumber("injectionW", state.injectionW);
   setNumber("consumptionW", state.consumptionW);
   setNumber("surplusW", state.surplusW);
-  setNumber("tankTopC", state.tankTopC);
-  setNumber("tankMiddleC", state.tankMiddleC);
-  setNumber("tankBottomC", state.tankBottomC);
+  setNumber("temperature1C", state.temperature1C);
+  setNumber("temperature2C", state.temperature2C);
+  setNumber("temperature3C", state.temperature3C);
   setNumber("ssr1PowerPct", state.ssr1PowerPct);
   setNumber("ssr2PowerPct", state.ssr2PowerPct);
   setNumber("robotDynPowerPct", state.robotDynPowerPct);
@@ -831,7 +854,7 @@ void WebUi::sendStatusLite() {
   out["ssr1PinHigh"] = state.ssr1PinHigh;
   out["ssr2PinHigh"] = state.ssr2PinHigh;
   out["robotDynPinHigh"] = state.robotDynPinHigh;
-  setNumber("heaterPowerW", state.heaterPowerW);
+  setNumber("outputPowerW", state.outputPowerW);
   setNumber("commandPercent", state.commandPercent);
   out["automateState"] = state.automateState;
   out["previousAutomateState"] = state.previousAutomateState;
@@ -872,51 +895,63 @@ void WebUi::sendStatusLite() {
   out["pidEnabled"] = state.pidEnabled;
   out["pidStatus"] = state.pidStatus;
   actuators.runtimeToJson(out["actuators"].to<JsonArray>());
+  const String outputActuatorId = state.commandActuatorId.length() && state.commandActuatorId != "*"
+      ? state.commandActuatorId : config.routingActuatorId();
+  float displayedOutputW = NAN;
+  String outputPowerSource = "UNAVAILABLE";
+  for (JsonObject item : out["actuators"].as<JsonArray>()) {
+    String id = item["id"] | "";
+    const float measured = sensors.jsyRoleValue("load", "POWER", id);
+    setObjectNumber(item, "measuredPowerW", measured);
+    item["measurementAvailable"] = isfinite(measured);
+    if (id != outputActuatorId) continue;
+    if (isfinite(measured)) {
+      displayedOutputW = measured;
+      outputPowerSource = "JSY";
+    } else {
+      // Estimate from the applied actuator command, not the PID running behind a manual override.
+      displayedOutputW = item["estimatedPowerW"].isNull() ? NAN : item["estimatedPowerW"].as<float>();
+      outputPowerSource = "ESTIMATED_ACTUATOR";
+    }
+  }
+  setNumber("outputPowerW", displayedOutputW);
+  out["outputPowerSource"] = outputPowerSource;
+  out["outputPowerActuatorId"] = outputActuatorId;
+  setNumber("jsyRoleGridPowerW", sensors.jsyRoleValue("grid", "POWER"));
+  setNumber("jsyLoadPowerW", sensors.jsyRoleValue("load", "POWER"));
   JsonObject router = system["router"].as<JsonObject>();
-  setNumber("pidMeasuredW", isnan(state.gridPowerFilteredW) || isinf(state.gridPowerFilteredW) ? state.gridPowerW : state.gridPowerFilteredW);
-  setNumber("gridSetpointW", router["gridSetpointW"] | 0.0f);
+  setNumber("pidMeasuredW", state.pidMeasuredW);
+  setNumber("gridSetpointW", isfinite(state.pidGridSetpointW) ? state.pidGridSetpointW : (router["gridSetpointW"] | 0.0f));
   setNumber("deadbandW", router["deadbandW"] | 30.0f);
-  setNumber("pidKp", router["kp"] | router["pidKp"] | 0.02f);
-  setNumber("pidKi", router["ki"] | router["pidKi"] | 0.002f);
-  setNumber("pidKd", router["kd"] | router["pidKd"] | 0.0f);
-  setNumber("maxOutputRampPercentPerSecond", router["maxOutputRampPercentPerSecond"] | 5.0f);
-  setNumber("heaterMaxPowerW", router["heaterMaxPowerW"] | router["ssr1MaxW"] | 1500.0f);
+  setNumber("pidKp", state.pidKp);
+  setNumber("pidKi", state.pidKi);
+  setNumber("pidKd", state.pidKd);
+  setNumber("maxOutputRampPercentPerSecond", state.pidRamp);
+  setNumber("maxOutputDropPercentPerSecond", state.pidDrop);
+  setNumber("outputMaxPowerW", router["outputMaxPowerW"] | router["ssr1MaxW"] | 1500.0f);
   JsonObject energy = out["energy"].to<JsonObject>();
   setObjectNumber(energy, "productionW", state.productionW);
   setObjectNumber(energy, "gridPowerW", state.gridPowerW);
-  setObjectNumber(energy, "heaterPowerW", state.heaterPowerW);
-  setObjectNumber(energy, "heaterPercent", state.commandPercent);
-  setObjectNumber(energy, "tankTempC", state.tankTopC);
+  setObjectNumber(energy, "outputPowerW", displayedOutputW);
+  setObjectNumber(energy, "outputPercent", state.commandPercent);
+  setObjectNumber(energy, "primaryTemperatureC", state.temperature1C);
   setObjectNumber(energy, "surplusW", state.surplusW);
   setObjectNumber(energy, "consumptionW", state.consumptionW);
 
   JsonObject pid = out["pid"].to<JsonObject>();
+  pid["contextId"] = state.pidContextId;
+  pid["active"] = state.pidActive && state.commandSource == "RULE_ENGINE" &&
+                  state.pidAllowed && state.pidEnabled && !state.safetyTripped;
   pid["mode"] = router["mode"] | (state.pidEnabled ? "AUTO" : "OFF");
-  String pidSource = router["gridPowerSource"] | state.gridPowerSource.c_str();
-  String pidSourceUpper = pidSource;
-  pidSourceUpper.toUpperCase();
-  bool sourceIsJsy = pidSourceUpper.indexOf("JSY") >= 0 || (pidSourceUpper == "AUTO" && state.jsyOnline);
-  bool sourceIsLinky = pidSourceUpper.indexOf("TIC") >= 0 || pidSourceUpper.indexOf("LINKY") >= 0 || (pidSourceUpper == "AUTO" && state.ticAvailable && !sourceIsJsy);
-  bool sourceIsEspNow = false;
-  for (JsonObject cfg : config.sensors()) {
-    if (!(cfg["enabled"] | true)) continue;
-    String source = cfg["source"] | "local";
-    if (!source.equalsIgnoreCase("espnow")) continue;
-    String type = cfg["type"] | "";
-    type.toUpperCase();
-    if (sourceIsJsy && type.indexOf("JSY") >= 0) sourceIsEspNow = true;
-    if (sourceIsLinky && (type.indexOf("TIC") >= 0 || type.indexOf("LINKY") >= 0)) sourceIsEspNow = true;
-  }
-  if (sourceIsJsy) pid["source"] = sourceIsEspNow ? "ESPNOW_JSY" : "LOCAL_JSY";
-  else if (sourceIsLinky) pid["source"] = sourceIsEspNow ? "ESPNOW_LINKY" : "LOCAL_LINKY";
-  else pid["source"] = pidSource;
-  setObjectNumber(pid, "targetGridW", router["gridSetpointW"] | 0.0f);
-  setObjectNumber(pid, "deadbandW", router["deadbandW"] | 30.0f);
+  pid["source"] = state.pidSensorSource;
+  setObjectNumber(pid, "targetGridW", isfinite(state.pidGridSetpointW) ? state.pidGridSetpointW : (router["gridSetpointW"] | 0.0f));
+  setObjectNumber(pid, "deadbandW", state.pidDeadbandW);
+  rules.pidToJson(out["pids"].to<JsonArray>());
   setObjectNumber(pid, "errorW", state.pidErrorW);
   setObjectNumber(pid, "outputPercent", state.pidOutputPercent);
   setObjectNumber(pid, "commandPercent", state.commandPercent);
   pid["status"] = state.pidStatus.length() ? state.pidStatus : "IDLE";
-  setObjectNumber(pid, "heaterPowerW", state.heaterPowerW);
+  setObjectNumber(pid, "outputPowerW", displayedOutputW);
 
   JsonArray activeSensors = out["sensors"].to<JsonArray>();
   for (JsonObject cfg : config.sensors()) {
@@ -943,12 +978,14 @@ void WebUi::sendStatusLite() {
         setObjectNumber(values, "VOLT", state.gridVoltageV);
         setObjectNumber(values, "FREQ", state.gridFrequencyHz);
         setObjectNumber(values, "CH1_CURR", state.currentA1);
+        setObjectNumber(values, "CH1_APPARENT", state.jsyOnline && state.voltageV1 > 1.0f ? state.voltageV1 * state.currentA1 : NAN);
         setObjectNumber(values, "CH1_POWER", state.activePowerW1);
         setObjectNumber(values, "CH1_PF", state.powerFactor1);
         setObjectNumber(values, "CH1_ENERGY_POS", state.jsyImportEnergyWh1);
         setObjectNumber(values, "CH1_ENERGY_NEG", state.jsyExportEnergyWh1);
         values["CH1_DIR"] = state.energyDirection1;
         setObjectNumber(values, "CH2_CURR", state.currentA2);
+        setObjectNumber(values, "CH2_APPARENT", state.jsyOnline && state.voltageV2 > 1.0f ? state.voltageV2 * state.currentA2 : NAN);
         setObjectNumber(values, "CH2_POWER", state.activePowerW2);
         setObjectNumber(values, "CH2_PF", state.powerFactor2);
         setObjectNumber(values, "CH2_ENERGY_POS", state.jsyImportEnergyWh2);
@@ -991,6 +1028,8 @@ void WebUi::sendStatusLite() {
     unifiedDsIndex++;
   }
   sensors.remoteSensorsToJson(activeSensors, true);
+  sensors.mqttProductionSensorToJson(activeSensors);
+  sensors.mqttProductionToJson(out["mqttProduction"].to<JsonObject>());
 
   JsonObject health = out["systemHealth"].to<JsonObject>();
   health["wifi"] = state.wifiConnected ? "OK" : state.networkMode;
@@ -1041,8 +1080,6 @@ void WebUi::sendSystemInfo() {
   out["deviceName"] = device["deviceName"] | device["name"] | state.moduleName.c_str();
   JsonObject deviceOut = out["device"].to<JsonObject>();
   deviceOut["name"] = out["deviceName"];
-  deviceOut["redundancyRole"] = configuredRedundancyRole(device, state.role);
-  deviceOut["functionalRole"] = configuredFunctionalRole(device, state.role);
   out["firmwareVersion"] = ROUTEUR_FIRMWARE_VERSION;
   out["littleFsVersion"] = readLittleFsTextFile("/www/littlefs_version.txt");
   out["buildVersion"] = ROUTEUR_FIRMWARE_VERSION;
@@ -1080,9 +1117,6 @@ void WebUi::sendSystemInfo() {
   } else {
     out["localDateTime"] = "N/A";
   }
-  out["role"] = device["role"] | RuntimeState::roleToString(state.role);
-  out["redundancyRole"] = deviceOut["redundancyRole"];
-  out["functionalRole"] = deviceOut["functionalRole"];
   out["safetyLevel"] = state.safetyLevel.length() ? state.safetyLevel : "N/A";
   out["safetyReason"] = state.safetyReason.length() ? state.safetyReason : "N/A";
   out["simulationMode"] = state.simulationMode;
@@ -1331,6 +1365,7 @@ void WebUi::saveConfig(const char *name, const char *path) {
   }
   bool allowWifiClear = strcmp(name, "system") == 0 && (server.arg("clearWifi") == "true" || server.arg("clearWifi") == "1");
   bool ok = config.replaceFile(path, server.arg("plain"), allowEmpty, allowWifiClear);
+  if (ok && strcmp(name, "rules") == 0) rules.loadRules();
   if (ok && strcmp(name, "device") == 0) state.begin(config);
   if (ok && strcmp(name, "system") == 0) {
     state.simulationType = config.system()["simulation"]["mode"] | state.simulationType.c_str();
@@ -1406,21 +1441,20 @@ function esc(v){return String(v==null?'':v).replace(/[&<>"']/g,function(m){retur
 function fmt(v){return typeof v==='number'?Math.round(v*10)/10:v}
 async function api(p,o){let r=await fetch(p,o);let t=await r.text();if(!r.ok)throw new Error('HTTP '+r.status+' '+t);try{return JSON.parse(t)}catch(e){return t}}
 function card(l,v,u,c){return '<div class="card"><div class="label">'+l+'</div><div class="value '+(c||'')+'">'+esc(fmt(v))+' '+(u||'')+'</div></div>'}
-function emptyStatus(){return {networkMode:'inconnu',localIp:'-',stationIp:'-',apIp:'192.168.4.1',wifiConnected:false,wifiSsid:'-',rssi:0,injectionW:0,gridPowerW:0,ssr1PowerPct:0,ssr2PowerPct:0,robotDynPowerPct:0,tankTopC:0,tankMiddleC:0,tankBottomC:0,heapFree:0,events:[]}}
+function emptyStatus(){return {networkMode:'inconnu',localIp:'-',stationIp:'-',apIp:'192.168.4.1',wifiConnected:false,wifiSsid:'-',rssi:0,injectionW:0,gridPowerW:0,ssr1PowerPct:0,ssr2PowerPct:0,robotDynPowerPct:0,temperature1C:0,temperature2C:0,temperature3C:0,heapFree:0,events:[]}}
 async function load(diag){try{status=await api(diag?'/api/diagnostic':'/api/status-lite')}catch(e){status=emptyStatus();status.loadError=e.message}}
 function top(){return (status.safetyTripped?'<div class="banner">SECURITE: '+esc(status.safetyReason)+'</div>':'')+(status.simulationMode?'<div class="sim">MODE SIMULATION ACTIF - sorties puissance OFF</div>':'')}
 async function show(p){current=p;await render()}
 async function render(){q('#v').innerHTML='<h2>RouteurSolaireESP32</h2><p>Chargement API...</p>';await load(current==='diag');let h='<h2>RouteurSolaireESP32</h2>'+(status.loadError?'<div class="banner">Erreur API: '+esc(status.loadError)+'<br>Teste /api/ping puis /api/status</div>':'')+top();if(current==='dash')h+=dash();if(current==='sim')h+=sim();if(current==='diag')h+=diag();if(current==='wifi')h+=wifi();q('#v').innerHTML=h}
-function dash(){return '<div class="grid">'+card('Mode reseau',status.networkMode,'')+card('IP box',status.stationIp||status.localIp,'')+card('IP AP',status.apIp||'192.168.4.1','')+card('Injection',status.injectionW,'W','ok')+card('Reseau',status.gridPowerW,'W')+card('SSR1',status.ssr1PowerPct,'%')+card('SSR2',status.ssr2PowerPct,'%')+card('RobotDyn',status.robotDynPowerPct,'%')+card('Sonde1',status.tankTopC,'C')+card('Sonde2',status.tankMiddleC,'C')+card('Sonde3',status.tankBottomC,'C')+card('Heap',status.heapFree,'o')+'</div>'}
-function sim(){return '<h3>Simulation sans capteurs</h3><div class="row"><div><label>gridPowerW</label><input id="g" type="number" value="'+(status.gridPowerW||-800)+'"></div><div><label>Tension</label><input id="vlt" type="number" value="'+(status.gridVoltageV||231)+'"></div><div><label>Courant</label><input id="cur" type="number" value="'+(status.gridCurrentA||4)+'"></div><div><label>Sonde1</label><input id="t1" type="number" value="'+(status.tankTopC||45)+'"></div><div><label>Sonde2</label><input id="t2" type="number" value="'+(status.tankMiddleC||42)+'"></div><div><label>Sonde3</label><input id="t3" type="number" value="'+(status.tankBottomC||38)+'"></div></div><p><button onclick="simOn()">Activer</button> <button onclick="simValues()">Appliquer</button> <button onclick="simRand()">Aleatoire</button> <button onclick="simOff()">Desactiver</button></p>'+dash()}
+function dash(){return '<div class="grid">'+card('Mode reseau',status.networkMode,'')+card('IP box',status.stationIp||status.localIp,'')+card('IP AP',status.apIp||'192.168.4.1','')+card('Injection',status.injectionW,'W','ok')+card('Reseau',status.gridPowerW,'W')+card('SSR1',status.ssr1PowerPct,'%')+card('SSR2',status.ssr2PowerPct,'%')+card('RobotDyn',status.robotDynPowerPct,'%')+card('Sonde1',status.temperature1C,'C')+card('Sonde2',status.temperature2C,'C')+card('Sonde3',status.temperature3C,'C')+card('Heap',status.heapFree,'o')+'</div>'}
+function sim(){return '<h3>Simulation sans capteurs</h3><div class="row"><div><label>gridPowerW</label><input id="g" type="number" value="'+(status.gridPowerW||-800)+'"></div><div><label>Tension</label><input id="vlt" type="number" value="'+(status.gridVoltageV||231)+'"></div><div><label>Courant</label><input id="cur" type="number" value="'+(status.gridCurrentA||4)+'"></div><div><label>Sonde1</label><input id="t1" type="number" value="'+(status.temperature1C||45)+'"></div><div><label>Sonde2</label><input id="t2" type="number" value="'+(status.temperature2C||42)+'"></div><div><label>Sonde3</label><input id="t3" type="number" value="'+(status.temperature3C||38)+'"></div></div><p><button onclick="simOn()">Activer</button> <button onclick="simValues()">Appliquer</button> <button onclick="simRand()">Aleatoire</button> <button onclick="simOff()">Desactiver</button></p>'+dash()}
 async function simOn(){await fetch('/api/simulation/enable',{method:'POST'});await render()}
 async function simOff(){await fetch('/api/simulation/disable',{method:'POST'});await render()}
 async function simRand(){await fetch('/api/simulation/randomize',{method:'POST'});await render()}
 async function simValues(){let body={jsy:{available:true,gridPowerW:Number(q('#g').value),voltageV:Number(q('#vlt').value),currentA:Number(q('#cur').value),powerFactor:.96,frequencyHz:50},tic:{available:true,apparentPowerVA:900,currentA:Number(q('#cur').value),tariff:'BASE'},ds18b20:[{id:'sonde1',available:true,temperatureC:Number(q('#t1').value)},{id:'sonde2',available:true,temperatureC:Number(q('#t2').value)},{id:'sonde3',available:true,temperatureC:Number(q('#t3').value)}]};await fetch('/api/simulation/values',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});await render()}
 function diag(){let ev=status.events||[];return dash()+'<h3>Evenements</h3><table><tr><th>ms</th><th>Niveau</th><th>Code</th><th>Message</th></tr>'+ev.map(function(e){return '<tr><td>'+e.timestampMs+'</td><td>'+esc(e.level)+'</td><td>'+esc(e.code)+'</td><td>'+esc(e.message)+'</td></tr>'}).join('')+'</table>'}
-function wifi(){return '<div class="grid">'+card('Mode',status.networkMode,'')+card('WiFi connecte',status.wifiConnected,'')+card('SSID',status.wifiSsid,'')+card('RSSI',status.rssi,'')+card('IP box',status.stationIp,'')+card('IP AP',status.apIp,'')+'</div><p>Si tu es connecte au point d\\'acces local RouteurSolaire_Config, ouvre http://192.168.4.1</p>'}
+function wifi(){return '<div class="grid">'+card('Mode',status.networkMode,'')+card('WiFi connecte',status.wifiConnected,'')+card('SSID',status.wifiSsid,'')+card('RSSI',status.rssi,'')+card('IP box',status.stationIp,'')+card('IP AP',status.apIp,'')+'</div><p>Si tu es connecte au point d&#39;acces local RouteurSolaire_Config, ouvre http://192.168.4.1</p>'}
 setInterval(function(){if(current==='dash')render()},5000);render();
 </script></body></html>
 )HTML";
 }
-

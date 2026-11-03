@@ -79,7 +79,7 @@ if not exist "%ESPTOOL%" (
 echo.
 echo Ecriture firmware principal dans ota_0 uniquement...
 echo Offset ota_0 : %MAIN_APP_OFFSET%
-"%ESPTOOL%" --chip esp32 --port %PORT% --baud 921600 --before default_reset --after hard_reset write_flash -z %MAIN_APP_OFFSET% "%FIRMWARE_BIN%"
+"%ESPTOOL%" --chip esp32 --port %PORT% --baud 115200 --before default_reset --after hard_reset write_flash -z %MAIN_APP_OFFSET% "%FIRMWARE_BIN%"
 if errorlevel 1 (
   echo.
   echo ERREUR: televersement firmware ota_0 echoue.

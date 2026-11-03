@@ -21,13 +21,12 @@ void SafetyManager::loop(uint32_t now) {
 void SafetyManager::evaluate(uint32_t now) {
   JsonObject router = config.system()["router"];
   JsonObject safety = config.system()["safety"];
-  const float safetyC = router["tempSafetyMaxC"] | router["tankSafetyC"] | 70.0f;
+  const float safetyC = router["tempSafetyMaxC"] | 70.0f;
   const uint32_t jsyTimeoutMs = router["jsyTimeoutMs"] | 3000;
   const uint32_t ticTimeoutMs = router["ticTimeoutMs"] | 10000;
-  const uint32_t takeoverTimeoutMs = config.system()["takeoverTimeoutMs"] | 1000;
   const bool safetyEnabled = safety["enabled"] | true;
   const bool blockMissingDs18b20 = safety["blockOnMissingDs18b20"] | true;
-  const bool blockMissingTop = safety["blockOnMissingTopSensor"] | true;
+  const bool blockMissingTop = safety["blockOnMissingPrimarySensor"] | true;
   const bool blockMissingJsy = safety["blockOnMissingJsy"] | true;
   const bool blockMissingJsyAndTic = safety["blockOnMissingJsyAndTic"] | true;
   const bool warningOnlyMissingSensors = safety["warningOnlyOnMissingSensors"] | false;
@@ -36,8 +35,8 @@ void SafetyManager::evaluate(uint32_t now) {
   if (manualStop) return setLevel(SAFETY_CRITICAL, "MANUAL_EMERGENCY_STOP", "Arret manuel actif", now);
   if (!safetyEnabled) return setLevel(SAFETY_OK, "", "", now);
   if (configError()) return setLevel(SAFETY_CRITICAL, "CONFIG_ERROR", "Configuration de securite invalide", now);
-  if (doubleMasterRisk()) return setLevel(SAFETY_CRITICAL, "DOUBLE_MASTER_RISK", "Risque double pilotage MASTER/BACKUP", now);
-  if (topTemperatureHigh(safetyC)) return setLevel(SAFETY_CRITICAL, "TEMP_HIGH_LIMIT", "Temperature ballon au-dessus de la limite", now);
+  if (!isfinite(safetyC)) return setLevel(SAFETY_CRITICAL, "CONFIG_ERROR", "Limite temperature invalide", now);
+  if (temperatureHigh(safetyC)) return setLevel(SAFETY_CRITICAL, "TEMP_HIGH_LIMIT", "Temperature equipement au-dessus de la limite", now);
   const float voltageMin = router["voltageMinV"] | 180.0f;
   const float voltageMax = router["voltageMaxV"] | 260.0f;
   const float frequencyMin = router["frequencyMinHz"] | 47.0f;
@@ -51,11 +50,11 @@ void SafetyManager::evaluate(uint32_t now) {
     return setLevel(SAFETY_CRITICAL, "FREQUENCY_OUT_OF_RANGE", "Frequence reseau hors plage", now);
   }
 
-  const bool topMissing = topSensorMissing();
+  const bool topMissing = primarySensorMissing();
   const bool criticalMissing = criticalDs18b20Missing();
-  if (safetyEnabled && topMissing && blockMissingTop && !warningOnlyMissingSensors) return setLevel(SAFETY_CRITICAL, "DS18B20_TOP_MISSING", "Sonde ballon haut absente", now);
+  if (safetyEnabled && topMissing && blockMissingTop && !warningOnlyMissingSensors) return setLevel(SAFETY_CRITICAL, "DS18B20_PRIMARY_MISSING", "Sonde principale absente", now);
   if (safetyEnabled && criticalMissing && blockMissingDs18b20 && !warningOnlyMissingSensors) return setLevel(SAFETY_CRITICAL, "DS18B20_CRITICAL_MISSING", "Sonde DS18B20 critique absente", now);
-  if (topMissing) warningCause = "DS18B20_TOP_MISSING: Sonde ballon haut absente";
+  if (topMissing) warningCause = "DS18B20_PRIMARY_MISSING: Sonde principale absente";
   else if (criticalMissing) warningCause = "DS18B20_CRITICAL_MISSING: Sonde DS18B20 critique absente";
 
   const bool jsyMissing = jsyConfigured() && jsyTimedOut(now, jsyTimeoutMs);
@@ -75,7 +74,6 @@ void SafetyManager::evaluate(uint32_t now) {
     if (safetyEnabled && (blockMissingJsyAndTic || blockMissingJsy) && !warningOnlyMissingSensors) return setLevel(SAFETY_CRITICAL, "POWER_METER_TIMEOUT", details, now);
     return setLevel(SAFETY_DEGRADED, "POWER_METER_TIMEOUT", details, now);
   }
-  if (masterLost(now, takeoverTimeoutMs)) return setLevel(SAFETY_DEGRADED, "MASTER_LOST", "MASTER perdu, fonctionnement en reprise BACKUP", now);
   if (warningCause.length()) return setLevel(SAFETY_WARNING, warningCause.substring(0, warningCause.indexOf(':')), warningCause.substring(warningCause.indexOf(':') + 2), now);
 
   setLevel(SAFETY_OK, "", "", now);
@@ -130,23 +128,27 @@ void SafetyManager::applyCriticalCut(uint32_t now) {
   actuators.stopCritical();
 }
 
-bool SafetyManager::topTemperatureHigh(float safetyC) {
-  if (!isnan(state.tankTopC) && state.tankTopC >= safetyC) return true;
-  // Conserve la securite historique : toute sonde rolee ballon_* au-dessus coupe aussi.
-  if (!isnan(state.tankMiddleC) && state.tankMiddleC >= safetyC) return true;
-  if (!isnan(state.tankBottomC) && state.tankBottomC >= safetyC) return true;
+bool SafetyManager::temperatureHigh(float safetyC) {
+  size_t index = 0;
+  for (JsonObject sensor : config.sensorsDoc()["ds18b20"].as<JsonArray>()) {
+    if (index >= 3) break;
+    if ((sensor["enabled"] | false) && state.ds18b20Temps[index] >= safetyC) return true;
+    ++index;
+  }
+  if (!isnan(state.temperature1C) && state.temperature1C >= safetyC) return true;
+  // All configured temperature channels retain the same high-limit protection.
+  if (!isnan(state.temperature2C) && state.temperature2C >= safetyC) return true;
+  if (!isnan(state.temperature3C) && state.temperature3C >= safetyC) return true;
   return false;
 }
 
-bool SafetyManager::topSensorMissing() {
+bool SafetyManager::primarySensorMissing() {
+  size_t index = 0;
   JsonArray ds = config.sensorsDoc()["ds18b20"].as<JsonArray>();
   for (JsonObject sensor : ds) {
-    if (!(sensor["enabled"] | false)) continue;
-    if (String(sensor["role"] | "") != "ballon_haut") continue;
-    String id = sensor["id"] | "";
-    if (id == "sonde1") return !state.ds18b20Available[0];
-    if (id == "sonde2") return !state.ds18b20Available[1];
-    if (id == "sonde3") return !state.ds18b20Available[2];
+    const size_t slot = index++;
+    if (!(sensor["enabled"] | false) || String(sensor["role"] | "") != "temperature_1") continue;
+    if (slot >= 3 || !state.ds18b20Available[slot]) return true;
   }
   return false;
 }
@@ -185,27 +187,16 @@ bool SafetyManager::ticConfigured() {
   return false;
 }
 
-bool SafetyManager::doubleMasterRisk() {
-  return state.splitBrainDetected || state.redundancyState == "SPLIT_BRAIN_DETECTED" ||
-         (state.role == ROLE_BACKUP && state.isActiveMaster && state.masterAlive);
-}
-
-bool SafetyManager::masterLost(uint32_t now, uint32_t takeoverTimeoutMs) {
-  if (state.role != ROLE_BACKUP) return false;
-  if (!state.isActiveMaster) return false;
-  if (state.lastMasterHeartbeatMs == 0) return true;
-  return now - state.lastMasterHeartbeatMs > takeoverTimeoutMs;
-}
-
 bool SafetyManager::configError() {
-  bool hasSsr1 = false;
-  bool hasSsr2 = false;
+  const String target = config.routingActuatorId();
+  bool found = !target.length();
   for (JsonObject actuator : config.actuators()) {
+    if (!(actuator["enabled"] | false)) continue;
     String id = actuator["id"] | "";
-    hasSsr1 |= id == "ssr1_water_heater";
-    hasSsr2 |= id == "ssr2_aux";
+    if (!id.length()) return true;
+    if (id == target) found = true;
   }
-  return !hasSsr1 || !hasSsr2;
+  return !found;
 }
 
 const char *SafetyManager::levelText(SafetyLevel value) {

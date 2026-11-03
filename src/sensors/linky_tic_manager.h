@@ -22,6 +22,7 @@ struct LinkyTICReading {
   String lastFrame = "";
   bool available = false;
   uint32_t lastValidReadMs = 0;
+  uint32_t lastPowerReadMs = 0;
   uint16_t errorCount = 0;
   LinkyTICStatus status = TIC_NOT_CONFIGURED;
 };
@@ -36,10 +37,12 @@ public:
   bool parseLine(const String &line);
   bool parseFrame();
   bool isAvailable() const { return reading.available; }
+  float getGridPowerW() const { return reading.gridPowerW; }
   float getApparentPowerVA() const { return reading.apparentPowerVA; }
   float getCurrentA() const { return reading.currentA; }
   String getTariff() const { return reading.tariff; }
   uint32_t getLastValidReadMs() const { return reading.lastValidReadMs; }
+  uint32_t powerSampleMs() const { return reading.lastPowerReadMs; }
   void reloadConfig();
   void setConfigured(bool value);
   void stop();

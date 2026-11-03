@@ -6,11 +6,12 @@
 #include "../config/config_manager.h"
 #include "../runtime/runtime_state.h"
 #include "../actuators/actuator_manager.h"
+#include "../sensors/sensor_manager.h"
 
 class MqttManager {
 public:
-  MqttManager(ConfigManager &config, RuntimeState &state, ActuatorManager &actuators)
-      : config(config), state(state), actuators(actuators), mqtt(wifiClient) {}
+  MqttManager(ConfigManager &config, RuntimeState &state, ActuatorManager &actuators, SensorManager &sensors)
+      : config(config), state(state), actuators(actuators), sensors(sensors), mqtt(wifiClient) {}
 
   void begin();
   void loop(uint32_t now);
@@ -20,6 +21,9 @@ private:
   ConfigManager &config;
   RuntimeState &state;
   ActuatorManager &actuators;
+  SensorManager &sensors;
+  String productionTopic;
+  String subscribedProductionTopic;
   WiFiClient wifiClient;
   PubSubClient mqtt;
 

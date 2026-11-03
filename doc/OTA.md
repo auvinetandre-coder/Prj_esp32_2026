@@ -1,5 +1,15 @@
 # OTA.md - Recovery/Main local
 
+## Statut de maintenance — 20 octobre 2026
+
+Ce document décrit l'architecture retenue et les exigences. La préservation de `/config` reste un **objectif non garanti** par le code actuel : effacement complet de LittleFS lors de l'upload, backup NVS conditionnel/non actualisé après chaque fichier, restauration non transactionnelle et formatage implicite au montage dans le main. Les écritures factory n'ont pas d'authentification et l'image LittleFS tronquée n'est pas suffisamment validée. Voir l'[audit courant, lot B](AUDIT_2026-10-20.md#b--configuration-et-recovery-p1).
+
+La page `/recovery` du main est embarquée et ne dépend pas de LittleFS. `POST /api/system/recovery` demande explicitement le prochain boot factory ; le reboot normal sélectionne `ota_0`. En factory, les routes d'upload sont `/upload` pour le firmware et `/upload-fs` pour LittleFS. La présence de ces routes ne valide pas leur robustesse aux interruptions.
+
+Ne pas présenter un remplacement d'image LittleFS comme une simple copie de WebUI : la partition contient aussi les cinq JSON. Prévoir leur export indépendant, vérifier leur intégrité après restauration et traiter un échec de backup avant toute opération d'effacement. Aucun upload ni test sur appareil n'a été effectué pendant cette relecture ; la checklist ci-dessous reste à réaliser.
+
+Les scripts USB COM3/COM4 sont des outils d'installation/maintenance manuelle qui écrivent directement les partitions. Ils ne passent pas par les contrôles de la factory et ne garantissent pas davantage la conservation des fichiers. Le parcours de mise à jour utilisateur retenu reste le passage explicite en recovery.
+
 ## Objectif
 
 La strategie OTA validee n'est plus le double slot classique `ota_0` / `ota_1`.
@@ -184,6 +194,10 @@ A preserver :
 Si la partition s'appelle `spiffs` dans le CSV, ne pas la renommer sans analyse : elle est utilisee comme partition LittleFS.
 
 ---
+
+## Livraison MULTI_SINUS du 3 novembre 2026
+
+Le firmware `20261103-05` et LittleFS `20261103-05` sont disponibles séparément dans `build/ota`. Installer les deux via le Recovery pour disposer du moteur SSR et de son sélecteur WebUI. Les noms des images et les vérifications de livraison figurent dans le [guide MULTI_SINUS](MULTI_SINUS.md#livraison-du-3-novembre-2026).
 
 ## GitHub Releases
 

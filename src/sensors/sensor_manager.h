@@ -15,11 +15,26 @@ public:
   void begin();
   void loop(uint32_t now);
   float valueFor(const String &sensorId, const String &variable);
+  struct PowerSample {
+    float watts = NAN;
+    uint32_t timestampMs = 0;
+    String source;
+    bool valid = false;
+  };
+  // Only a declared signed grid measurement may feed the PID, never arbitrary watts.
+  PowerSample gridPowerSample(const String &sensorId, const String &variable, uint32_t now);
+  // Resolve one configured JSY channel by usage, never by physical channel number.
+  // Missing, stale or ambiguous assignments return NAN; a real zero stays valid.
+  float jsyRoleValue(const String &role, const String &metric, const String &actuatorId = "");
   String detectedDs18b20Json();
   String ds18b20StatusJson();
   bool assignDs18b20(const String &sensorId, const String &address);
   bool reconfigureJsyTo19200();
   void reloadConfiguration();
+  void refreshMqttProduction();
+  bool receiveMqttProduction(const String &payload);
+  void mqttProductionToJson(JsonObject out);
+  void mqttProductionSensorToJson(JsonArray out);
   bool updateRemoteSensor(const String &sourceMac, const EspNowSensorPacket &packet);
   bool updateRemoteSensorFast(const String &sourceMac, const EspNowFastSensorPacket &packet);
   bool updateRemoteSensorDiscovery(const String &sourceMac, const EspNowSensorDiscoveryPacket &packet);
@@ -53,9 +68,14 @@ public:
     int8_t rssiDbm = 0;
     uint8_t valueCount = 0;
     EspNowSensorValue values[16]{};
+    uint32_t valueUpdatedMs[16]{};
   };
 
 private:
+  String mqttProductionTopic;
+  float mqttProductionW = NAN;
+  bool mqttProductionReceived = false;
+  void applyMqttProduction();
   static const uint8_t MAX_REMOTE_SENSORS = 16;
   static const uint8_t MAX_REMOTE_SENSOR_VALUES = 16;
   static const uint32_t REMOTE_SENSOR_TIMEOUT_MS = 30000UL;
@@ -77,7 +97,7 @@ private:
   void applyRemoteSensorToState(const RemoteSensorRuntime &sensor);
   void applyRemoteSensorLostToState(const RemoteSensorRuntime &sensor);
   void applyRemoteValueToState(const RemoteSensorRuntime &sensor, const EspNowSensorValue &value);
-  void mergeRemoteValue(RemoteSensorRuntime &sensor, const EspNowSensorValue &value);
+  void mergeRemoteValue(RemoteSensorRuntime &sensor, const EspNowSensorValue &value, bool sample = true);
   JsonObject configuredEspNowSensorFor(const RemoteSensorRuntime &sensor);
   bool syncConfiguredRemoteSensorMetadata(const RemoteSensorRuntime &sensor);
   uint32_t getEspNowSensorTimeoutMs(uint8_t sensorType);

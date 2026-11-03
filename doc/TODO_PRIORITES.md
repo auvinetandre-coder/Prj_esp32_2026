@@ -1,70 +1,91 @@
-# TODO_PRIORITES.md
+# Priorités de stabilisation — 20 octobre 2026
 
-## P1 - Validation Recovery/Main
+Référence : [audit courant](AUDIT_2026-10-20.md), [état du projet](ETAT_DU_PROJET.md). Les lots suivants précèdent les extensions de la [roadmap](ROADMAP.md). Une case cochée ci-dessous signifie code présent et test logiciel indiqué, jamais validation matérielle implicite.
 
-- Valider le CSV `partitions_recovery_main_4MB.csv`.
-- Verifier le CSV reellement utilise dans `build/esp32.esp32.esp32/partitions.csv`.
-- Verifier `factory = 0x110000`, `ota_0 = 0x1E0000`, LittleFS = `0x100000`.
-- Compiler recovery et main.
-- Confirmer que le recovery et le main tiennent dans leurs partitions.
-- Tester boot recovery puis boot main.
-- Tester reboot normal du main sur `ota_0` et passage recovery explicite depuis le main.
+## Corrections présentes à confirmer sur banc
 
-## P2 - BootManager
+- [x] OFF demandé à l'entrée simulation ; `test_actuator_simulation.js` réussi.
+- [x] PID invalide vers zéro/reset, commandes non finies et garde SSR ; `test_ssr_nan.js` réussi.
+- [x] Manuel Web maintenu, OFF et retour AUTO, libération de l'ancienne cible de règle ; `test_manual_actuator.js` réussi.
+- [x] Règles vides, routage Linky dédié, gardes et calcul par nouvelle lecture ; `test_linky_routing.js` réussi.
+- [x] Correction ciblée des fausses pertes de nœud ; `test_espnow_node_liveness.js` réussi.
+- [x] Sauvegarde production MQTT ; tests locaux correspondants reussis.
+- [ ] Confirmer ces chemins sur ESP, GPIO observés et radio réelle ; inclure réception/retour des capteurs et changements de charge.
 
-- Verifier les informations de partition affichees.
-- Verifier `setNextBootMain()`.
-- Verifier `setNextBootFactory()`.
-- Verifier le bouton ou endpoint de passage en recovery.
+## Lot 1 — Sorties et propriété des commandes (P1)
 
-## P3 - Recovery minimal
+- [ ] Couper anciennes broches/timers/interruptions avant suppression ou changement d'affectation.
+- [ ] Définir et appliquer la priorité système OFF avant toute demande non nulle.
+- [ ] Inhiber les commandes radio simulées non nulles et traiter la coupure distante avec expiration locale.
+- [ ] Arbitrer commandes reçues et automate local, notamment sur NODE_ACTUATOR/NODE_MIXED.
 
-- Tester AP `RouteurSolaire_Recovery`.
-- Tester Wi-Fi local si identifiants disponibles.
-- Tester upload local `firmware.bin` vers `ota_0`.
-- Verifier que `factory`, NVS et `/config` restent intacts.
-- Surveiller la taille du recovery.
+Réception : sortie ON puis simulation ; règle vraie en OFF ; suppression/changement GPIO ; commande distante non écrasée hors politique explicite. Tester SSR1, SSR2, triac et cible personnalisée.
 
-## P4 - AutomateManager
+## Lot 2 — Configuration et maintenance (P1)
 
-- Documenter son role exact cote main.
-- Identifier les automatismes existants a rattacher.
-- Garantir que SafetyManager garde la priorite.
-- Interdire toute dependance recovery vers AutomateManager.
+- [ ] Sauvegarde vérifiée/récente des cinq JSON, sans obligation d'avoir un Wi-Fi configuré.
+- [ ] Préserver l'ancienne copie NVS jusqu'au succès de la nouvelle ; restauration par intégrité de chaque fichier.
+- [ ] Écriture LittleFS transactionnelle ; commit RAM après succès persistant et contrôle des tailles écrites.
+- [ ] Supprimer le formatage implicite au montage normal ; conserver un diagnostic exploitable.
+- [ ] Protéger les écritures recovery et valider l'image LittleFS avant annonce de succès.
+- [ ] Distinguer scripts USB d'installation/maintenance et mise à jour utilisateur via recovery explicite.
 
-## P5 - Alleger `webUi.loop`
+Réception : comparaison des cinq JSON avant/après, y compris règle seule modifiée, AP seul, espace insuffisant, coupure et fichier individuel absent ; refuser vide/tronqué/arbitraire. Confirmer `factory` préservée, firmware dans `ota_0`, reboot normal sur `ota_0` et accès recovery explicite.
 
-- Supprimer les traitements bloquants.
-- Limiter les recalculs inutiles.
-- Garder `/api/state` rapide.
-- Verifier heap et duree de loop.
+## Lot 3 — ESP-NOW et redondance (P1)
 
-## P6 - Dashboard cockpit energie
+- [ ] TTL indépendant des uptimes ; politique séquence/epoch et commandes retardées/rejouées.
+- [ ] Heartbeats MASTER/BACKUP filtrés et réception centralisée dans RedundancyManager.
+- [ ] Double MASTER persistant et politique explicite de démarrage BACKUP sans heartbeat antérieur.
+- [ ] Contrôle de présence cohérent sur tous les chemins, dont rebouclage `millis()` ; la correction de perte ciblée ne suffit pas.
+- [ ] Messages capteurs historiques alignés sur SensorManager ; callbacks et concurrence bornés.
 
-- Afficher tous les capteurs actifs.
-- Afficher achat/injection, routage, PID et temperature.
-- Corriger les cas JSY/Linky/DS18B20 ESP-NOW.
-- Garder le dashboard leger.
+Réception : MASTER + deux BACKUP, deux MASTER, boots décalés, retour ancien MASTER, interruption réelle radio et horloge rebouclée. Import manuel seulement ; aucun `.bin` par ESP-NOW.
 
-## P7 - ESP-NOW
+## Lot 4 — Réactivité, sécurité et rôles (P1/P2)
 
-- Stabiliser discovery et heartbeat.
-- Ajouter ou verifier versions firmware/LittleFS.
-- Garder l'import manuel.
-- Ne jamais transporter de `.bin`.
+- [ ] Watchdog utile avec supervision capable d'agir malgré un blocage de boucle.
+- [ ] Test Wi-Fi et reconnexion MQTT bornés/non bloquants ; mesurer sous serveur/broker indisponible.
+- [ ] Rôle inconnu refusé ou état sûr explicite, sans conversion MASTER implicite.
+- [ ] Validation GPIO/capacités/conflits ; sécurité adaptée au rôle plutôt qu'aux deux identifiants SSR historiques.
 
-## P8 - MASTER/BACKUP
+Réception : perte réseau/broker, mauvais rôle, nœud capteur sans SSR, conflit UART/OneWire/OLED, broche non utilisable en sortie. Mesurer durée de boucle et délai effectif de coupure.
 
-- Clarifier les roles.
-- Detecter double MASTER.
-- Definir la strategie de bascule.
+## Lot 5 — Règles et contrats API (P2)
 
-## P9 - Audit taille firmware
+- [ ] Décisions par actionneur et arbitrage des conflits ; commandes en watts distinctes des pourcentages.
+- [ ] `setMode` sans sauvegarde répétée ; persistance uniquement sur changement explicite.
+- [ ] Unifier les horaires avec heure valide ; ne pas promettre calendrier/imbrications/variables avant implémentation.
+- [ ] HTTP d'erreur cohérent et vérification `ok` par les formulaires ; configuration non sauvée toujours visible.
+- [ ] Réparer le script réellement embarqué de `/lite`.
 
-- Mesurer main, recovery et LittleFS.
-- Lister les modules optionnels.
-- Ne rien supprimer sans validation.
+Réception : deux sorties/deux actions, 500 W sur 1500 W donnant environ 33,3 %, aucune écriture périodique sans changement, erreur disque/JSON visible et `/lite` valide.
 
-## P10 - Migration ESP32-S3
+## Lot 6 — Dashboard et diagnostic (P2)
 
-- Etudier seulement apres validation Recovery/Main ESP32 4 MB.
+- [ ] Signe PID unique, zéro valide conservé, source/mesure effectivement utilisées.
+- [ ] Mesure absente distincte d'équilibre ; achat réseau distinct de consommation totale.
+- [ ] Bandeaux/alertes rafraîchis sans écraser les contrôles en édition.
+- [ ] Commande demandée/limitée, puissance estimée/mesurée et exécution distante confirmée ou inconnue.
+- [ ] États saturation/oscillation seulement si régulation active ; défaut actif distinct du dernier événement.
+
+Réception : source absente, consigne non nulle, forçage, sécurité et simulation sans navigation ; téléphone et plusieurs compteurs du même type. Voir [cadrage dashboard](DASHBOARD.md).
+
+## Lot 7 — Validation reproductible et évolutions
+
+- [ ] Livrer les sept scripts de régression actuellement présents, dont certains non suivis par Git.
+- [ ] Adapter le smoke dashboard et compléter les tests API (méthodes, données, statuts).
+- [ ] Compiler main/recovery du même état de sources ; tailles, empreintes et CSV réellement utilisé enregistrés.
+- [ ] Mesurer triac/SSR, JSY face à une référence, TIC, sondes critiques, heap/fragmentation et latence API dans la durée.
+- [ ] Après stabilisation seulement : rôles séparés avec migration, bilans persistants, supervision de parc et étude ESP32-S3.
+
+Aucune fonctionnalité supprimée, aucun changement de partition ni réintroduction de GitHub OTA/HTTPS dans la recovery n'est décidé par cette liste.
+
+## Réception MULTI_SINUS — 3 novembre 2026
+
+- [x] Compiler le firmware et vérifier le contenu de l’image LittleFS.
+- [x] Simuler les rapports, transitions, expirations et défauts de cadence.
+- [ ] Mesurer les fronts, la coupure de sécurité, les transitions de simulation et la reconfiguration sous charge réseau.
+- [ ] Comparer les deux polarités du courant et l’énergie délivrée sur charge résistive.
+
+Voir la [procédure sur banc](MULTI_SINUS.md#validation-sur-banc-avant-utilisation).

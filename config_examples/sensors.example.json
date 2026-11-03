@@ -63,7 +63,7 @@
     {
       "id": "sonde1",
       "name": "Sonde 1",
-      "role": "ballon_haut",
+      "role": "temperature_1",
       "address": "",
       "enabled": true,
       "critical": true,
@@ -72,7 +72,7 @@
     {
       "id": "sonde2",
       "name": "Sonde 2",
-      "role": "ballon_milieu",
+      "role": "temperature_2",
       "address": "",
       "enabled": true,
       "critical": false,
@@ -81,7 +81,7 @@
     {
       "id": "sonde3",
       "name": "Sonde 3",
-      "role": "ballon_bas",
+      "role": "temperature_3",
       "address": "",
       "enabled": true,
       "critical": false,

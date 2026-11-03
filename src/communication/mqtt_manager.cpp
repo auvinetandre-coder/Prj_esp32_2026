@@ -15,6 +15,7 @@ void MqttManager::begin() {
 
 void MqttManager::loop(uint32_t now) {
   loadConfig();
+  sensors.refreshMqttProduction();
   state.mqttEnabled = enabled;
   if (!enabled) {
     if (mqtt.connected()) mqtt.disconnect();
@@ -34,6 +35,12 @@ void MqttManager::loop(uint32_t now) {
 
   connectIfNeeded(now);
   if (!mqtt.connected()) return;
+
+  if (productionTopic != subscribedProductionTopic) {
+    if (subscribedProductionTopic.length()) mqtt.unsubscribe(subscribedProductionTopic.c_str());
+    subscribedProductionTopic = "";
+    if (productionTopic.length() && mqtt.subscribe(productionTopic.c_str())) subscribedProductionTopic = productionTopic;
+  }
 
   mqtt.loop();
   if (now - lastPublishMs >= publishIntervalMs) {
@@ -67,6 +74,14 @@ void MqttManager::loadConfig() {
   commandTopic = topics["command"] | topicPath("command");
   actuatorSetTopic = topics["actuatorSet"] | topicPath("actuator/+/set");
   availabilityTopic = topics["availability"] | topicPath("availability");
+  productionTopic = "";
+  if (cfg["productionSensor"]["enabled"] | false) {
+    productionTopic = cfg["productionSensor"]["topic"] | "maison/solax/productionW";
+    productionTopic.trim();
+    if (!productionTopic.length() || productionTopic.indexOf('+') >= 0 || productionTopic.indexOf('#') >= 0 ||
+        productionTopic == stateTopic || productionTopic == commandTopic || productionTopic == availabilityTopic ||
+        productionTopic.startsWith(baseTopic + "/")) productionTopic = "";
+  }
 }
 
 void MqttManager::connectIfNeeded(uint32_t now) {
@@ -116,6 +131,7 @@ bool MqttManager::connect() {
 }
 
 void MqttManager::subscribeTopics() {
+  subscribedProductionTopic = "";
   mqtt.subscribe(commandTopic.c_str());
   mqtt.subscribe(actuatorSetTopic.c_str());
   mqtt.subscribe(topicPath("command/#").c_str());
@@ -126,7 +142,6 @@ void MqttManager::publishStateJson() {
   DynamicJsonDocument doc(2048);
   doc["deviceId"] = state.deviceId;
   doc["moduleName"] = state.moduleName;
-  doc["role"] = RuntimeState::roleToString(state.role);
   doc["safetyLevel"] = state.safetyLevel;
   doc["safetyReason"] = state.safetyReason;
   doc["simulation"] = state.simulationMode;
@@ -191,10 +206,20 @@ void MqttManager::publishText(const String &topic, const String &value) {
 
 void MqttManager::handleMessage(char *topicRaw, byte *payloadRaw, unsigned int length) {
   String topic(topicRaw);
+  // Bound production payloads before allocating; malformed values never become zero.
+  if (productionTopic.length() && topic == productionTopic && length > 64) {
+    sensors.receiveMqttProduction("");
+    return;
+  }
   String payload;
   payload.reserve(length + 1);
   for (unsigned int i = 0; i < length; i++) payload += static_cast<char>(payloadRaw[i]);
   payload.trim();
+
+  if (productionTopic.length() && topic == productionTopic) {
+    sensors.receiveMqttProduction(payload);
+    return;
+  }
 
   if (handleActuatorTopic(topic, payload)) return;
   if (topic == commandTopic || topicMatches(topic, topicPath("command/#"))) {
@@ -221,6 +246,7 @@ bool MqttManager::handleJsonCommand(const String &payload) {
   state.manualCommandPercent = value;
   state.manualCommandSource = "MQTT";
   state.manualCommandReason = String("MQTT ") + actuatorId + " " + state.manualCommand + " " + String(value, 1);
+  state.manualCommandPersistent = false;
   state.manualCommandPending = true;
   state.logEvent("INFO", "MQTT_COMMAND_REQUEST", state.manualCommandReason, "MqttManager");
   return true;
@@ -242,6 +268,7 @@ bool MqttManager::handleActuatorTopic(const String &topic, const String &payload
   state.manualCommandPercent = value;
   state.manualCommandSource = "MQTT";
   state.manualCommandReason = String("MQTT ") + actuatorId + " = " + String(value, 1) + "%";
+  state.manualCommandPersistent = false;
   state.manualCommandPending = true;
   state.logEvent("INFO", "MQTT_COMMAND_REQUEST", state.manualCommandReason, "MqttManager");
   return true;

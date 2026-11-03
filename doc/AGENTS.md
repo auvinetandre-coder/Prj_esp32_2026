@@ -37,7 +37,7 @@ Objectifs prioritaires :
 - Ne jamais remettre GitHub, HTTPS ou logique metier dans le recovery sans nouvelle decision documentee.
 - Toujours preserver le recovery en `factory`.
 - Toujours ecrire le firmware principal uniquement dans `ota_0`.
-- Toujours preserver la compatibilite avec les champs historiques utilises par la WebUI.
+- Migrer les anciens champs de configuration sans perdre leurs valeurs ; publier uniquement le schema courant. Firmware et WebUI sont mis a jour ensemble.
 - Toujours travailler par petites etapes testables.
 - Toujours expliquer les fichiers modifies et les tests a faire.
 
@@ -66,13 +66,11 @@ Le main utilise un seul firmware pour tous les ESP.
 
 Le comportement depend de la configuration locale :
 
-- role de l'ESP ;
 - capteurs actives ;
 - actionneurs actives ;
 - regles ;
 - PID ;
 - reseau ;
-- redondance ;
 - automatisme applicatif.
 
 Ne pas creer plusieurs firmwares principaux specialises sauf demande explicite.
@@ -155,23 +153,9 @@ Regles :
 
 ---
 
-## Roles
+## Configuration des equipements
 
-Roles actuels ou attendus :
-
-- `MASTER`
-- `BACKUP`
-- `STANDALONE`
-- `NODE_SENSOR`
-- `NODE_ACTUATOR`
-- `NODE_MIXED`
-
-Evolution cible :
-
-- role de redondance : `MASTER`, `BACKUP`, `STANDALONE`
-- role fonctionnel : `SENSOR`, `ACTUATOR`, `MIXED`
-
-Ne pas supprimer brutalement les roles historiques.
+Les roles de module et la redondance ont ete supprimes sur demande utilisateur le 21 octobre 2026. Les capteurs, actionneurs et regles actives determinent les capacites. Aucun equipement de chauffage particulier n'est requis. Voir `doc/ROUTAGE_GENERIQUE.md` (ou `ROUTAGE_GENERIQUE.md` depuis ce dossier).
 
 ---
 
@@ -198,12 +182,11 @@ ESP-NOW sert a :
 
 - discovery ;
 - heartbeat ;
-- annonce de roles ;
+- annonce des capacites ;
 - annonce de capteurs ;
 - annonce d'actionneurs ;
 - remontee de mesures ;
 - diagnostics ;
-- supervision MASTER/BACKUP.
 
 ESP-NOW ne doit jamais transporter un firmware `.bin`.
 
@@ -289,7 +272,7 @@ Parametres importants :
 - Kd ;
 - consigne reseau ;
 - deadband ;
-- puissance chauffe-eau max ;
+- puissance sortie max ;
 - filtre mesure ;
 - rampe ;
 - intervalle de calcul ;
@@ -300,7 +283,7 @@ Le dashboard doit afficher :
 - erreur PID ;
 - sortie PID ;
 - commande routeur ;
-- puissance chauffe-eau ;
+- puissance sortie ;
 - etat de saturation ou oscillation si disponible.
 
 ---
@@ -313,7 +296,6 @@ A preserver :
 - coupure en cas d'erreur critique ;
 - surveillance capteurs critiques ;
 - detection perte capteur ;
-- detection double MASTER ;
 - logs d'evenements.
 
 SafetyManager est prioritaire sur AutomateManager, RuleEngine, PIDController et toute commande manuelle risquee.

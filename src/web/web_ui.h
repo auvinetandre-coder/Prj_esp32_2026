@@ -6,7 +6,6 @@
 #include "../runtime/runtime_state.h"
 #include "../network/wifi_manager.h"
 #include "../communication/espnow_manager.h"
-#include "../communication/redundancy_manager.h"
 #include "../sensors/sensor_manager.h"
 #include "../actuators/actuator_manager.h"
 #include "../logic/rule_engine.h"
@@ -17,9 +16,9 @@
 class WebUi {
 public:
   WebUi(ConfigManager &config, RuntimeState &state, SolarWiFiManager &wifi, EspNowManager &espnow,
-        RedundancyManager &redundancy, SensorManager &sensors, ActuatorManager &actuators, RuleEngine &rules, SafetyManager &safety,
+        SensorManager &sensors, ActuatorManager &actuators, RuleEngine &rules, SafetyManager &safety,
         SimulationManager &simulation, StatusLed &statusLed)
-      : config(config), state(state), wifi(wifi), espnow(espnow), redundancy(redundancy),
+      : config(config), state(state), wifi(wifi), espnow(espnow),
         sensors(sensors), actuators(actuators), rules(rules), safety(safety), simulation(simulation), statusLed(statusLed), server(80) {}
   void begin();
   void loop();
@@ -29,7 +28,6 @@ private:
   RuntimeState &state;
   SolarWiFiManager &wifi;
   EspNowManager &espnow;
-  RedundancyManager &redundancy;
   SensorManager &sensors;
   ActuatorManager &actuators;
   RuleEngine &rules;
@@ -46,6 +44,7 @@ private:
   void sendConfig(const char *name);
   void saveConfig(const char *name, const char *path);
   void sendStatusLite();
+  void appendActuatorMeasurements(JsonArray items);
   void sendSystemInfo();
   void appendJsonNumber(String &out, float value, uint8_t decimals = 1);
   bool streamLittleFsFile(const char *path, const char *contentType);

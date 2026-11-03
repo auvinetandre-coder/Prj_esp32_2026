@@ -1,4 +1,6 @@
 #include "config_manager.h"
+#include "legacy_config_migration.h"
+#include "pid_config_migration.h"
 #include <LittleFS.h>
 #include <Preferences.h>
 #include "../build_info.h"
@@ -100,6 +102,56 @@ static bool copyLittleFsFile(const char *from, const char *to) {
   return true;
 }
 
+// Targeted migration: never remove sensor/actuator usage fields named "role".
+static bool removeRetiredSettings(const char *path, JsonObject root) {
+  const char *deviceKeys[] = {"role", "redundancyRole", "functionalRole"};
+  const char *systemKeys[] = {"heartbeatIntervalMs", "takeoverTimeoutMs", "redundancy", "redundancyRole", "functionalRole", "role"};
+  bool changed = false;
+  if (strcmp(path, DEVICE_PATH) == 0) {
+    for (const char *key : deviceKeys) {
+      if (root.containsKey(key)) { root.remove(key); changed = true; }
+    }
+  } else if (strcmp(path, SYSTEM_PATH) == 0) {
+    for (const char *key : systemKeys) {
+      if (root.containsKey(key)) { root.remove(key); changed = true; }
+    }
+  }
+  return changed;
+}
+
+bool ConfigManager::migrateRetiredConfig(const char *path, DynamicJsonDocument &doc) {
+  if (!validateDoc(path, doc)) return false;
+  bool changed = removeRetiredSettings(path, doc.as<JsonObject>());
+  changed |= migrateGenericConfig(path, doc.as<JsonObject>());
+  if (strcmp(path, RULES_PATH) == 0) {
+    DynamicJsonDocument migrated(32768);
+    migrated.set(doc);
+    const bool pidChanged = migratePIDActions(migrated.as<JsonObject>(), system()["router"], sensors());
+    if (migrated.overflowed()) { configLastError = "Migration PID: memoire insuffisante, original conserve"; return false; }
+    if (pidChanged) { doc.set(migrated); changed = true; }
+  }
+  if (doc.overflowed()) { configLastError = "Migration: document trop volumineux"; return false; }
+  if (!changed) return true;
+  // Only replace the original after a complete temporary write.
+  String temporary = String(path) + ".migration.tmp";
+  File file = LittleFS.open(temporary.c_str(), "w");
+  if (!file) { configLastError = String("Migration: ouverture impossible ") + path; Serial.println(configLastError); return false; }
+  size_t expected = measureJsonPretty(doc);
+  size_t written = serializeJsonPretty(doc, file);
+  file.flush();
+  bool complete = written == expected && file.size() == expected;
+  file.close();
+  if (!complete || !LittleFS.rename(temporary.c_str(), path)) {
+    LittleFS.remove(temporary.c_str());
+    configLastError = String("Migration non sauvegardee: ") + path;
+    Serial.println(configLastError);
+    return false;
+  }
+  Serial.print(F("Configuration migree: "));
+  Serial.println(path);
+  return true;
+}
+
 bool ConfigManager::begin() {
   bool ok = loadAll();
   if (ok && systemWifiPresent(systemConfig)) {
@@ -141,6 +193,11 @@ bool ConfigManager::loadAll() {
   ok &= loadOrDefault(SENSORS_PATH, sensorsConfig, &ConfigManager::defaultSensors);
   ok &= loadOrDefault(ACTUATORS_PATH, actuatorsConfig, &ConfigManager::defaultActuators);
   ok &= loadOrDefault(RULES_PATH, rulesConfig, &ConfigManager::defaultRules);
+  ok &= migrateRetiredConfig(DEVICE_PATH, deviceConfig);
+  ok &= migrateRetiredConfig(SYSTEM_PATH, systemConfig);
+  ok &= migrateRetiredConfig(SENSORS_PATH, sensorsConfig);
+  ok &= migrateRetiredConfig(ACTUATORS_PATH, actuatorsConfig);
+  ok &= migrateRetiredConfig(RULES_PATH, rulesConfig);
   return ok;
 }
 
@@ -308,6 +365,17 @@ bool ConfigManager::replaceFile(const char *path, const String &json, bool allow
     allowWifiClearConfigWrite = previousAllowWifiClear;
     return false;
   }
+  if (strcmp(path, SENSORS_PATH) == 0) {
+    for (JsonObject sensor : temp["sensors"].as<JsonArray>()) {
+      String type = sensor["type"] | "";
+      if (type != "JSY-MK-194T" && type != "TIC Linky" && type != "DS18B20") {
+        configLastError = "Type de capteur non pris en charge: " + type;
+        allowEmptyConfigWrite = previousAllowEmpty;
+        allowWifiClearConfigWrite = previousAllowWifiClear;
+        return false;
+      }
+    }
+  }
   if (strcmp(path, SYSTEM_PATH) == 0) {
     if (allowWifiClear) {
       Serial.println(F("WiFi config clear explicite autorise pour /config/system.json."));
@@ -315,6 +383,18 @@ bool ConfigManager::replaceFile(const char *path, const String &json, bool allow
       preserveExistingWifiConfig(temp);
     }
     migrateSystemWifiConfig(temp, "save");
+  }
+  removeRetiredSettings(path, temp.as<JsonObject>());
+  migrateGenericConfig(path, temp.as<JsonObject>());
+  if (strcmp(path, RULES_PATH) == 0) migratePIDActions(temp.as<JsonObject>(), system()["router"], sensors());
+  if (strcmp(path, SYSTEM_PATH) == 0 && temp["router"].is<JsonObject>() && !temp["router"]["actuatorId"].is<const char *>()) {
+    temp["router"]["actuatorId"] = routingActuatorId();
+  }
+  if (temp.overflowed()) {
+    configLastError = "Configuration trop volumineuse";
+    allowEmptyConfigWrite = previousAllowEmpty;
+    allowWifiClearConfigWrite = previousAllowWifiClear;
+    return false;
   }
   if (!validateDoc(path, temp)) {
     configLastError = String("Structure invalide pour ") + path;
@@ -404,6 +484,9 @@ bool ConfigManager::loadOrDefault(const char *path, DynamicJsonDocument &doc, vo
 }
 
 bool ConfigManager::saveDoc(const char *path, DynamicJsonDocument &doc) {
+  removeRetiredSettings(path, doc.as<JsonObject>());
+  migrateGenericConfig(path, doc.as<JsonObject>());
+  if (strcmp(path, RULES_PATH) == 0) migratePIDActions(doc.as<JsonObject>(), system()["router"], sensors());
   configLastError = "";
   if (doc.overflowed()) {
     configLastError = String("Document JSON trop grand pour ") + path;
@@ -446,7 +529,7 @@ void ConfigManager::ensureConfigDir() {
 bool ConfigManager::validateDoc(const char *path, DynamicJsonDocument &doc) {
   if (!doc.is<JsonObject>()) return false;
   if (!doc["version"].is<int>()) return false;
-  if (strcmp(path, DEVICE_PATH) == 0) return doc["role"].is<const char *>() && doc["deviceName"].is<const char *>();
+  if (strcmp(path, DEVICE_PATH) == 0) return doc["deviceName"].is<const char *>();
   if (strcmp(path, SYSTEM_PATH) == 0) {
     bool hasWifi = doc["wifi"].is<JsonObject>() || doc["wifiSsid"].is<const char *>();
     bool hasFallback = doc["fallbackAp"].is<JsonObject>() || doc["fallbackApSsid"].is<const char *>();
@@ -454,7 +537,7 @@ bool ConfigManager::validateDoc(const char *path, DynamicJsonDocument &doc) {
   }
   if (strcmp(path, SENSORS_PATH) == 0) return doc["sensors"].is<JsonArray>() && doc["oneWireBus"].is<JsonObject>() && doc["ds18b20"].is<JsonArray>();
   if (strcmp(path, ACTUATORS_PATH) == 0) return doc["actuators"].is<JsonArray>();
-  if (strcmp(path, RULES_PATH) == 0) return doc["rules"].is<JsonArray>() && doc["rules"].size() > 0;
+  if (strcmp(path, RULES_PATH) == 0) return doc["rules"].is<JsonArray>();
   return false;
 }
 
@@ -533,7 +616,8 @@ bool ConfigManager::configLooksEmpty(const char *path, DynamicJsonDocument &doc)
     return sensorsArr.size() == 0 && dsArr.size() == 0;
   }
   if (strcmp(path, ACTUATORS_PATH) == 0) return doc["actuators"].as<JsonArray>().size() == 0;
-  if (strcmp(path, RULES_PATH) == 0) return doc["rules"].as<JsonArray>().size() == 0;
+  // An explicitly saved empty rule list is valid: deleting the last rule must persist.
+  if (strcmp(path, RULES_PATH) == 0) return !doc["rules"].is<JsonArray>();
   return false;
 }
 
@@ -809,6 +893,10 @@ bool ConfigManager::normalizeSystemConfig() {
     mqtt["publishIndividualTopics"] = true;
     changed = true;
   }
+  JsonObject production = mqtt["productionSensor"].is<JsonObject>() ? mqtt["productionSensor"].as<JsonObject>() : mqtt["productionSensor"].to<JsonObject>();
+  if (!production["enabled"].is<bool>()) { production["enabled"] = false; changed = true; }
+  if (!production["topic"].is<const char *>()) { production["topic"] = "maison/solax/productionW"; changed = true; }
+  if (!production["timeoutMs"].is<uint32_t>()) { production["timeoutMs"] = 900000UL; changed = true; }
   JsonObject mqttTopics = mqtt["topics"].is<JsonObject>() ? mqtt["topics"].as<JsonObject>() : mqtt["topics"].to<JsonObject>();
   const char *baseTopic = mqtt["baseTopic"] | "routeurSolaire";
   if (!mqttTopics["state"].is<const char *>()) {
@@ -828,6 +916,14 @@ bool ConfigManager::normalizeSystemConfig() {
     changed = true;
   }
   JsonObject router = root["router"].is<JsonObject>() ? root["router"].as<JsonObject>() : root["router"].to<JsonObject>();
+  if (!router["actuatorId"].is<const char *>()) {
+    router["actuatorId"] = "";
+    for (JsonObject actuator : actuators()) {
+      String id = actuator["id"] | "";
+      if (id == legacyRoutingActuatorId() || id == "ssr1_output") { router["actuatorId"] = id; break; }
+    }
+    changed = true;
+  }
   if (!router["mode"].is<const char *>()) { router["mode"] = "AUTO"; changed = true; }
   if (!router["gridPowerSource"].is<const char *>()) { router["gridPowerSource"] = "JSY"; changed = true; }
   if (!router["linkyPowerFactorEstimate"].is<float>() && !router["linkyPowerFactorEstimate"].is<int>()) { router["linkyPowerFactorEstimate"] = 0.95; changed = true; }
@@ -837,7 +933,7 @@ bool ConfigManager::normalizeSystemConfig() {
   if (!router["alphaFilter"].is<float>() && !router["alphaFilter"].is<int>()) { router["alphaFilter"] = 0.25; changed = true; }
   if (!router["maxOutputRampPercentPerSecond"].is<float>() && !router["maxOutputRampPercentPerSecond"].is<int>()) { router["maxOutputRampPercentPerSecond"] = 5; changed = true; }
   else if (fabs((router["maxOutputRampPercentPerSecond"] | 5.0f) - 15.0f) < 0.001f) { router["maxOutputRampPercentPerSecond"] = 5; changed = true; }
-  if (!router["heaterMaxPowerW"].is<float>() && !router["heaterMaxPowerW"].is<int>()) { router["heaterMaxPowerW"] = router["ssr1MaxW"] | 1500; changed = true; }
+  if (!router["outputMaxPowerW"].is<float>() && !router["outputMaxPowerW"].is<int>()) { router["outputMaxPowerW"] = router["ssr1MaxW"] | 1500; changed = true; }
   if (!router["kp"].is<float>() && !router["kp"].is<int>()) { router["kp"] = 0.02; changed = true; }
   else if (fabs((router["kp"] | 0.02f) - 0.08f) < 0.0001f) { router["kp"] = 0.02; changed = true; }
   if (!router["ki"].is<float>() && !router["ki"].is<int>()) { router["ki"] = 0.002; changed = true; }
@@ -860,8 +956,8 @@ bool ConfigManager::normalizeSystemConfig() {
     JsonObject temp = tempSeries.add<JsonObject>();
     temp["sourceType"] = "energy";
     temp["sourceId"] = "energy";
-    temp["valueKey"] = "tankTempC";
-    temp["label"] = "Ballon";
+    temp["valueKey"] = "primaryTemperatureC";
+    temp["label"] = "Temperature";
     temp["unit"] = "C";
     temp["color"] = "#38bdf8";
     JsonObject energyGraph = graphs.add<JsonObject>();
@@ -1063,21 +1159,6 @@ bool ConfigManager::normalizeActuatorsConfig() {
   JsonArray arr = actuatorsConfig["actuators"].as<JsonArray>();
 
   for (JsonObject actuator : arr) {
-    String id = actuator["id"] | "";
-
-    if (id == "ssr1_water_heater") {
-      int gpio = actuator["gpio"] | 5;
-      if (gpio == 26) {
-        actuator["gpio"] = 5;
-        changed = true;
-      }
-    } else if (id == "ssr2_aux") {
-      int gpio = actuator["gpio"] | 17;
-      if (gpio == 25) {
-        actuator["gpio"] = 17;
-        changed = true;
-      }
-    }
     if (!actuator["activeHigh"].is<bool>()) {
       actuator["activeHigh"] = true;
       changed = true;
@@ -1118,8 +1199,7 @@ void ConfigManager::printConfigSummary() {
   Serial.println(F("=== Config summary ==="));
   Serial.print(F("Device: "));
   Serial.print(device()["deviceName"] | device()["name"] | "?");
-  Serial.print(F(" / role "));
-  Serial.println(device()["role"] | "?");
+  Serial.println();
   Serial.print(F("WiFi SSID: "));
   {
     const char *modernSsid = system()["wifi"]["ssid"] | "";
@@ -1143,7 +1223,6 @@ void ConfigManager::defaultDevice() {
   root["nodeId"] = 0;
   root["deviceName"] = "Routeur solaire ESP32";
   root["name"] = "Routeur solaire ESP32";
-  root["role"] = "MASTER";
   root["isConfigured"] = false;
   root["firmwareVersion"] = FIRMWARE_VERSION;
   root["criticalActuatorOwner"] = "";
@@ -1158,8 +1237,6 @@ void ConfigManager::defaultSystem() {
   root["fallbackApSsid"] = DEFAULT_AP_SSID;
   root["fallbackApPassword"] = DEFAULT_AP_PASSWORD;
   root["fallbackIp"] = "192.168.4.1";
-  root["heartbeatIntervalMs"] = 300;
-  root["takeoverTimeoutMs"] = 1000;
   root["simulationMode"] = false;
   JsonObject simulation = root["simulation"].to<JsonObject>();
   simulation["enabled"] = false;
@@ -1169,7 +1246,7 @@ void ConfigManager::defaultSystem() {
   JsonObject safety = root["safety"].to<JsonObject>();
   safety["enabled"] = true;
   safety["blockOnMissingDs18b20"] = true;
-  safety["blockOnMissingTopSensor"] = true;
+  safety["blockOnMissingPrimarySensor"] = true;
   safety["blockOnMissingJsy"] = true;
   safety["blockOnMissingJsyAndTic"] = true;
   safety["warningOnlyOnMissingSensors"] = false;
@@ -1206,6 +1283,10 @@ void ConfigManager::defaultSystem() {
   mqtt["publishIntervalMs"] = 5000;
   mqtt["retain"] = false;
   mqtt["publishIndividualTopics"] = true;
+  JsonObject production = mqtt["productionSensor"].to<JsonObject>();
+  production["enabled"] = false;
+  production["topic"] = "maison/solax/productionW";
+  production["timeoutMs"] = 900000UL;
   JsonObject mqttTopics = mqtt["topics"].to<JsonObject>();
   mqttTopics["state"] = "routeurSolaire/state";
   mqttTopics["command"] = "routeurSolaire/command";
@@ -1219,8 +1300,8 @@ void ConfigManager::defaultSystem() {
   router["minInjectionStartW"] = 200;
   router["stopBelowInjectionW"] = 80;
   router["hysteresisW"] = 40;
-  router["tankMaxC"] = 65;
-  router["tankSafetyC"] = 70;
+  router["actuatorId"] = "ssr1_output";
+  router["temperatureMaxC"] = 65;
   router["tempSafetyMaxC"] = 70;
   router["jsyTimeoutMs"] = 3000;
   router["ticTimeoutMs"] = 10000;
@@ -1234,7 +1315,7 @@ void ConfigManager::defaultSystem() {
   router["deadbandW"] = 30;
   router["alphaFilter"] = 0.25;
   router["maxOutputRampPercentPerSecond"] = 5;
-  router["heaterMaxPowerW"] = 1500;
+  router["outputMaxPowerW"] = 1500;
   router["jsyReadIntervalMs"] = 100;
   router["voltageMinV"] = 180;
   router["voltageMaxV"] = 260;
@@ -1255,8 +1336,8 @@ void ConfigManager::defaultSystem() {
   JsonObject temp = tempSeries.add<JsonObject>();
   temp["sourceType"] = "energy";
   temp["sourceId"] = "energy";
-  temp["valueKey"] = "tankTempC";
-  temp["label"] = "Ballon";
+  temp["valueKey"] = "primaryTemperatureC";
+  temp["label"] = "Temperature";
   temp["unit"] = "C";
   temp["color"] = "#38bdf8";
   JsonObject energyGraph = graphs.add<JsonObject>();
@@ -1340,7 +1421,7 @@ void ConfigManager::defaultSensors() {
   JsonArray ds = sensorsConfig["ds18b20"].to<JsonArray>();
   const char *ids[] = {"sonde1", "sonde2", "sonde3"};
   const char *names[] = {"Sonde 1", "Sonde 2", "Sonde 3"};
-  const char *roles[] = {"ballon_haut", "ballon_milieu", "ballon_bas"};
+  const char *roles[] = {"temperature_1", "temperature_2", "temperature_3"};
   for (uint8_t i = 0; i < 3; i++) {
     JsonObject d = ds.add<JsonObject>();
     d["id"] = ids[i];
@@ -1367,7 +1448,7 @@ void ConfigManager::defaultActuators() {
   actuatorsConfig["version"] = CONFIG_VERSION;
   JsonArray arr = actuatorsConfig["actuators"].to<JsonArray>();
   JsonObject a = arr.add<JsonObject>();
-  a["id"] = "ssr1_water_heater"; a["name"] = "SSR1 chauffe-eau principal"; a["type"] = "SSR"; a["source"] = "local";
+  a["id"] = "ssr1_output"; a["name"] = "SSR1 sortie principale"; a["usage"] = "routing"; a["type"] = "SSR"; a["source"] = "local";
   a["gpio"] = 5; a["mode"] = "BURST_FIRE"; a["activeHigh"] = true; a["maxPowerW"] = 1500; a["cycleMs"] = 1000; a["critical"] = true; a["enabled"] = true;
   JsonObject b = arr.add<JsonObject>();
   b["id"] = "ssr2_aux"; b["name"] = "SSR2 auxiliaire"; b["type"] = "SSR"; b["source"] = "local";
@@ -1379,24 +1460,23 @@ void ConfigManager::defaultRules() {
   rulesConfig["version"] = CONFIG_VERSION;
   JsonArray arr = rulesConfig["rules"].to<JsonArray>();
   JsonObject r = arr.add<JsonObject>();
-  r["id"] = "solar_routing_ssr1"; r["name"] = "Routage solaire chauffe-eau SSR1"; r["enabled"] = true; r["priority"] = 10; r["logic"] = "AND";
+  r["id"] = "solar_routing_ssr1"; r["name"] = "Routage solaire charge SSR1"; r["enabled"] = true; r["priority"] = 10; r["logic"] = "AND";
   JsonArray c = r["conditions"].to<JsonArray>();
-  JsonObject c1 = c.add<JsonObject>(); c1["id"] = "cond_surplus"; c1["source"] = "JSY-MK-194T"; c1["measure"] = "injectionW"; c1["type"] = "number"; c1["operator"] = ">"; c1["value"] = 200; c1["unit"] = "W";
   JsonObject c2 = c.add<JsonObject>(); c2["id"] = "cond_sonde1_temp"; c2["source"] = "sonde1"; c2["measure"] = "temperatureC"; c2["type"] = "number"; c2["operator"] = "<"; c2["value"] = 65; c2["unit"] = "C";
   JsonObject c3 = c.add<JsonObject>(); c3["id"] = "cond_sonde2_temp"; c3["source"] = "sonde2"; c3["measure"] = "temperatureC"; c3["type"] = "number"; c3["operator"] = "<"; c3["value"] = 65; c3["unit"] = "C";
   JsonObject c4 = c.add<JsonObject>(); c4["id"] = "cond_sonde3_temp"; c4["source"] = "sonde3"; c4["measure"] = "temperatureC"; c4["type"] = "number"; c4["operator"] = "<"; c4["value"] = 65; c4["unit"] = "C";
   JsonObject c5 = c.add<JsonObject>(); c5["id"] = "cond_safety_ok"; c5["source"] = "Securite"; c5["measure"] = "safetyLevel"; c5["type"] = "enum"; c5["operator"] = "=="; c5["value"] = "OK";
   JsonArray a = r["actions"].to<JsonArray>();
-  JsonObject a1 = a.add<JsonObject>(); a1["actuatorId"] = "ssr1_water_heater"; a1["command"] = "setPowerFromSurplus"; a1["regulation"] = "PID"; a1["maxHeaterPowerW"] = 1500;
+  JsonObject a1 = a.add<JsonObject>(); a1["actuatorId"] = "ssr1_output"; a1["command"] = "setPowerFromSurplus"; a1["regulation"] = "PID"; a1["maxOutputPowerW"] = 1500;
 
   JsonObject s = arr.add<JsonObject>();
-  s["id"] = "tank_temperature_safety"; s["name"] = "Securite temperature ballon"; s["enabled"] = true; s["priority"] = 100; s["logic"] = "OR";
+  s["id"] = "temperature_safety"; s["name"] = "Securite temperature equipement"; s["enabled"] = true; s["priority"] = 100; s["logic"] = "OR";
   JsonArray sc = s["conditions"].to<JsonArray>();
   JsonObject sc1 = sc.add<JsonObject>(); sc1["id"] = "cond_safety_sonde1"; sc1["source"] = "sonde1"; sc1["measure"] = "temperatureC"; sc1["type"] = "number"; sc1["operator"] = ">="; sc1["value"] = 70; sc1["unit"] = "C";
   JsonObject sc2 = sc.add<JsonObject>(); sc2["id"] = "cond_safety_sonde2"; sc2["source"] = "sonde2"; sc2["measure"] = "temperatureC"; sc2["type"] = "number"; sc2["operator"] = ">="; sc2["value"] = 70; sc2["unit"] = "C";
   JsonObject sc3 = sc.add<JsonObject>(); sc3["id"] = "cond_safety_sonde3"; sc3["source"] = "sonde3"; sc3["measure"] = "temperatureC"; sc3["type"] = "number"; sc3["operator"] = ">="; sc3["value"] = 70; sc3["unit"] = "C";
   JsonArray sa = s["actions"].to<JsonArray>();
-  JsonObject sa1 = sa.add<JsonObject>(); sa1["actuatorId"] = "ssr1_water_heater"; sa1["command"] = "stop"; sa1["value"] = 0;
+  JsonObject sa1 = sa.add<JsonObject>(); sa1["actuatorId"] = "ssr1_output"; sa1["command"] = "stop"; sa1["value"] = 0;
   JsonObject sa2 = sa.add<JsonObject>(); sa2["actuatorId"] = "ssr2_aux"; sa2["command"] = "stop"; sa2["value"] = 0;
-  JsonObject sa4 = sa.add<JsonObject>(); sa4["command"] = "setSafetyWarning"; sa4["message"] = "Temperature ballon depassee";
+  JsonObject sa4 = sa.add<JsonObject>(); sa4["command"] = "setSafetyWarning"; sa4["message"] = "Temperature equipement depassee";
 }

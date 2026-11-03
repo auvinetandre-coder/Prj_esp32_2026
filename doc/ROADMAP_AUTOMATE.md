@@ -1,4 +1,10 @@
-# ROADMAP.md - Feuille de route RouteurSolaireESP32
+# Feuille de route AutomateManager / RuleEngine
+
+## Statut — 20 octobre 2026
+
+Feuille de route spécialisée, subordonnée aux [priorités globales](TODO_PRIORITES.md). AutomateManager, son état API, l'éditeur de règles, le manuel Web maintenu et l'action Linky existent. Les rubriques suivantes restent un cadrage : « préparer/supporter » ne signifie ni absence totale de code ni fonction validée. État courant et limites dans [AUTOMATE_RULEENGINE.md](AUTOMATE_RULEENGINE.md) et l'[audit](AUDIT_2026-10-20.md).
+
+Avant les groupes imbriqués/variables/calendrier : fiabiliser OFF et commandes radio, produire des décisions par actionneur, distinguer watts/pourcentages, éviter les écritures `setMode` périodiques et définir une heure valide commune. `SolarRouter` n'est pas appelé dans la boucle active ; `errorDetected()` reste un stub retournant `false`.
 
 ## P1 - Stabilisation Recovery/Main
 
@@ -35,10 +41,10 @@
 
 ## P4 - Firmware principal et AutomateManager
 
-- creer `AutomateManager` dans le firmware principal uniquement ;
+- stabiliser `AutomateManager` deja present dans le firmware principal uniquement ;
 - clarifier son role de machine d'etat centrale ;
-- definir les etats `BOOT`, `INIT`, `IDLE`, `AUTO_ROUTING`, `MANUAL_FORCE`, `SCHEDULE_FORCE`, `SAFETY`, `ERROR`, `RECOVERY_REQUEST` ;
-- centraliser l'arbitrage entre securite, erreur, recovery, manuel, planning, regles et routage automatique ;
+- definir les etats `BOOT`, `INIT`, `IDLE`, `AUTO_ROUTING`, `MANUAL_FORCE`, `SAFETY`, `ERROR`, `RECOVERY_REQUEST` ;
+- centraliser l'arbitrage entre securite, erreur, recovery, manuel, regles et routage automatique ;
 - garder `SafetyManager` prioritaire sur toutes les commandes ;
 - conserver `RuleEngine`, `SolarRouter` et `PIDController` comme modules metier distincts ;
 - faire passer la commande finale normalisee par `AutomateManager` avant `ActuatorManager` ;
@@ -50,7 +56,7 @@
 
 ## P5 - RuleEngine configurable WebUI
 
-- preparer le moteur de regles utilisateur ;
+- stabiliser le moteur et l'editeur de regles utilisateur deja presents ;
 - permettre a terme des regles `SI / ALORS / SINON` ;
 - supporter conditions capteurs, conditions systeme et conditions temporelles ;
 - supporter groupes `ET / OU` ;
@@ -68,7 +74,7 @@
 
 - afficher tous les capteurs via SensorManager ;
 - corriger les mappings ESP-NOW ;
-- afficher achat, injection, routage et temperature ballon ;
+- afficher achat, injection, routage et temperature equipement ;
 - afficher l'etat AutomateManager quand disponible ;
 - ajouter graphes PID ;
 - fiabiliser personnalisation dashboard ;

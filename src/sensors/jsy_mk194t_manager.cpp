@@ -28,6 +28,8 @@ void JSYMK194TManager::readFrame(uint32_t now) {
   }
 
   if (!waiting && now - lastRequestMs >= readIntervalMs) {
+    // Ne pas melanger une reponse tardive avec la prochaine transaction.
+    while (Serial2.available()) Serial2.read();
     sendRequest();
     lastRequestMs = now;
     waiting = true;
@@ -35,12 +37,28 @@ void JSYMK194TManager::readFrame(uint32_t now) {
     expectedLen = 0;
   }
 
-  while (Serial2.available() && rxLen < sizeof(rx)) {
+  while (waiting && Serial2.available() && rxLen < sizeof(rx)) {
     rx[rxLen++] = Serial2.read();
-    if (rxLen == 3) expectedLen = 3 + rx[2] + 2;
+    if (rxLen == 3) {
+      // Une exception Modbus contient un code erreur, pas un nombre d'octets.
+      const bool exception = rx[1] == 0x83;
+      const uint16_t frameLength = exception ? 5 : 5U + rx[2];
+      if (rx[0] != modbusAddress || (rx[1] != 0x03 && !exception) ||
+          (!exception && rx[2] != 56) || frameLength > sizeof(rx)) {
+        reading.errorCount++;
+        logError(F("JSY trame invalide"), now);
+        waiting = false;
+        rxLen = 0;
+        expectedLen = 0;
+        break;
+      }
+      expectedLen = frameLength;
+    }
     if (expectedLen && rxLen >= expectedLen) {
       parseFrame(now);
       waiting = false;
+      rxLen = 0;
+      expectedLen = 0;
       break;
     }
   }
@@ -53,12 +71,15 @@ void JSYMK194TManager::readFrame(uint32_t now) {
     state.jsyTimeoutCount = timeoutCount;
     publishRuntime();
     logError(F("JSY timeout Modbus"), now);
+    rxLen = 0;
+    expectedLen = 0;
   }
 }
 
 bool JSYMK194TManager::parseFrame(uint32_t now) {
   const uint32_t pollingMs = lastRequestMs ? now - lastRequestMs : 0;
-  if (rxLen < 61 || rx[0] != modbusAddress || rx[1] != 0x03 || rx[2] != 56) {
+  const bool exception = rxLen == 5 && rx[0] == modbusAddress && rx[1] == 0x83;
+  if (!exception && (rxLen != 61 || rx[0] != modbusAddress || rx[1] != 0x03 || rx[2] != 56)) {
     reading.errorCount++;
     logError(F("JSY trame invalide"), now);
     return false;
@@ -71,6 +92,11 @@ bool JSYMK194TManager::parseFrame(uint32_t now) {
     crcErrorCount++;
     state.jsyCrcErrorCount = crcErrorCount;
     logError(F("JSY CRC invalide"), now);
+    return false;
+  }
+  if (exception) {
+    reading.errorCount++;
+    logError(F("JSY exception Modbus"), now);
     return false;
   }
 
@@ -129,25 +155,44 @@ bool JSYMK194TManager::parseFrame(uint32_t now) {
   state.jsyImportEnergyWh2 = data[11] / 10.0f;
   state.jsyExportEnergyWh2 = data[13] / 10.0f;
   state.jsyPollingMs = pollingMs;
+  channelPower[0] = activePower1;
+  channelPower[1] = activePower2;
+  // Keep the meter's active watts separate from the historical U*I*PF fallback.
+  channelMeasuredPower[0] = state.jsyMeasuredPowerW1 = injection ? -power : power;
+  channelMeasuredPower[1] = state.jsyMeasuredPowerW2 = injection2 ? -power2 : power2;
+  channelCurrent[0] = current1;
+  channelCurrent[1] = current2;
+  channelPf[0] = powerFactor1;
+  channelPf[1] = powerFactor2;
+  channelEnergy[0] = state.jsyImportEnergyWh1;
+  channelEnergy[1] = state.jsyImportEnergyWh2;
 
-  if (clamp2Role == "grid") {
+  if (clamp2Role == "grid" && clamp1Role != "grid") {
     reading.voltageV = voltage2ForPower;
     reading.currentA = current2;
     reading.activePowerW = activePower2;
     reading.gridPowerW = activePower2;
     reading.powerFactor = powerFactor2;
     reading.energyDirection = direction2;
-  } else {
+  } else if (clamp1Role == "grid" && clamp2Role != "grid") {
     reading.voltageV = voltage1;
     reading.currentA = current1;
     reading.activePowerW = activePower1;
     reading.gridPowerW = activePower1;
     reading.powerFactor = powerFactor1;
     reading.energyDirection = direction1;
+  } else {
+    reading.voltageV = NAN;
+    reading.currentA = NAN;
+    reading.activePowerW = NAN;
+    reading.gridPowerW = NAN;
+    reading.powerFactor = NAN;
+    reading.energyDirection = "unknown";
   }
   reading.frequencyHz = data[7] / 100.0f;
   reading.available = true;
   reading.lastValidReadMs = now;
+  state.jsyLastError = "";
 
   if (clamp1Role == "production") state.productionW = max(0.0f, activePower1);
   else if (clamp2Role == "production") state.productionW = max(0.0f, activePower2);
@@ -163,11 +208,13 @@ bool JSYMK194TManager::parseFrame(uint32_t now) {
     msg += " P1 U=" + String(voltage1, 1) + "V";
     msg += " I=" + String(current1, 2) + "A";
     msg += " W=" + String(activePower1, 1);
+    msg += " VA=" + String(voltage1 * current1, 1);
     msg += " PF=" + String(powerFactor1, 3);
     msg += " sens=" + direction1;
     msg += " | P2 U=" + String(voltage2ForPower, 1) + "V";
     msg += " I=" + String(current2, 2) + "A";
     msg += " W=" + String(activePower2, 1);
+    msg += " VA=" + String(voltage2ForPower * current2, 1);
     msg += " PF=" + String(powerFactor2, 3);
     msg += " sens=" + direction2;
     if (estimatedPower1) {
@@ -448,12 +495,16 @@ bool JSYMK194TManager::writeBaudrate19200At4800() {
 bool JSYMK194TManager::waitForValidFrame(uint32_t waitMs) {
   uint32_t start = millis();
   uint8_t len = 0;
-  uint8_t expectedLen = 0;
+  uint16_t expectedLen = 0;
   uint8_t buffer[80]{};
   while (millis() - start < waitMs && len < sizeof(buffer)) {
     while (Serial2.available() && len < sizeof(buffer)) {
       buffer[len++] = Serial2.read();
-      if (len == 3) expectedLen = 3 + buffer[2] + 2;
+      if (len == 3) {
+        if (buffer[0] != modbusAddress || buffer[1] != 0x03 || buffer[2] != 56) return false;
+        expectedLen = 5U + buffer[2];
+        if (expectedLen > sizeof(buffer)) return false;
+      }
       if (expectedLen && len >= expectedLen) {
         if (len < 61 || buffer[0] != modbusAddress || buffer[1] != 0x03 || buffer[2] != 56) return false;
         uint16_t expected = crc16(buffer, len - 2);
@@ -509,6 +560,16 @@ uint32_t JSYMK194TManager::readU32(const uint8_t *data) {
          static_cast<uint32_t>(data[3]);
 }
 
+float JSYMK194TManager::channelValue(uint8_t index, const String &metric) const {
+  if (index > 1 || !reading.available || !reading.lastValidReadMs || millis() - reading.lastValidReadMs >= 3000UL) return NAN;
+  if (metric == "POWER") return channelPower[index];
+  if (metric == "W_RAW") return channelMeasuredPower[index];
+  if (metric == "CURR") return channelCurrent[index];
+  if (metric == "PF") return channelPf[index];
+  if (metric == "ENERGY_POS") return channelEnergy[index];
+  return NAN;
+}
+
 void JSYMK194TManager::publishRuntime() {
   state.gridVoltageV = reading.voltageV;
   state.gridCurrentA = reading.currentA;
@@ -526,9 +587,18 @@ void JSYMK194TManager::publishRuntime() {
 }
 
 void JSYMK194TManager::logError(const __FlashStringHelper *message, uint32_t now) {
+  state.jsyLastError = String(message);
+  state.jsyLastError += " baud=" + String(baudrate) + " addr=" + String(modbusAddress);
+  state.jsyLastError += " RX=" + String(rxPin) + " TX=" + String(txPin);
+  state.jsyLastError += " len=" + String(rxLen) + " data=";
+  const char hex[] = "0123456789ABCDEF";
+  for (uint8_t i = 0; i < rxLen && i < 12; ++i) {
+    if (i) state.jsyLastError += ' ';
+    state.jsyLastError += hex[rx[i] >> 4];
+    state.jsyLastError += hex[rx[i] & 0x0F];
+  }
   if (now - lastErrorLogMs < 5000) return;
   lastErrorLogMs = now;
-  state.jsyLastError = String(message);
-  Serial.println(message);
-  state.addLog(String(message));
+  Serial.println(state.jsyLastError);
+  state.addLog(state.jsyLastError);
 }

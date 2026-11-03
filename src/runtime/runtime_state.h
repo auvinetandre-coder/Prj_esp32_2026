@@ -5,14 +5,6 @@
 
 class ConfigManager;
 
-enum DeviceRole {
-  ROLE_MASTER,
-  ROLE_BACKUP,
-  ROLE_NODE_SENSOR,
-  ROLE_NODE_ACTUATOR,
-  ROLE_NODE_MIXED
-};
-
 enum LoopPerfModule : uint8_t {
   PERF_SENSOR = 0,
   PERF_ACTUATOR,
@@ -23,7 +15,6 @@ enum LoopPerfModule : uint8_t {
   PERF_MQTT,
   PERF_SAFETY,
   PERF_WIFI,
-  PERF_REDUNDANCY,
   PERF_STATUS_LED,
   PERF_DISPLAY,
   PERF_SIMULATION,
@@ -38,7 +29,6 @@ struct LoopPerfStat {
 };
 
 struct RuntimeState {
-  DeviceRole role = ROLE_MASTER;
   uint8_t nodeId = 0;
   String deviceId;
   String moduleName;
@@ -55,16 +45,9 @@ struct RuntimeState {
   uint32_t lastNtpSyncMs = 0;
   bool espNowReady = false;
   uint32_t lastEspNowSensorReceiveMs = 0;
-  bool isActiveMaster = false;
-  bool masterAlive = false;
-  String activeMasterId = "";
-  uint32_t redundancyEpoch = 0;
-  String redundancyState = "PASSIVE";
-  bool splitBrainDetected = false;
   bool safetyTripped = false;
   String safetyLevel = "OK";
   String safetyReason = "";
-  uint32_t lastMasterHeartbeatMs = 0;
   uint32_t watchdogSeenMs = 0;
 
   float gridPowerW = 0;
@@ -79,6 +62,8 @@ struct RuntimeState {
   float gridFrequencyHz = NAN;
   String gridEnergyDirection = "unknown";
   float jsyImportEnergyWh1 = NAN;
+  float jsyMeasuredPowerW1 = NAN;
+  float jsyMeasuredPowerW2 = NAN;
   float jsyExportEnergyWh1 = NAN;
   float jsyImportEnergyWh2 = NAN;
   float jsyExportEnergyWh2 = NAN;
@@ -107,20 +92,20 @@ struct RuntimeState {
   String ticTariff = "";
   String ticPeriod = "";
   uint32_t lastTicReadMs = 0;
+  uint32_t lastTicPowerReadMs = 0;
   uint16_t ticErrorCount = 0;
   float injectionW = 0;
   float consumptionW = 0;
   float productionW = 0;
-  float batteryVoltageV = NAN;
-  float batteryCurrentA = NAN;
-  float batteryPowerW = NAN;
-  float batterySocPct = NAN;
-  bool batteryOnline = false;
-  uint32_t lastBatteryReadMs = 0;
+  bool mqttProductionEnabled = false;
+  bool mqttProductionAvailable = false;
+  uint32_t lastMqttProductionMs = 0;
+  uint32_t mqttProductionTimeoutMs = 900000;
+  String mqttProductionStatus = "DISABLED";
   float surplusW = 0;
-  float tankTopC = NAN;
-  float tankMiddleC = NAN;
-  float tankBottomC = NAN;
+  float temperature1C = NAN;
+  float temperature2C = NAN;
+  float temperature3C = NAN;
   float ds18b20Temps[3] = {NAN, NAN, NAN};
   bool ds18b20Available[3] = {false, false, false};
   uint32_t ds18b20LastReadMs[3] = {0, 0, 0};
@@ -136,13 +121,14 @@ struct RuntimeState {
   bool ssr1PinHigh = false;
   bool ssr2PinHigh = false;
   bool robotDynPinHigh = false;
-  float heaterPowerW = 0;
+  float outputPowerW = 0;
   float commandPercent = 0;
   String automateState = "BOOT";
   String previousAutomateState = "BOOT";
   String automateReason = "Boot";
   String activePriority = "IDLE";
   String commandSource = "NONE";
+  String commandActuatorId = "";
   bool pidAllowed = false;
   bool routingAllowed = false;
   bool safetyActive = false;
@@ -151,6 +137,8 @@ struct RuntimeState {
   uint8_t ruleCount = 0;
   String activeRule = "";
   bool manualCommandPending = false;
+  bool manualCommandPersistent = false;
+  bool manualCommandSimulationMode = false;
   String manualCommandActuatorId = "";
   String manualCommand = "setPower";
   float manualCommandPercent = 0.0f;
@@ -158,9 +146,15 @@ struct RuntimeState {
   String manualCommandReason = "";
   bool manualAllOffPending = false;
   float pidOutputPercent = 0;
+  bool pidActive = false;
   bool pidEnabled = true;
   float pidErrorW = 0;
+  float pidGridSetpointW = NAN;
+  float pidMeasuredW = NAN, pidDeadbandW = 30;
+  float pidKp = 0, pidKi = 0, pidKd = 0, pidRamp = 5, pidDrop = 100;
+  String pidSensorSource;
   String pidStatus = "IDLE";
+  String pidContextId;
   String systemMode = "AUTO";
   bool simulationMode = false;
   String simulationType = "manual";
@@ -195,7 +189,6 @@ struct RuntimeState {
     {"mqtt.loop", 0, 0, 0},
     {"safety.loop", 0, 0, 0},
     {"wifi.loop", 0, 0, 0},
-    {"redundancy.loop", 0, 0, 0},
     {"statusLed.loop", 0, 0, 0},
     {"display.loop", 0, 0, 0},
     {"simulation.loop", 0, 0, 0}
@@ -219,8 +212,4 @@ struct RuntimeState {
   void toJson(JsonObject out, bool includeLogs);
   void performanceToJson(JsonObject out);
   void recordLoopPerf(LoopPerfModule module, uint32_t elapsedMs);
-  static DeviceRole roleFromString(const String &value);
-  static const char *roleToString(DeviceRole role);
-  static const char *redundancyRoleToString(DeviceRole role);
-  static const char *functionalRoleToString(DeviceRole role);
 };

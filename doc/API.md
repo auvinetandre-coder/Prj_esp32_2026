@@ -1,4 +1,18 @@
+Evolution du 21 octobre 2026 : voir [Routage generique](ROUTAGE_GENERIQUE.md) pour les nouveaux champs et la migration.
+
 # API.md - Contrat API RouteurSolaireESP32
+
+Mise a jour du 21 octobre 2026 : roles et redondance supprimes du firmware, des configurations actives, des API et de la WebUI ; onglet Secours retire. Voir [le contrat actuel et la migration](SUPPRESSION_ROLES.md). Les observations datees du 20 octobre ci-dessous sont historiques pour ces points.
+
+Relecture du 20 octobre 2026 : `/api/state` et `/api/status-lite` appellent `sendStatusLite()` dans `src/web/web_ui.cpp`. Les champs historiques à plat coexistent avec `energy`, `pid`, `sensors`, `actuators`, `automate`, `mqttProduction`, `systemHealth` et `performance` ; les préserver. Les exemples sont partiels ; les sections « recommandée » et maintenance expriment aussi des cibles, pas un schéma garanti. Voir le [bilan](ETAT_DU_PROJET.md), l'[audit courant](AUDIT_2026-10-20.md) et les [routes ESP-NOW](ESP_NOW.md#api-présentes-dans-le-main).
+
+## Authentification et validité
+
+Les routes de configuration/commande du main suivent `requireAuth()` et `system.webAuth` ; l'authentification est activée par défaut. Cela ne protège pas les routes de la factory recovery, dont l'authentification reste un défaut ouvert.
+
+Les nombres non finis sont convertis en `null` dans les champs numériques construits par `sendStatusLite()`. Le client doit différencier `null`, zéro et absence de propriété. `pidEnabled` existe à plat ; `pid.enabled` n'est pas rempli actuellement. La commande et `outputPowerW` ne sont pas une preuve électrique d'exécution ; vérifier la source et le caractère estimé/mesuré.
+
+`consumptionW` est la partie positive de la puissance réseau, donc l'achat, et non la consommation totale du logement. L'erreur PID firmware vaut `consigne - mesure`. En AUTO, la sélection privilégie la TIC disponible puis le JSY ; le libellé API est encore inféré par type et ne garantit pas l'identifiant exact en présence de plusieurs compteurs identiques.
 
 ## Objectif
 
@@ -14,7 +28,7 @@ Les API existantes doivent rester compatibles quand elles sont encore appelees p
 GET /api/state
 ```
 
-Si `/api/state` est un alias de `/api/status-lite`, conserver cette compatibilite.
+`/api/state` et `/api/status-lite` partagent actuellement le même handler ; conserver cette compatibilité.
 
 ---
 
@@ -48,9 +62,9 @@ Exemple :
 {
   "productionW": 1250,
   "gridPowerW": -350,
-  "heaterPowerW": 600,
-  "heaterPercent": 48,
-  "tankTempC": 54.2
+  "outputPowerW": 600,
+  "outputPercent": 48,
+  "primaryTemperatureC": 54.2
 }
 ```
 
@@ -60,15 +74,14 @@ Exemple :
 
 ```json
 {
-  "enabled": true,
   "mode": "AUTO",
   "targetGridW": 0,
   "deadbandW": 30,
-  "errorW": -350,
+  "errorW": 350,
   "outputPercent": 48,
   "commandPercent": 48,
-  "status": "STABLE",
-  "source": "ESPNOW_JSY"
+  "status": "INJECTION",
+  "source": "LOCAL_JSY"
 }
 ```
 
@@ -98,7 +111,7 @@ Tous les capteurs locaux et ESP-NOW doivent apparaitre ici.
 
 Regles :
 
-- `origin` : `LOCAL` ou `ESP-NOW` ;
+- `origin` : `LOCAL`, `ESP-NOW` ou `MQTT` pour le capteur de production ;
 - `values` doit etre un objet ;
 - valeurs absentes tolerees ;
 - afficher `--` cote WebUI si absent.
@@ -113,7 +126,7 @@ Regles :
   "littlefs": "20260606-07",
   "build": "20260606-07",
   "runningPartition": "ota_0",
-  "bootPartition": "factory",
+  "bootPartition": "ota_0",
   "mainPartition": "ota_0"
 }
 ```
@@ -131,7 +144,7 @@ Exemple :
 ```json
 {
   "runningInfo": "ota_0 @0x120000 size=1966080",
-  "bootInfo": "factory @0x10000 size=1114112",
+  "bootInfo": "ota_0 @0x120000 size=1966080",
   "mainInfo": "ota_0 @0x120000 size=1966080",
   "recoveryAvailable": true,
   "localUpdateOnly": true
@@ -160,3 +173,46 @@ Regles :
 - erreurs JSON claires ;
 - logs detailles ;
 - GitHub OTA cote ESP32 non valide actuellement.
+
+## Commandes actionneurs effectivement présentes
+
+`GET /api/actuators/runtime` expose les sorties ; `POST /api/actuator/command` reçoit des arguments formulaire : `id`, `command`, `value` et, facultativement, `controlMode`.
+
+| Requête | Comportement |
+|---|---|
+| `controlMode=manual`, `value` fini 0..100 | Maintien en RAM d'une cible active ; commande forcée à `setActuatorPercent` |
+| Même mode avec `value=0` | OFF maintenu contre les règles ; distinct du mode système OFF |
+| `controlMode=auto` | Libération du maintien, commande stop, puis retour à l'arbitrage automatique |
+| `controlMode` absent | Demande ponctuelle historique, sans maintien implicite |
+
+Réponse acceptée : HTTP **202**, `{"ok":true,"queued":true}`. Elle indique une demande en attente de l'automate. Erreurs du nouveau chemin : 400 (mode/cible/valeur), 409 (retour AUTO visant une autre cible manuelle), 423 (sécurité critique). Une seule cible peut être maintenue ; pas de persistance du maintien après reboot. L'API ne fournit pas d'acquittement applicatif distant ; `ackStatus` vaut `NOT_SUPPORTED` pour ESP-NOW.
+
+### Diagnostic du mode MULTI_SINUS
+
+Dans `GET /api/actuators/runtime`, une entrée SSR locale en mode `MULTI_SINUS` distingue les champs suivants.
+
+| Champ | Signification |
+| --- | --- |
+| `commandPercent` | Consigne demandée en pourcentage |
+| `outputOn` | État logique courant du GPIO |
+| `theoreticalDutyPercent` | Rapport théorique de la trame active en pourcentage |
+| `timingFault` | Défaut de cadence verrouillé |
+| `missedSteps` | Nombre de pas manqués détectés |
+| `maxTickIntervalUs` | Plus grand intervalle observé entre deux pas, en microsecondes |
+
+Les compteurs de cadence sont communs au timer qui pilote les canaux locaux. La puissance estimée repose sur le rapport théorique et la puissance nominale configurée. Voir le [guide SSR](MULTI_SINUS.md).
+
+## Configuration et production
+
+`GET/POST /api/device`, `/api/system`, `/api/sensors`, `/api/actuators`, `/api/rules` lisent/sauvent les JSON correspondants. Les alias POST `/api/config/<nom>` sont conservés. Une liste `rules:[]` avec son enveloppe/version valide est maintenant acceptée. Les options explicites de suppression capteurs/actionneurs et d'effacement Wi-Fi restent nécessaires lorsqu'elles s'appliquent.
+
+La commande `setPowerFromLinky` publie sa cible effective +100 W dans `gridSetpointW` et `pid.targetGridW`, sans réécrire la consigne configurée. Le paramètre optionnel `maxOutputDropPercentPerSecond` est exposé à plat ; défaut 100 points/s pour la branche Linky, montée selon la rampe existante.
+
+`mqttProduction` et le capteur `mqtt_production` sont décrits dans [MQTT_PRODUCTION.md](MQTT_PRODUCTION.md). `sensors[].values` est un objet, notamment `POWER` pour cette production.
+
+## Limites du contrat à corriger
+
+- Certaines erreurs de sauvegarde produisent encore HTTP 200 avec `ok:false`. Le statut HTTP seul ne suffit pas à conclure au succès.
+- Le chemin manuel historique et les règles mélangent encore watts et pourcentages : ne pas considérer `setPowerWatts` validé de bout en bout.
+- Le mode système OFF n'a pas encore une priorité globale sur toutes les commandes ; le maintien manuel OFF d'une cible est un mécanisme distinct.
+- Le contrôle local du 20 octobre trouve 33 chemins littéraux dans les 61 routes ; il ne vérifie ni méthodes, ni réponses, ni paramètres, ni chemins construits dynamiquement.

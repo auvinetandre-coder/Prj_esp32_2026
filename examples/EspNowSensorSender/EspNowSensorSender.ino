@@ -20,7 +20,7 @@ const uint32_t SEND_INTERVAL_MS = 500;
 EspNowNodeConfig nodeConfig{
   NODE_ID,
   NODE_NAME,
-  static_cast<uint8_t>(ESPNOW_ROLE_PRODUCER | ESPNOW_ROLE_CONSUMER),
+  static_cast<uint8_t>(ESPNOW_SERVICE_PRODUCER | ESPNOW_SERVICE_CONSUMER),
   ESPNOW_CAP_LINKY,
   SENSOR_TYPE,
   3000
@@ -36,8 +36,8 @@ void onDiscovery(void *context, const EspNowDiscoveredNode &node) {
   Serial.print(node.nodeName);
   Serial.print(F(" mac="));
   EspNowNode::printMac(Serial, node.mac);
-  Serial.print(F(" roles=0x"));
-  Serial.print(node.roleFlags, HEX);
+  Serial.print(F(" services=0x"));
+  Serial.print(node.serviceFlags, HEX);
   Serial.print(F(" capabilities=0x"));
   Serial.println(node.capabilityFlags, HEX);
 }
@@ -91,15 +91,6 @@ void buildTemperaturePacket() {
   espNowNode.addValue("HUM", 48.0f, "%");
 }
 
-void buildBatteryPacket() {
-  espNowNode.clearPacket(SENSOR_TYPE, true);
-
-  // Remplacer ces valeurs simulees par les mesures batterie reelles.
-  espNowNode.addValue("BATV", 52.1f, "V");
-  espNowNode.addValue("BATA", -8.4f, "A");
-  espNowNode.addValue("SOC", 76.0f, "%");
-  espNowNode.addValue("BATP", -438.0f, "W");
-}
 
 void setup() {
   Serial.begin(115200);
@@ -118,7 +109,7 @@ void loop() {
     lastSendMs = now;
 
     // Demo par defaut: trame Linky simulee toutes les 500 ms.
-    // Pour transformer ce noeud en JSY, temperature ou batterie, changer les
+    // Pour transformer ce noeud en JSY ou DS18B20, changer les
     // constantes en haut du fichier puis appeler la fonction buildXXXPacket().
     buildLinkyPacket();
     espNowNode.sendSensorPacket(receiverMac);

@@ -1,4 +1,7 @@
+#include "../config/legacy_config_migration.h"
 #include "sensor_manager.h"
+#include <stdlib.h>
+#include <errno.h>
 
 namespace {
 bool espNowRemoteValuePlausible(const EspNowSensorValue &value) {
@@ -10,10 +13,8 @@ bool espNowRemoteValuePlausible(const EspNowSensorValue &value) {
     case VALUE_APPARENT_POWER_VA:
       return fabsf(v) <= 100000.0f;
     case VALUE_VOLTAGE_V:
-    case VALUE_BATTERY_VOLTAGE_V:
       return v >= 0.0f && v <= 300.0f;
     case VALUE_CURRENT_A:
-    case VALUE_BATTERY_CURRENT_A:
       return fabsf(v) <= 500.0f;
     case VALUE_POWER_FACTOR:
       return fabsf(v) <= 1.2f;
@@ -22,7 +23,6 @@ bool espNowRemoteValuePlausible(const EspNowSensorValue &value) {
     case VALUE_TEMPERATURE_C:
       return v >= -30.0f && v <= 125.0f;
     case VALUE_HUMIDITY_PERCENT:
-    case VALUE_BATTERY_SOC_PERCENT:
       return v >= 0.0f && v <= 100.0f;
     case VALUE_STATE_BOOL:
       return fabsf(v) <= 1.2f;
@@ -43,6 +43,7 @@ void SensorManager::begin() {
 }
 
 void SensorManager::loop(uint32_t now) {
+  refreshMqttProduction();
   // En simulation, les valeurs capteurs viennent du SimulationManager.
   // On ne laisse donc pas les lectures physiques ecraser ces valeurs.
   if (state.simulationMode) {
@@ -55,6 +56,123 @@ void SensorManager::loop(uint32_t now) {
   ds18b20.loop(now);
   checkRemoteSensorTimeouts(now);
   applyGridPowerSource();
+  applyMqttProduction();
+}
+
+void SensorManager::refreshMqttProduction() {
+  JsonObject cfg = config.system()["mqtt"]["productionSensor"];
+  String topic = cfg["topic"] | "maison/solax/productionW";
+  topic.trim();
+  const bool enabled = cfg["enabled"] | false;
+  if (enabled != state.mqttProductionEnabled || topic != mqttProductionTopic) {
+    if (state.mqttProductionEnabled && !state.simulationMode) state.productionW = NAN;
+    mqttProductionReceived = false;
+    mqttProductionW = NAN;
+    state.lastMqttProductionMs = 0;
+    state.mqttProductionStatus = enabled ? "WAITING" : "DISABLED";
+  }
+  state.mqttProductionEnabled = enabled;
+  mqttProductionTopic = topic;
+  state.mqttProductionTimeoutMs = constrain(cfg["timeoutMs"] | 900000UL, 1000UL, 86400000UL);
+  String base = config.system()["mqtt"]["baseTopic"] | "routeurSolaire";
+  base.trim();
+  while (base.endsWith("/")) base.remove(base.length() - 1);
+  JsonObject topics = config.system()["mqtt"]["topics"];
+  if (enabled && (!topic.length() || topic.indexOf('+') >= 0 || topic.indexOf('#') >= 0 ||
+      topic.startsWith(base + "/") || topic == String(topics["state"] | "") ||
+      topic == String(topics["command"] | "") || topic == String(topics["availability"] | ""))) {
+    mqttProductionReceived = false;
+    state.mqttProductionStatus = "INVALID_TOPIC";
+  }
+  applyMqttProduction();
+}
+
+void SensorManager::applyMqttProduction() {
+  if (!state.mqttProductionEnabled) {
+    state.mqttProductionAvailable = false;
+    state.mqttProductionStatus = "DISABLED";
+    return;
+  }
+  if (state.simulationMode || !(config.system()["mqtt"]["enabled"] | false)) mqttProductionReceived = false;
+  const bool expired = mqttProductionReceived && millis() - state.lastMqttProductionMs >= state.mqttProductionTimeoutMs;
+  const bool available = mqttProductionReceived && !expired && !state.simulationMode &&
+                        (config.system()["mqtt"]["enabled"] | false);
+  if (expired && state.mqttProductionStatus != "TIMEOUT") {
+    state.logEvent("WARNING", "MQTT_PRODUCTION_TIMEOUT", "Production MQTT sans nouvelle mesure", "SensorManager");
+  }
+  if (expired) state.mqttProductionStatus = "TIMEOUT";
+  else if (state.simulationMode) state.mqttProductionStatus = "SIMULATION";
+  else if (!(config.system()["mqtt"]["enabled"] | false)) state.mqttProductionStatus = "MQTT_DISABLED";
+  else if (available) state.mqttProductionStatus = "OK";
+  else if (state.mqttProductionStatus == "SIMULATION" || state.mqttProductionStatus == "MQTT_DISABLED" || state.mqttProductionStatus == "DISABLED") state.mqttProductionStatus = "WAITING";
+  state.mqttProductionAvailable = available;
+  if (!state.simulationMode) state.productionW = available ? mqttProductionW : NAN;
+}
+
+bool SensorManager::receiveMqttProduction(const String &payload) {
+  if (!state.mqttProductionEnabled || state.simulationMode) return false;
+  char *end = nullptr;
+  errno = 0;
+  const float value = strtof(payload.c_str(), &end);
+  const bool valid = payload.length() > 0 && payload.length() <= 64 &&
+                     end != payload.c_str() && end == payload.c_str() + payload.length() && errno != ERANGE && isfinite(value) && value >= 0 && value <= 100000;
+  if (!valid) {
+    if (state.mqttProductionStatus != "INVALID") {
+      state.logEvent("WARNING", "MQTT_PRODUCTION_INVALID", "Production MQTT invalide: nombre en watts attendu", "SensorManager");
+    }
+    mqttProductionReceived = false;
+    state.mqttProductionStatus = "INVALID";
+    applyMqttProduction();
+    return false;
+  }
+  if (!state.mqttProductionAvailable) {
+    state.logEvent("INFO", "MQTT_PRODUCTION_RECEIVED", "Production MQTT disponible", "SensorManager");
+  }
+  mqttProductionW = value;
+  mqttProductionReceived = true;
+  state.lastMqttProductionMs = millis();
+  applyMqttProduction();
+  return true;
+}
+
+void SensorManager::mqttProductionToJson(JsonObject out) {
+  refreshMqttProduction();
+  out["enabled"] = state.mqttProductionEnabled;
+  out["available"] = state.mqttProductionAvailable;
+  out["status"] = state.mqttProductionStatus;
+  out["topic"] = mqttProductionTopic;
+  out["unit"] = "W";
+  if (state.mqttProductionAvailable) out["powerW"] = mqttProductionW;
+  else out["powerW"] = nullptr;
+  out["lastSeenAgeMs"] = mqttProductionReceived ? millis() - state.lastMqttProductionMs : 4294967295UL;
+  out["timeoutMs"] = state.mqttProductionTimeoutMs;
+}
+
+void SensorManager::mqttProductionSensorToJson(JsonArray out) {
+  refreshMqttProduction();
+  if (!state.mqttProductionEnabled) return;
+  JsonObject item = out.add<JsonObject>();
+  mqttProductionToJson(item);
+  item["id"] = "mqtt_production";
+  item["name"] = "Production solaire MQTT";
+  item["type"] = "Power";
+  item["role"] = "production";
+  item["origin"] = "MQTT";
+  item["ok"] = state.mqttProductionAvailable;
+  item["lost"] = !state.mqttProductionAvailable;
+  item["state"] = state.mqttProductionStatus;
+  item["neverSeen"] = !mqttProductionReceived;
+  item["timedOut"] = state.mqttProductionStatus == "TIMEOUT";
+  if (mqttProductionReceived) {
+    item["ageMs"] = millis() - state.lastMqttProductionMs;
+    item["lastUpdateMs"] = state.lastMqttProductionMs;
+    item["lastSeenMs"] = state.lastMqttProductionMs;
+  } else {
+    item["ageMs"] = nullptr;
+    item["lastUpdateMs"] = nullptr;
+    item["lastSeenMs"] = nullptr;
+  }
+  item["values"]["POWER"] = item["powerW"];
 }
 
 String SensorManager::configuredGridPowerSource() {
@@ -137,6 +255,8 @@ void SensorManager::startMetersForCurrentSource() {
 }
 
 void SensorManager::applyGridPowerSource() {
+  // Resolve the network usage before selecting JSY/TIC; no implicit channel fallback.
+  state.jsyGridPowerW = jsyRoleValue("grid", "POWER");
   String source = configuredGridPowerSource();
   float selected = NAN;
 
@@ -144,10 +264,10 @@ void SensorManager::applyGridPowerSource() {
     if (state.ticAvailable && !isnan(state.ticGridPowerW)) selected = state.ticGridPowerW;
   } else if (source == "AUTO") {
     if (state.ticAvailable && !isnan(state.ticGridPowerW)) selected = state.ticGridPowerW;
-    else if (state.jsyOnline && !isnan(state.jsyGridPowerW)) selected = state.jsyGridPowerW;
+    else if (isfinite(state.jsyGridPowerW)) selected = state.jsyGridPowerW;
   } else {
     source = "JSY";
-    if (state.jsyOnline && !isnan(state.jsyGridPowerW)) selected = state.jsyGridPowerW;
+    if (isfinite(state.jsyGridPowerW)) selected = state.jsyGridPowerW;
   }
 
   if (isnan(selected)) {
@@ -174,6 +294,7 @@ void SensorManager::applyGridPowerSource() {
 }
 
 bool SensorManager::updateRemoteSensor(const String &sourceMac, const EspNowSensorPacket &packet) {
+  if (packet.sensorType != SENSOR_LINKY && packet.sensorType != SENSOR_JSY && packet.sensorType != SENSOR_DS18B20) return false;
   RemoteSensorRuntime *slot = findOrCreateRemoteSensor(packet.nodeId, packet.sensorId, sourceMac);
   if (!slot) {
     state.addLog("ESP-NOW capteur distant ignore: table pleine");
@@ -212,6 +333,7 @@ bool SensorManager::updateRemoteSensor(const String &sourceMac, const EspNowSens
 }
 
 bool SensorManager::updateRemoteSensorFast(const String &sourceMac, const EspNowFastSensorPacket &packet) {
+  if (packet.sensorType != SENSOR_LINKY && packet.sensorType != SENSOR_JSY && packet.sensorType != SENSOR_DS18B20) return false;
   RemoteSensorRuntime *slot = findOrCreateRemoteSensor(packet.nodeId, packet.sensorId, sourceMac);
   if (!slot) {
     state.addLog("ESP-NOW fast ignore: table capteurs distants pleine");
@@ -246,7 +368,7 @@ bool SensorManager::updateRemoteSensorFast(const String &sourceMac, const EspNow
       state.addLog(String("ESP-NOW valeur FAST rejetee: node=") + slot->nodeId + " sensorId=" + slot->sensorId + " key=" + value.key + " valueType=" + value.valueType + " value=" + String(value.value, 6));
       continue;
     }
-    if (slot->valueCount < MAX_REMOTE_SENSOR_VALUES) slot->values[slot->valueCount++] = value;
+    if (slot->valueCount < MAX_REMOTE_SENSOR_VALUES) { slot->valueUpdatedMs[slot->valueCount] = millis(); slot->values[slot->valueCount++] = value; }
   }
 
   if (wasTimedOut && packet.sensorOk) {
@@ -258,6 +380,7 @@ bool SensorManager::updateRemoteSensorFast(const String &sourceMac, const EspNow
 }
 
 bool SensorManager::updateRemoteSensorDiscovery(const String &sourceMac, const EspNowSensorDiscoveryPacket &packet) {
+  if (packet.sensorType != SENSOR_LINKY && packet.sensorType != SENSOR_JSY && packet.sensorType != SENSOR_DS18B20) return false;
   RemoteSensorRuntime *slot = findOrCreateRemoteSensor(packet.nodeId, packet.sensorId, sourceMac);
   if (!slot) {
     state.addLog("ESP-NOW discovery capteur ignore: table pleine");
@@ -280,7 +403,7 @@ bool SensorManager::updateRemoteSensorDiscovery(const String &sourceMac, const E
     value.valueType = packet.values[i].valueType;
     espNowCopyFixedText(value.key, sizeof(value.key), packet.values[i].key);
     espNowCopyFixedText(value.unit, sizeof(value.unit), packet.values[i].unit);
-    mergeRemoteValue(*slot, value);
+    mergeRemoteValue(*slot, value, false);
   }
   syncConfiguredRemoteSensorMetadata(*slot);
   return true;
@@ -476,8 +599,6 @@ uint32_t SensorManager::getEspNowSensorTimeoutMs(uint8_t sensorType) {
     case SENSOR_LINKY: return 15000UL;
     case SENSOR_DS18B20:
     case SENSOR_TEMP_HUM: return 30000UL;
-    case SENSOR_BATTERY: return 30000UL;
-    case SENSOR_SOLAR: return 30000UL;
     default: return REMOTE_SENSOR_TIMEOUT_MS;
   }
 }
@@ -507,7 +628,7 @@ void SensorManager::updateRemotePacketLoss(RemoteSensorRuntime &sensor, uint32_t
   sensor.receivedPackets++;
 }
 
-void SensorManager::mergeRemoteValue(RemoteSensorRuntime &sensor, const EspNowSensorValue &value) {
+void SensorManager::mergeRemoteValue(RemoteSensorRuntime &sensor, const EspNowSensorValue &value, bool sample) {
   String key = value.key;
   key.trim();
   key.toUpperCase();
@@ -516,11 +637,15 @@ void SensorManager::mergeRemoteValue(RemoteSensorRuntime &sensor, const EspNowSe
     existingKey.trim();
     existingKey.toUpperCase();
     if ((key.length() && existingKey == key) || (!key.length() && sensor.values[i].valueType == value.valueType)) {
-      sensor.values[i] = value;
+      if (sample) {
+        sensor.values[i] = value;
+        sensor.valueUpdatedMs[i] = millis();
+      }
       return;
     }
   }
   if (sensor.valueCount >= MAX_REMOTE_SENSOR_VALUES) return;
+  sensor.valueUpdatedMs[sensor.valueCount] = sample ? millis() : 0;
   sensor.values[sensor.valueCount++] = value;
 }
 
@@ -552,18 +677,6 @@ void SensorManager::setDefaultValueMetadata(EspNowSensorValue &value) {
       break;
     case VALUE_HUMIDITY_PERCENT:
       espNowCopyFixedText(value.key, sizeof(value.key), "HUM");
-      espNowCopyFixedText(value.unit, sizeof(value.unit), "%");
-      break;
-    case VALUE_BATTERY_VOLTAGE_V:
-      espNowCopyFixedText(value.key, sizeof(value.key), "BATV");
-      espNowCopyFixedText(value.unit, sizeof(value.unit), "V");
-      break;
-    case VALUE_BATTERY_CURRENT_A:
-      espNowCopyFixedText(value.key, sizeof(value.key), "BATA");
-      espNowCopyFixedText(value.unit, sizeof(value.unit), "A");
-      break;
-    case VALUE_BATTERY_SOC_PERCENT:
-      espNowCopyFixedText(value.key, sizeof(value.key), "SOC");
       espNowCopyFixedText(value.unit, sizeof(value.unit), "%");
       break;
     default:
@@ -707,6 +820,7 @@ void SensorManager::applyRemoteSensorToState(const RemoteSensorRuntime &sensor) 
   for (uint8_t i = 0; i < sensor.valueCount && i < MAX_REMOTE_SENSOR_VALUES; i++) {
     applyRemoteValueToState(sensor, sensor.values[i]);
   }
+  applyMqttProduction();
 }
 
 void SensorManager::applyRemoteSensorLostToState(const RemoteSensorRuntime &sensor) {
@@ -726,18 +840,15 @@ void SensorManager::applyRemoteSensorLostToState(const RemoteSensorRuntime &sens
   }
 
   if (sensor.sensorType == SENSOR_DS18B20 || sensor.sensorType == SENSOR_TEMP_HUM) {
-    String role = sensor.sensorRole;
-    if (!role.length()) role = configSensor["role"] | "";
+    String role = configSensor["role"] | sensor.sensorRole;
     role.toLowerCase();
-    if (role.indexOf("haut") >= 0 || role.indexOf("top") >= 0 || role == "ballon_haut") state.ds18b20Available[0] = false;
-    else if (role.indexOf("milieu") >= 0 || role.indexOf("middle") >= 0 || role == "ballon_milieu") state.ds18b20Available[1] = false;
-    else if (role.indexOf("bas") >= 0 || role.indexOf("bottom") >= 0 || role == "ballon_bas") state.ds18b20Available[2] = false;
+    if (role.indexOf("haut") >= 0 || role.indexOf("top") >= 0 || role == "temperature_1") state.ds18b20Available[0] = false;
+    else if (role.indexOf("milieu") >= 0 || role.indexOf("middle") >= 0 || role == "temperature_2") state.ds18b20Available[1] = false;
+    else if (role.indexOf("bas") >= 0 || role.indexOf("bottom") >= 0 || role == "temperature_3") state.ds18b20Available[2] = false;
     return;
   }
 
-  if (sensor.sensorType == SENSOR_BATTERY) {
-    state.batteryOnline = false;
-  }
+
 }
 
 void SensorManager::applyRemoteValueToState(const RemoteSensorRuntime &sensor, const EspNowSensorValue &value) {
@@ -754,8 +865,7 @@ void SensorManager::applyRemoteValueToState(const RemoteSensorRuntime &sensor, c
   const bool importAll = !remoteKey.length() || remoteKey == "ALL" || remoteKey == "*";
   if (!importAll && remoteKey != key) return;
 
-  String role = sensor.sensorRole;
-  if (!role.length() || role.equalsIgnoreCase("autre") || role.equalsIgnoreCase("custom")) role = configSensor["role"] | "";
+  String role = configSensor["role"] | sensor.sensorRole;
   role.toLowerCase();
   const uint32_t now = millis();
   const uint8_t type = sensor.sensorType;
@@ -833,18 +943,18 @@ void SensorManager::applyRemoteValueToState(const RemoteSensorRuntime &sensor, c
 
   if (type == SENSOR_DS18B20 || type == SENSOR_TEMP_HUM) {
     if (valueType != VALUE_TEMPERATURE_C && key != "TEMP") return;
-    if (role.indexOf("haut") >= 0 || role.indexOf("top") >= 0 || role == "ballon_haut") {
-      state.tankTopC = value.value;
+    if (role.indexOf("haut") >= 0 || role.indexOf("top") >= 0 || role == "temperature_1") {
+      state.temperature1C = value.value;
       state.ds18b20Temps[0] = value.value;
       state.ds18b20Available[0] = sensor.ok;
       state.ds18b20LastReadMs[0] = now;
-    } else if (role.indexOf("milieu") >= 0 || role.indexOf("middle") >= 0 || role == "ballon_milieu") {
-      state.tankMiddleC = value.value;
+    } else if (role.indexOf("milieu") >= 0 || role.indexOf("middle") >= 0 || role == "temperature_2") {
+      state.temperature2C = value.value;
       state.ds18b20Temps[1] = value.value;
       state.ds18b20Available[1] = sensor.ok;
       state.ds18b20LastReadMs[1] = now;
-    } else if (role.indexOf("bas") >= 0 || role.indexOf("bottom") >= 0 || role == "ballon_bas") {
-      state.tankBottomC = value.value;
+    } else if (role.indexOf("bas") >= 0 || role.indexOf("bottom") >= 0 || role == "temperature_3") {
+      state.temperature3C = value.value;
       state.ds18b20Temps[2] = value.value;
       state.ds18b20Available[2] = sensor.ok;
       state.ds18b20LastReadMs[2] = now;
@@ -852,22 +962,70 @@ void SensorManager::applyRemoteValueToState(const RemoteSensorRuntime &sensor, c
     return;
   }
 
-  if (type == SENSOR_BATTERY) {
-    state.batteryOnline = sensor.ok;
-    state.lastBatteryReadMs = now;
-    if (valueType == VALUE_BATTERY_VOLTAGE_V || key == "BATV" || key == "VOLT") state.batteryVoltageV = value.value;
-    else if (valueType == VALUE_BATTERY_CURRENT_A || key == "BATA" || key == "CURR") state.batteryCurrentA = value.value;
-    else if (valueType == VALUE_POWER_W || key == "BATP" || key == "POWER") state.batteryPowerW = value.value;
-    else if (valueType == VALUE_BATTERY_SOC_PERCENT || key == "SOC") state.batterySocPct = value.value;
-    return;
-  }
 
-  if (type == SENSOR_SOLAR && (valueType == VALUE_POWER_W || key == "POWER" || key == "PROD")) {
-    state.productionW = max(0.0f, value.value);
+
+
+}
+
+float SensorManager::jsyRoleValue(const String &role, const String &metric, const String &actuatorId) {
+  float result = NAN;
+  unsigned matches = 0;
+  const uint32_t now = millis();
+  for (JsonObject cfg : config.sensors()) {
+    if (!(cfg["enabled"] | true)) continue;
+    String type = cfg["type"] | "";
+    if (type != "JSY-MK-194T") continue;
+    String origin = cfg["source"] | "local";
+    const bool remote = origin.equalsIgnoreCase("espnow");
+    RemoteSensorRuntime *runtime = nullptr;
+    if (remote) {
+      for (auto &slot : remoteSensors) {
+        if (!slot.used || slot.sensorType != SENSOR_JSY) continue;
+        if (configuredEspNowSensorFor(slot) == cfg) { runtime = &slot; break; }
+      }
+    }
+    JsonArray channels = cfg["channels"].as<JsonArray>();
+    for (uint8_t index = 0; index < 2; ++index) {
+      // Historical defaults are preserved only when channels have not been configured.
+      String channelId = index == 0 ? "clamp1" : "clamp2";
+      JsonObject channel;
+      for (JsonObject item : channels) {
+        if (String(item["id"] | "") == channelId) { channel = item; break; }
+      }
+      String assignedRole = channel["role"] | (index == 0 ? "production" : "grid");
+      assignedRole.toLowerCase();
+      if (assignedRole != role) continue;
+      if (actuatorId.length() && String(channel["actuatorId"] | "") != actuatorId) continue;
+      ++matches;
+      float value = NAN;
+      if (remote) {
+        if (runtime && runtime->ok && !runtime->timedOut && !runtime->nodeLost &&
+            runtime->lastUpdateMs && now - runtime->lastUpdateMs < remoteTimeoutForSensor(*runtime)) {
+          const String suffix = role == "load" && metric == "POWER" ? String("W_RAW")
+              : (metric == "ENERGY_POS" ? String("EPOS") : metric);
+          String key = String(index == 0 ? "CH1_" : "CH2_") + suffix;
+          for (uint8_t n = 0; n < runtime->valueCount; ++n) {
+            if (String(runtime->values[n].key) == key && runtime->valueUpdatedMs[n] &&
+                now - runtime->valueUpdatedMs[n] < remoteTimeoutForSensor(*runtime)) {
+              value = runtime->values[n].value; break;
+            }
+          }
+        }
+      } else if (jsyStarted) {
+        value = jsy.channelValue(index, role == "load" && metric == "POWER" ? String("W_RAW") : metric);
+      }
+      result = value;
+    }
   }
+  // Never choose silently between two channels declaring the same usage.
+  return matches == 1 && isfinite(result) ? result : NAN;
 }
 
 float SensorManager::valueFor(const String &sensorId, const String &variable) {
+  if (sensorId == "mqtt_production" && (variable == "powerW" || variable == "POWER" || variable == "activePower")) {
+    refreshMqttProduction();
+    return state.mqttProductionAvailable ? mqttProductionW : NAN;
+  }
   const bool isJsy = sensorId == "jsy_grid" || sensorId.startsWith("espnow_");
   if (isJsy && variable == "activePower") return state.gridPowerW;
   if (isJsy && (variable == "voltageV" || variable == "VOLT")) return state.gridVoltageV;
@@ -890,15 +1048,11 @@ float SensorManager::valueFor(const String &sensorId, const String &variable) {
   if (sensorId == "tic_linky" && variable == "gridPowerW") return state.ticGridPowerW;
   if (sensorId == "tic_linky" && variable == "currentA") return state.ticCurrentA;
   if (sensorId == "tic_linky" && variable == "energyWh") return static_cast<float>(state.ticEnergyWh);
-  if (sensorId == "battery" && variable == "voltageV") return state.batteryVoltageV;
-  if (sensorId == "battery" && variable == "currentA") return state.batteryCurrentA;
-  if (sensorId == "battery" && variable == "powerW") return state.batteryPowerW;
-  if (sensorId == "battery" && variable == "socPct") return state.batterySocPct;
   if (sensorId == "solar" && variable == "powerW") return state.productionW;
   if (variable == "temperatureC") return ds18b20.getTemperatureById(sensorId);
-  if (sensorId == "temp_tank_top" && variable == "temperature") return state.tankTopC;
-  if (sensorId == "temp_tank_middle" && variable == "temperature") return state.tankMiddleC;
-  if (sensorId == "temp_tank_bottom" && variable == "temperature") return state.tankBottomC;
+  if (genericTemperatureId(sensorId) == "temperature_1" && variable == "temperature") return state.temperature1C;
+  if (genericTemperatureId(sensorId) == "temperature_2" && variable == "temperature") return state.temperature2C;
+  if (genericTemperatureId(sensorId) == "temperature_3" && variable == "temperature") return state.temperature3C;
   if (sensorId == "virtual_surplus" && variable == "surplus") return state.surplusW;
   return NAN;
 }
@@ -933,4 +1087,91 @@ void SensorManager::reloadConfiguration() {
   ds18b20.reloadConfig();
   applyGridPowerSource();
   state.addLog("Configuration capteurs rechargee");
+}
+
+SensorManager::PowerSample SensorManager::gridPowerSample(const String &sensorId, const String &variable, uint32_t now) {
+  PowerSample result;
+  if (variable != "gridPowerW" && variable != "jsyGridPowerW") return result;
+  if (state.simulationMode) {
+    result.watts = state.gridPowerW; result.timestampMs = now;
+    result.source = "SIMULATION"; result.valid = isfinite(result.watts);
+    return result;
+  }
+  if (sensorId == "grid") {
+    // Resolve AUTO in the sensor layer. The PID sees only a canonical sample.
+    const String choice = configuredGridPowerSource();
+    PowerSample jsySample, ticSample;
+    unsigned jsyCount = 0, ticCount = 0;
+    for (JsonObject cfg : config.sensors()) {
+      if (!(cfg["enabled"] | true)) continue;
+      const String type = cfg["type"] | "";
+      if (type == "JSY-MK-194T") {
+        PowerSample sample = gridPowerSample(cfg["id"] | "", variable, now);
+        if (sample.valid) { jsySample = sample; ++jsyCount; }
+      } else if (type == "TIC Linky") {
+        PowerSample sample = gridPowerSample(cfg["id"] | "", variable, now);
+        if (sample.valid) { ticSample = sample; ++ticCount; }
+      }
+    }
+    if (choice == "TIC" || (choice == "AUTO" && ticCount)) return ticCount == 1 ? ticSample : result;
+    return jsyCount == 1 ? jsySample : result;
+  }
+  JsonObject cfg;
+  for (JsonObject item : config.sensors()) {
+    if (sensorId == (item["id"] | "") && (item["enabled"] | true)) { cfg = item; break; }
+  }
+  if (cfg.isNull()) return result;
+  const String type = cfg["type"] | "";
+  const String origin = cfg["source"] | "local";
+  const bool remote = origin.equalsIgnoreCase("espnow");
+  const bool isJsy = type == "JSY-MK-194T";
+  const bool isTic = type == "TIC Linky";
+  const bool declaredGrid = String(cfg["powerSemantics"] | "") == "signed_grid";
+  if (!isJsy && !isTic && !declaredGrid) return result;
+  String key = "GRID";
+  int gridChannel = -1;
+  if (isJsy) {
+    unsigned count = 0;
+    for (uint8_t n = 0; n < 2; ++n) {
+      JsonObject channel;
+      for (JsonObject item : cfg["channels"].as<JsonArray>())
+        if (String(item["id"] | "") == (n == 0 ? "clamp1" : "clamp2")) channel = item;
+      if (String(channel["role"] | (n == 0 ? "production" : "grid")) == "grid") { gridChannel = n; ++count; }
+    }
+    if (count != 1) return result;
+    // Regulation needs signed active watts, never the historical U*I*PF fallback.
+    key = gridChannel == 0 ? "CH1_W_RAW" : "CH2_W_RAW";
+  }
+  // JSY timeoutMs is the Modbus transaction deadline, not measurement freshness.
+  uint32_t ttl = isJsy ? (cfg["measurementTimeoutMs"] | 3000UL) : (cfg["timeoutMs"] | 5000UL);
+  if (remote) {
+    for (auto &slot : remoteSensors) {
+      if (!slot.used || !slot.ok || slot.timedOut || slot.nodeLost || configuredEspNowSensorFor(slot) != cfg) continue;
+      ttl = min(ttl, remoteTimeoutForSensor(slot));
+      for (uint8_t n = 0; n < slot.valueCount; ++n) {
+        if (String(slot.values[n].key) != key) continue;
+        // Enforce manual per-key import selection, just as the normal sensor path.
+        String imported = cfg["remoteKey"] | cfg["key"] | "ALL";
+        imported.toUpperCase();
+        const String channelPowerKey = gridChannel == 0 ? "CH1_POWER" : "CH2_POWER";
+        // A historical per-channel import authorizes that same channel's raw watts.
+        // It never authorizes the other clamp or creates an import automatically.
+        if (imported.length() && imported != "ALL" && imported != "*" && imported != key &&
+            !(isJsy && imported == channelPowerKey)) continue;
+        result.watts = slot.values[n].value; result.timestampMs = slot.valueUpdatedMs[n];
+        break;
+      }
+      break;
+    }
+  } else if (isJsy && jsyStarted) {
+    result.watts = jsy.channelValue(gridChannel, "W_RAW"); result.timestampMs = jsy.powerSampleMs();
+  } else if (isTic && ticStarted && tic.isAvailable()) {
+    result.watts = tic.getGridPowerW(); result.timestampMs = tic.powerSampleMs();
+  }
+  if (declaredGrid && String(cfg["powerSign"] | "IMPORT_POSITIVE") == "EXPORT_POSITIVE") result.watts = -result.watts;
+  result.source = sensorId + ":" + key;
+  // A radio callback may run after the main loop captured its `now` argument.
+  // Check freshness against the current local clock, not that older loop tick.
+  result.valid = isfinite(result.watts) && result.timestampMs && uint32_t(millis() - result.timestampMs) < ttl;
+  return result;
 }

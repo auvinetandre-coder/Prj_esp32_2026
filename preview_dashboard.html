@@ -24,7 +24,7 @@ button.active{border-color:var(--info)}main{margin-left:220px;padding:20px}.ok{c
 <div id="app"></div>
 </main>
 <script>
-const status={role:'MASTER',networkMode:'STATION',wifiSsid:'WIFI_SSID_A_CONFIGURER',localIp:'192.168.1.42',rssi:-54,wifiConnected:true,espNowReady:true,isActiveMaster:true,masterAlive:true,safetyTripped:false,safetyReason:'',uptime:1842,heapFree:279392,gridPowerW:-860,injectionW:860,consumptionW:0,productionW:3250,tankTopC:52.4,tankMiddleC:48.8,tankBottomC:41.2,ssr1PowerPct:58,ssr2PowerPct:0,robotDynPowerPct:0,systemMode:'AUTO'};
+const status={networkMode:'STATION',wifiSsid:'WIFI_SSID_A_CONFIGURER',localIp:'192.168.1.42',rssi:-54,wifiConnected:true,espNowReady:true,safetyTripped:false,safetyReason:'',uptime:1842,heapFree:279392,gridPowerW:-860,injectionW:860,consumptionW:0,productionW:3250,temperature1C:52.4,temperature2C:48.8,temperature3C:41.2,ssr1PowerPct:58,ssr2PowerPct:0,robotDynPowerPct:0,systemMode:'AUTO'};
 function fmt(v){return typeof v==='number'?Math.round(v*10)/10:v}
 function pct(v,max){return Math.max(0,Math.min(100,(Number(v)||0)/max*100))}
 function pill(label,ok,warn){let c=ok?'ok':(warn?'warn':'bad');return `<span class="pill"><i class="dot ${c}"></i>${label}</span>`}
@@ -32,19 +32,19 @@ function meter(label,value,unit,max,cls='info'){let p=pct(value,max);return `<di
 function panel(title,body){return `<section class="panel"><h3>${title}</h3>${body}</section>`}
 function renderDashboard(){
 let safe=!status.safetyTripped, wifi=!!status.wifiConnected, ap=status.networkMode==='AP_FALLBACK';
-let tempMax=Math.max(Number(status.tankTopC)||0,Number(status.tankMiddleC)||0,Number(status.tankBottomC)||0);
+let tempMax=Math.max(Number(status.temperature1C)||0,Number(status.temperature2C)||0,Number(status.temperature3C)||0);
 let actionPower=(Number(status.ssr1PowerPct)||0)+(Number(status.ssr2PowerPct)||0)+(Number(status.robotDynPowerPct)||0);
 return `<div class="dash">
 <div class="hero">
 ${panel('Energie solaire',`<div class="big sun">${fmt(status.injectionW)} W</div><div class="sub">Surplus disponible - reseau ${fmt(status.gridPowerW)} W</div><div class="spark"></div><div class="statusline">${pill(status.systemMode||'AUTO',true)}${pill(safe?'Securite OK':'Securite active',safe,!safe)}</div>`)}
-${panel('ESP32',`<div class="statusline"><span>Role</span><b>${status.role}</b></div><div class="statusline"><span>Uptime</span><b>${fmt(status.uptime)} s</b></div>${meter('Heap libre',status.heapFree,'o',327680,'ok')}`)}
+${panel('ESP32',`<div class="statusline"><span>Uptime</span><b>${fmt(status.uptime)} s</b></div>${meter('Heap libre',status.heapFree,'o',327680,'ok')}`)}
 ${panel('Reseau',`<div class="statusline"><span>Mode</span><b>${status.networkMode}</b></div><div class="statusline"><span>SSID</span><b>${status.wifiSsid||'-'}</b></div><div class="statusline"><span>IP</span><b>${status.localIp}</b></div><div class="statusline">${pill(wifi?'WiFi connecte':(ap?'AP fallback':'WiFi attente'),wifi,ap)}${pill(status.espNowReady?'ESP-NOW pret':'ESP-NOW off',status.espNowReady,false)}</div>`)}
 </div>
 <div class="mini">
-${panel('Capteurs ballon',`${meter('Haut',status.tankTopC,'C',80,tempMax>=70?'bad':'ok')}${meter('Milieu',status.tankMiddleC,'C',80,tempMax>=70?'bad':'ok')}${meter('Bas',status.tankBottomC,'C',80,tempMax>=70?'bad':'ok')}`)}
-${panel('Actionneurs puissance',`${meter('SSR1 chauffe-eau',status.ssr1PowerPct,'%',100,'sun')}${meter('SSR2 auxiliaire',status.ssr2PowerPct,'%',100,'info')}${meter('RobotDyn triac',status.robotDynPowerPct,'%',100,'warn')}<div class="statusline">${pill(actionPower>0?'Puissance active':'Sorties au repos',actionPower>0,false)}</div>`)}
+${panel('Temperatures',`${meter('Sonde 1',status.temperature1C,'C',80,tempMax>=70?'bad':'ok')}${meter('Sonde 2',status.temperature2C,'C',80,tempMax>=70?'bad':'ok')}${meter('Sonde 3',status.temperature3C,'C',80,tempMax>=70?'bad':'ok')}`)}
+${panel('Actionneurs puissance',`${meter('SSR1 charge',status.ssr1PowerPct,'%',100,'sun')}${meter('SSR2 auxiliaire',status.ssr2PowerPct,'%',100,'info')}${meter('RobotDyn triac',status.robotDynPowerPct,'%',100,'warn')}<div class="statusline">${pill(actionPower>0?'Puissance active':'Sorties au repos',actionPower>0,false)}</div>`)}
 ${panel('Flux maison',`${meter('Injection',status.injectionW,'W',3000,'ok')}${meter('Consommation',status.consumptionW,'W',3000,'warn')}${meter('Production',status.productionW,'W',5000,'sun')}`)}
-${panel('Redondance',`<div class="statusline"><span>Master actif</span><b>${status.isActiveMaster?'Oui':'Non'}</b></div><div class="statusline"><span>Heartbeat</span><b>${status.masterAlive?'OK':'Absent'}</b></div><div class="statusline">${pill(status.masterAlive||status.isActiveMaster?'Redondance OK':'Backup en attente',status.masterAlive||status.isActiveMaster,true)}</div>`)}
+
 </div></div>`}
 document.getElementById('app').innerHTML=renderDashboard();
 </script>

@@ -14,7 +14,6 @@ public:
     IDLE,
     AUTO_ROUTING,
     MANUAL_FORCE,
-    SCHEDULE_FORCE,
     SAFETY,
     ERROR,
     RECOVERY_REQUEST
@@ -24,7 +23,6 @@ public:
     PRIORITY_IDLE = 0,
     PRIORITY_AUTO_ROUTING = 1,
     PRIORITY_RULE_ENGINE = 2,
-    PRIORITY_SCHEDULE_FORCE = 3,
     PRIORITY_MANUAL_FORCE = 4,
     PRIORITY_RECOVERY_REQUEST = 5,
     PRIORITY_ERROR = 6,
@@ -33,7 +31,7 @@ public:
 
   struct FinalCommand {
     bool enabled = false;
-    String actuatorId = "ssr1_water_heater";
+    String actuatorId = "";
     String command = "setPower";
     String mode = "";
     float commandPercent = 0.0f;
@@ -61,6 +59,9 @@ private:
   AutomateState currentState = BOOT;
   bool recoveryRequested = false;
   String recoveryReason = "";
+  String heldManualActuatorId = "";
+  String ruleActuatorIds[16];
+  uint8_t ruleActuatorCount = 0;
 
   void transitionTo(AutomateState next, const String &reason, uint32_t now);
   FinalCommand arbitrate(uint32_t now, Priority &priority, AutomateState &nextState);

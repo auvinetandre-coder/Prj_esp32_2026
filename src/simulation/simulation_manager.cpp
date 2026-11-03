@@ -69,7 +69,7 @@ void SimulationManager::disable() {
   simulatedMeterAvailable = false;
   state.simulationMode = false;
   state.simulationRemainingMs = 0;
-  state.heaterPowerW = 0.0f;
+  state.outputPowerW = 0.0f;
   state.pidOutputPercent = 0.0f;
   state.commandPercent = 0.0f;
   state.ssr1PowerPct = 0.0f;
@@ -131,13 +131,13 @@ void SimulationManager::applyScenario(const String &scenario) {
   } else if (s == "injection_high" || s == "forte injection solaire") {
     applyJsy(true, randomFloat(-2500.0f, -1200.0f), 232, 10, 0.98f, 50.0f);
     applyTemperatures(48, 44, 40);
-  } else if (s == "tank_almost_hot" || s == "ballon presque chaud") {
+  } else if (s == "temperature_near_limit" || s == "equipement presque chaud") {
     applyJsy(true, -900, 231, 4, 0.96f, 50.0f);
-    float maxC = config.system()["router"]["tankMaxC"] | 65.0f;
+    float maxC = config.system()["router"]["temperatureMaxC"] | 65.0f;
     applyTemperatures(maxC - 1, maxC - 2, maxC - 4);
-  } else if (s == "tank_overheat" || s == "surchauffe ballon") {
+  } else if (s == "temperature_overheat" || s == "surchauffe equipement") {
     applyJsy(true, -800, 231, 4, 0.96f, 50.0f);
-    float safeC = config.system()["router"]["tempSafetyMaxC"] | config.system()["router"]["tankSafetyC"] | 70.0f;
+    float safeC = config.system()["router"]["tempSafetyMaxC"] | 70.0f;
     applyTemperatures(safeC + 3, 55, 50);
   } else if (s == "critical_sensor_lost" || s == "perte capteur critique") {
     applyJsy(true, -800, 231, 4, 0.96f, 50.0f);
@@ -191,9 +191,9 @@ bool SimulationManager::setValuesFromJson(const String &json, String &error) {
     state.ds18b20Available[idx] = item["available"] | true;
     state.ds18b20LastReadMs[idx] = millis();
   }
-  state.tankTopC = state.ds18b20Temps[0];
-  state.tankMiddleC = state.ds18b20Temps[1];
-  state.tankBottomC = state.ds18b20Temps[2];
+  state.temperature1C = state.ds18b20Temps[0];
+  state.temperature2C = state.ds18b20Temps[1];
+  state.temperature3C = state.ds18b20Temps[2];
   state.logEvent("INFO", "CONFIG_CHANGED", "Valeurs simulation manuelles appliquees", "SimulationManager");
   return true;
 }
@@ -273,7 +273,7 @@ void SimulationManager::applyPower(float gridPowerW) {
 
 void SimulationManager::applyRoutedPower() {
   if (!simulatedMeterAvailable) return;
-  const float routedW = max(0.0f, state.heaterPowerW);
+  const float routedW = max(0.0f, state.outputPowerW);
   const float gridPowerW = simulatedBaseGridPowerW + routedW;
   state.gridPowerW = gridPowerW;
   state.gridPowerRawW = gridPowerW;
@@ -302,9 +302,9 @@ void SimulationManager::applyTemperatures(float t1, float t2, float t3, bool a1,
     state.ds18b20Available[i] = available[i];
     state.ds18b20LastReadMs[i] = millis();
   }
-  state.tankTopC = t1;
-  state.tankMiddleC = t2;
-  state.tankBottomC = t3;
+  state.temperature1C = t1;
+  state.temperature2C = t2;
+  state.temperature3C = t3;
   state.ds18b20CriticalMissing = false;
   state.ds18b20CriticalMissingList = "";
   for (JsonObject probe : config.sensorsDoc()["ds18b20"].as<JsonArray>()) {

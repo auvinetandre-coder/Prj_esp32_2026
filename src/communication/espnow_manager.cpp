@@ -1,10 +1,9 @@
+#include "../config/legacy_config_migration.h"
 #include "espnow_manager.h"
 #include "../sensors/sensor_manager.h"
 #include "../build_info.h"
 #include <LittleFS.h>
 #include <math.h>
-
-static uint8_t espNowRoleFlagsFromRole(DeviceRole role);
 
 static EspNowManager *gEspNow = nullptr;
 static const uint8_t ESPNOW_BROADCAST_MAC[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
@@ -31,9 +30,6 @@ static const char *espNowValueTypeText(uint8_t valueType) {
     case VALUE_TEMPERATURE_C: return "TEMP";
     case VALUE_HUMIDITY_PERCENT: return "HUM";
     case VALUE_ENERGY_KWH: return "ENERGY";
-    case VALUE_BATTERY_VOLTAGE_V: return "BATV";
-    case VALUE_BATTERY_CURRENT_A: return "BATA";
-    case VALUE_BATTERY_SOC_PERCENT: return "SOC";
     case VALUE_STATE_BOOL: return "STATE";
     case VALUE_RSSI_DBM: return "RSSI";
     case VALUE_CUSTOM: return "CUSTOM";
@@ -137,14 +133,6 @@ bool EspNowManager::sendMessage(const String &peer, EspNowMessage message) {
   return result == ESP_OK;
 }
 
-bool EspNowManager::sendHeartbeat(const String &peer) {
-  EspNowMessage msg{};
-  msg.messageType = MSG_HEARTBEAT;
-  msg.epoch = state.redundancyEpoch;
-  strlcpy(msg.masterId, (state.isActiveMaster ? state.deviceId : state.activeMasterId).c_str(), sizeof(msg.masterId));
-  return sendMessage(peer, msg);
-}
-
 bool EspNowManager::sendSensorValue(const String &peer, const String &sensorId, const String &variable, float value) {
   EspNowMessage msg{};
   msg.messageType = MSG_SENSOR_VALUE;
@@ -154,16 +142,15 @@ bool EspNowManager::sendSensorValue(const String &peer, const String &sensorId, 
   return sendMessage(peer, msg);
 }
 
-bool EspNowManager::sendActuatorCommand(const String &peer, const String &actuatorId, float commandPercent, const String &mode, uint32_t ttlMs) {
+bool EspNowManager::sendActuatorCommand(const String &peer, const String &actuatorId, float commandPercent, const String &mode, uint32_t ttlMs, uint32_t token, const String &command) {
   EspNowMessage msg{};
   msg.messageType = MSG_ACTUATOR_COMMAND;
-  msg.epoch = state.redundancyEpoch;
   msg.ttlMs = ttlMs;
+  msg.reservedCounter = token;
   msg.commandPercent = constrain(commandPercent, 0.0f, 100.0f);
   msg.value = msg.commandPercent;
-  strlcpy(msg.masterId, (state.isActiveMaster ? state.deviceId : state.activeMasterId).c_str(), sizeof(msg.masterId));
   strlcpy(msg.actuatorId, actuatorId.c_str(), sizeof(msg.actuatorId));
-  strlcpy(msg.command, "setPower", sizeof(msg.command));
+  strlcpy(msg.command, command.c_str(), sizeof(msg.command));
   strlcpy(msg.mode, mode.c_str(), sizeof(msg.mode));
   return sendMessage(peer, msg);
 }
@@ -174,6 +161,70 @@ bool EspNowManager::sendStatus(const String &peer, const String &variable, float
   strlcpy(msg.variable, variable.c_str(), sizeof(msg.variable));
   msg.value = value;
   return sendMessage(peer, msg);
+}
+
+void EspNowManager::sendActuatorState(const String &id, float commandPercent, float outputPercent, bool outputOn, bool enabled, bool locked, const String &source, const char *controlMode, uint32_t controlToken) {
+  EspNowMessage msg{};
+  msg.messageType = MSG_STATUS;
+  strlcpy(msg.variable, "actuatorState", sizeof(msg.variable));
+  strlcpy(msg.actuatorId, id.c_str(), sizeof(msg.actuatorId));
+  strlcpy(msg.command, source.c_str(), sizeof(msg.command));
+  strlcpy(msg.mode, controlMode, sizeof(msg.mode));
+  msg.ttlMs = controlToken; // Status metadata, not a command expiry.
+  msg.commandPercent = isfinite(commandPercent) ? constrain(commandPercent, 0.0f, 100.0f) : 0.0f;
+  msg.value = isfinite(outputPercent) ? constrain(outputPercent, 0.0f, 100.0f) : 0.0f;
+  msg.reservedCounter = (outputOn ? 1U : 0U) | (enabled ? 2U : 0U) | (locked ? 4U : 0U) | (state.simulationMode ? 8U : 0U);
+  for (JsonVariant peer : config.system()["peers"].as<JsonArray>()) sendMessage(peer.as<String>(), msg);
+}
+
+bool EspNowManager::remoteActuatorState(const String &mac, const String &id, EspNowActuatorState &out) {
+  uint8_t address[6];
+  if (!parseMac(mac, address) || !isPeerKnown(mac)) return false;
+  for (const auto &item : actuatorStates) {
+    if (item.used && memcmp(item.mac, address, 6) == 0 && id == item.actuatorId &&
+        uint32_t(millis() - item.receivedMs) < 3500UL) {
+      out = item;
+      return true;
+    }
+  }
+  return false;
+}
+
+void EspNowManager::receiveActuatorState(const String &mac, const EspNowMessage &message) {
+  if (!isPeerKnown(mac) || !isfinite(message.commandPercent) || message.commandPercent < 0 || message.commandPercent > 100 ||
+      !isfinite(message.value) || message.value < 0 || message.value > 100 ||
+      !memchr(message.actuatorId, 0, sizeof(message.actuatorId)) || !message.actuatorId[0] ||
+      !memchr(message.command, 0, sizeof(message.command)) || !memchr(message.mode, 0, sizeof(message.mode))) return;
+  // Runtime only for explicitly imported actuators; never import from a status.
+  bool mapped = false;
+  for (JsonObject actuator : config.actuators()) {
+    String source = actuator["source"] | "local";
+    String peer = actuator["mac"] | "";
+    String id = actuator["remoteActuatorId"] | actuator["id"] | "";
+    if (source == "espnow" && peer.equalsIgnoreCase(mac) && id == message.actuatorId) mapped = true;
+  }
+  if (!mapped) return;
+  uint8_t address[6];
+  if (!parseMac(mac, address)) return;
+  EspNowActuatorState *slot = nullptr;
+  for (auto &item : actuatorStates) {
+    if (item.used && memcmp(item.mac, address, 6) == 0 && strcmp(item.actuatorId, message.actuatorId) == 0) { slot = &item; break; }
+    if (!slot && (!item.used || uint32_t(millis() - item.receivedMs) >= 3500UL)) slot = &item;
+  }
+  if (!slot) return;
+  slot->used = true;
+  memcpy(slot->mac, address, 6);
+  strlcpy(slot->actuatorId, message.actuatorId, sizeof(slot->actuatorId));
+  strlcpy(slot->source, message.command, sizeof(slot->source));
+  slot->commandPercent = message.commandPercent;
+  slot->percent = message.value;
+  slot->outputOn = message.reservedCounter & 1U;
+  slot->enabled = message.reservedCounter & 2U;
+  slot->safetyLocked = message.reservedCounter & 4U;
+  slot->simulated = message.reservedCounter & 8U;
+  slot->receivedMs = millis();
+  strlcpy(slot->controlMode, message.mode, sizeof(slot->controlMode));
+  slot->controlToken = message.ttlMs;
 }
 
 bool EspNowManager::sendError(const String &peer, const String &text) {
@@ -193,7 +244,9 @@ void EspNowManager::onSent(const uint8_t *mac, esp_now_send_status_t status) {
 
 void EspNowManager::handleReceive(const uint8_t *mac, const uint8_t *data, int len) {
   String peer = macToString(mac);
-  if (len >= 2 && data[0] == ESPNOW_PROTOCOL_VERSION) {
+  // Legacy MSG_STATUS is also 4. Its 0xff layout marker distinguishes it
+  // from generic v4 packets; otherwise all actuator status frames are dropped.
+  if (len >= 2 && data[0] == ESPNOW_PROTOCOL_VERSION && data[1] != 0xff) {
     if (data[1] == ESPNOW_PACKET_DISCOVERY) {
       handleDiscoveryPacket(mac, data, len);
       return;
@@ -242,7 +295,6 @@ void EspNowManager::handleReceive(const uint8_t *mac, const uint8_t *data, int l
   }
 
   if (EspNowDiscoveredNode *node = findOrCreateDiscoveredNode(mac, fallbackNodeIdFromMac(mac), strlen(msg.senderId) ? msg.senderId : nullptr, false)) {
-    node->roleFlags |= espNowRoleFlagsFromRole(static_cast<DeviceRole>(msg.role));
     node->lastFrameMs = millis();
     node->lastSeenMs = millis();
     if (msg.messageType == MSG_HEARTBEAT) node->lastHeartbeatMs = millis();
@@ -253,39 +305,31 @@ void EspNowManager::handleReceive(const uint8_t *mac, const uint8_t *data, int l
     state.addLog(String("ESP-NOW RX ") + messageTypeText(msg.messageType) + " <- " + peer);
   }
 
-  if (msg.messageType == MSG_HEARTBEAT) {
-    String previousMaster = state.activeMasterId;
-    bool wasActiveMaster = state.isActiveMaster;
-    state.lastMasterHeartbeatMs = millis();
-    state.masterAlive = true;
-    state.activeMasterId = strlen(msg.masterId) ? msg.masterId : msg.senderId;
-    if (msg.epoch >= state.redundancyEpoch) state.redundancyEpoch = msg.epoch;
-    if (wasActiveMaster && previousMaster.length() && state.activeMasterId != state.deviceId && state.activeMasterId != previousMaster) {
-      state.splitBrainDetected = true;
-      state.redundancyState = "SPLIT_BRAIN_DETECTED";
-      state.addLog("ESP-NOW split brain detecte: " + state.activeMasterId);
-    } else if (state.role == ROLE_BACKUP && !state.isActiveMaster) {
-      state.redundancyState = "BACKUP_READY";
-    }
+  if (msg.messageType == MSG_HEARTBEAT) return;
+
+  if (msg.messageType == MSG_STATUS && strncmp(msg.variable, "actuatorState", sizeof(msg.variable)) == 0) {
+    receiveActuatorState(peer, msg);
     return;
   }
 
   if (msg.messageType == MSG_ACTUATOR_COMMAND) {
+    if (!memchr(msg.actuatorId, 0, sizeof(msg.actuatorId)) || !memchr(msg.command, 0, sizeof(msg.command)) ||
+        !memchr(msg.mode, 0, sizeof(msg.mode))) return;
     if (!acceptActuatorCommand(msg, peer)) return;
     String command = strlen(msg.command) ? String(msg.command) : "setPower";
-    bool executed = actuatorHandler && actuatorHandler(actuatorHandlerContext, msg.actuatorId, command, msg.commandPercent, msg.mode);
+    bool executed = actuatorHandler && actuatorHandler(actuatorHandlerContext, msg.actuatorId, command, msg.commandPercent, msg.mode, msg.ttlMs, peer, msg.reservedCounter);
     state.addLog(String("ESP-NOW commande actionneur ") + (executed ? "executee: " : "refusee localement: ") + msg.actuatorId + " " + String(msg.commandPercent, 1) + "%");
     return;
   }
 
   if (msg.messageType == MSG_SENSOR_VALUE) {
-    String id = msg.sensorId;
+    String id = genericTemperatureId(String(msg.sensorId));
     String variable = msg.variable;
     if (id == "jsy_grid" && variable == "activePower") state.gridPowerW = msg.value;
     if (id == "jsy_grid" && variable == "surplusW") state.surplusW = msg.value;
-    if (id == "temp_tank_top" && variable == "temperature") state.tankTopC = msg.value;
-    if (id == "temp_tank_middle" && variable == "temperature") state.tankMiddleC = msg.value;
-    if (id == "temp_tank_bottom" && variable == "temperature") state.tankBottomC = msg.value;
+    if (id == "temperature_1" && variable == "temperature") state.temperature1C = msg.value;
+    if (id == "temperature_2" && variable == "temperature") state.temperature2C = msg.value;
+    if (id == "temperature_3" && variable == "temperature") state.temperature3C = msg.value;
     return;
   }
 
@@ -309,45 +353,6 @@ String EspNowManager::peersJson() {
   String out;
   serializeJson(config.system()["peers"], out);
   return out;
-}
-
-static const char *espNowRedundancyRoleText(DeviceRole role) {
-  if (role == ROLE_MASTER) return "MASTER";
-  if (role == ROLE_BACKUP) return "BACKUP";
-  return "STANDALONE";
-}
-
-static const char *espNowRedundancyRoleText(uint8_t role) {
-  if (role == ESPNOW_REDUNDANCY_MASTER) return "MASTER";
-  if (role == ESPNOW_REDUNDANCY_BACKUP) return "BACKUP";
-  return "STANDALONE";
-}
-
-static const char *espNowFunctionalRoleText(uint8_t roleFlags) {
-  const bool sensor = roleFlags & ESPNOW_ROLE_PRODUCER;
-  const bool actuator = roleFlags & ESPNOW_ROLE_ACTUATOR;
-  const bool router = roleFlags & ESPNOW_ROLE_ROUTER;
-  if ((sensor && actuator) || (router && (sensor || actuator))) return "MIXED";
-  if (router) return "MASTER";
-  if (actuator) return "ACTUATOR";
-  if (sensor) return "SENSOR";
-  return "UNKNOWN";
-}
-
-static uint8_t espNowRoleFlagsFromRole(DeviceRole role) {
-  switch (role) {
-    case ROLE_MASTER:
-    case ROLE_BACKUP:
-      return ESPNOW_ROLE_ROUTER | ESPNOW_ROLE_CONSUMER;
-    case ROLE_NODE_SENSOR:
-      return ESPNOW_ROLE_PRODUCER;
-    case ROLE_NODE_ACTUATOR:
-      return ESPNOW_ROLE_ACTUATOR | ESPNOW_ROLE_CONSUMER;
-    case ROLE_NODE_MIXED:
-      return ESPNOW_ROLE_PRODUCER | ESPNOW_ROLE_CONSUMER | ESPNOW_ROLE_ACTUATOR;
-    default:
-      return ESPNOW_ROLE_NONE;
-  }
 }
 
 static const char *espNowPacketTypeText(uint8_t packetType) {
@@ -391,7 +396,11 @@ void EspNowManager::updateDiscoveredNodeLoss(uint32_t now) {
   for (uint8_t i = 0; i < ESPNOW_MAX_DISCOVERED_NODES; i++) {
     EspNowDiscoveredNode &node = discoveredNodes[i];
     if (!node.used) continue;
-    const bool nodeOk = node.lastSeenMs && now >= node.lastSeenMs && (now - node.lastSeenMs) <= 30000UL;
+    // RX runs on the Wi-Fi task and may be newer than loop()'s captured time.
+    // Snapshot the frame time first, then read the clock; subtraction supports millis rollover.
+    const uint32_t lastSeenMs = node.lastSeenMs;
+    now = millis();
+    const bool nodeOk = lastSeenMs && (now - lastSeenMs) <= 30000UL;
     if (!nodeOk && !node.lossReported) {
       node.lossReported = true;
       String mac = macToString(node.mac);
@@ -415,9 +424,7 @@ String EspNowManager::statusJson() {
   out["nodeName"] = state.moduleName;
   out["firmwareVersion"] = ROUTEUR_FIRMWARE_VERSION;
   out["littlefsVersion"] = espNowLocalLittlefsVersion();
-  out["roleFlags"] = localRoleFlags();
-  out["functionalRole"] = espNowFunctionalRoleText(localRoleFlags());
-  out["redundancyRole"] = espNowRedundancyRoleText(state.role);
+  out["serviceFlags"] = localServiceFlags();
   out["capabilityFlags"] = localCapabilityFlags();
   out["discoveryIntervalMs"] = config.system()["espnow"]["discoveryIntervalMs"] | ESPNOW_DEFAULT_ANNOUNCE_INTERVAL_MS;
   out["sensorDiscoveryIntervalMs"] = config.system()["espnow"]["sensorDiscoveryIntervalMs"] | 30000UL;
@@ -472,9 +479,7 @@ String EspNowManager::statusJson() {
     node["mac"] = macToString(discoveredNodes[i].mac);
     node["nodeId"] = discoveredNodes[i].nodeId;
     node["nodeName"] = discoveredNodes[i].nodeName;
-    node["roleFlags"] = discoveredNodes[i].roleFlags;
-    node["functionalRole"] = espNowFunctionalRoleText(discoveredNodes[i].roleFlags);
-    node["redundancyRole"] = espNowRedundancyRoleText(discoveredNodes[i].redundancyRole);
+    node["serviceFlags"] = discoveredNodes[i].serviceFlags;
     node["capabilityFlags"] = discoveredNodes[i].capabilityFlags;
     node["primarySensorType"] = discoveredNodes[i].primarySensorType;
     node["primarySensorText"] = espNowSensorTypeText(discoveredNodes[i].primarySensorType);
@@ -541,9 +546,7 @@ String EspNowManager::discoveredNodesJson() {
     node["mac"] = macToString(discoveredNodes[i].mac);
     node["nodeId"] = discoveredNodes[i].nodeId;
     node["nodeName"] = discoveredNodes[i].nodeName;
-    node["roleFlags"] = discoveredNodes[i].roleFlags;
-    node["functionalRole"] = espNowFunctionalRoleText(discoveredNodes[i].roleFlags);
-    node["redundancyRole"] = espNowRedundancyRoleText(discoveredNodes[i].redundancyRole);
+    node["serviceFlags"] = discoveredNodes[i].serviceFlags;
     node["capabilityFlags"] = discoveredNodes[i].capabilityFlags;
     node["primarySensorType"] = discoveredNodes[i].primarySensorType;
     node["primarySensorText"] = espNowSensorTypeText(discoveredNodes[i].primarySensorType);
@@ -567,8 +570,7 @@ bool EspNowManager::sendDiscovery() {
   String nodeName = state.moduleName;
   if (!nodeName.length()) nodeName = config.device()["deviceName"] | config.device()["name"] | "RouteurSolaire";
   espNowCopyFixedText(packet.nodeName, sizeof(packet.nodeName), nodeName.c_str());
-  packet.roleFlags = localRoleFlags();
-  packet.redundancyRole = localRedundancyRole();
+  packet.serviceFlags = localServiceFlags();
   packet.capabilityFlags = localCapabilityFlags();
   packet.primarySensorType = SENSOR_ROUTER;
   WiFi.macAddress(packet.mac);
@@ -607,11 +609,9 @@ String EspNowManager::macToString(const uint8_t *mac) {
 }
 
 void EspNowManager::prepareMessage(EspNowMessage &message) {
-  message.role = static_cast<uint8_t>(state.role);
   message.sequenceNumber = ++sequenceCounter;
   message.timestamp = millis();
   if (!strlen(message.senderId)) strlcpy(message.senderId, state.deviceId.c_str(), sizeof(message.senderId));
-  if (!strlen(message.masterId)) strlcpy(message.masterId, (state.isActiveMaster ? state.deviceId : state.activeMasterId).c_str(), sizeof(message.masterId));
   message.checksum = checksumFor(message);
 }
 
@@ -678,7 +678,7 @@ void EspNowManager::handleSensorPacket(const uint8_t *mac, const uint8_t *data, 
   const String sourceMac = macToString(mac);
   state.lastEspNowSensorReceiveMs = millis();
   if (EspNowDiscoveredNode *node = findOrCreateDiscoveredNode(mac, packet.nodeId, packet.nodeName)) {
-    node->roleFlags |= ESPNOW_ROLE_PRODUCER;
+    node->serviceFlags |= ESPNOW_SERVICE_PRODUCER;
     node->primarySensorType = packet.sensorType;
     markDiscoveredNodeFrame(*node, ESPNOW_PACKET_SENSOR_DATA, millis());
   }
@@ -715,7 +715,7 @@ void EspNowManager::handleFastSensorPacket(const uint8_t *mac, const uint8_t *da
   }
   state.lastEspNowSensorReceiveMs = millis();
   if (EspNowDiscoveredNode *node = findOrCreateDiscoveredNode(mac, packet.nodeId, nullptr)) {
-    node->roleFlags |= ESPNOW_ROLE_PRODUCER;
+    node->serviceFlags |= ESPNOW_SERVICE_PRODUCER;
     node->primarySensorType = packet.sensorType;
     markDiscoveredNodeFrame(*node, ESPNOW_PACKET_FAST_DATA, millis());
   }
@@ -741,7 +741,7 @@ void EspNowManager::handleSensorDiscoveryPacket(const uint8_t *mac, const uint8_
     return;
   }
   if (EspNowDiscoveredNode *node = findOrCreateDiscoveredNode(mac, packet.nodeId, packet.nodeName)) {
-    node->roleFlags |= ESPNOW_ROLE_PRODUCER;
+    node->serviceFlags |= ESPNOW_SERVICE_PRODUCER;
     if (!node->firmwareVersion[0]) espNowCopyFixedText(node->firmwareVersion, sizeof(node->firmwareVersion), packet.firmwareVersion);
     if (!node->littlefsVersion[0]) espNowCopyFixedText(node->littlefsVersion, sizeof(node->littlefsVersion), packet.littlefsVersion);
     node->primarySensorType = packet.sensorType;
@@ -764,7 +764,7 @@ void EspNowManager::handleActuatorDiscoveryPacket(const uint8_t *mac, const uint
     return;
   }
   if (EspNowDiscoveredNode *node = findOrCreateDiscoveredNode(mac, packet.nodeId, packet.nodeName)) {
-    node->roleFlags |= ESPNOW_ROLE_ACTUATOR | ESPNOW_ROLE_CONSUMER;
+    node->serviceFlags |= ESPNOW_SERVICE_ACTUATOR | ESPNOW_SERVICE_CONSUMER;
     node->capabilityFlags |= ESPNOW_CAP_ACTUATOR;
     if (!node->firmwareVersion[0]) espNowCopyFixedText(node->firmwareVersion, sizeof(node->firmwareVersion), packet.firmwareVersion);
     if (!node->littlefsVersion[0]) espNowCopyFixedText(node->littlefsVersion, sizeof(node->littlefsVersion), packet.littlefsVersion);
@@ -843,8 +843,7 @@ EspNowDiscoveredNode *EspNowManager::rememberDiscoveredNode(const uint8_t *mac, 
   memcpy(slot->mac, mac, 6);
   slot->nodeId = packet.nodeId;
   espNowCopyFixedText(slot->nodeName, sizeof(slot->nodeName), packet.nodeName);
-  slot->roleFlags = packet.roleFlags;
-  slot->redundancyRole = packet.redundancyRole;
+  slot->serviceFlags = packet.serviceFlags;
   slot->capabilityFlags = packet.capabilityFlags;
   slot->primarySensorType = packet.primarySensorType;
   espNowCopyFixedText(slot->firmwareVersion, sizeof(slot->firmwareVersion), packet.firmwareVersion);
@@ -869,7 +868,7 @@ EspNowDiscoveredNode *EspNowManager::findOrCreateDiscoveredNode(const uint8_t *m
   slot->used = true;
   memcpy(slot->mac, mac, 6);
   if (created || updateNodeId || slot->nodeId == 0) slot->nodeId = nodeId;
-  if (slot->roleFlags == ESPNOW_ROLE_NONE) slot->roleFlags = ESPNOW_ROLE_NONE;
+  if (slot->serviceFlags == ESPNOW_SERVICE_NONE) slot->serviceFlags = ESPNOW_SERVICE_NONE;
   if (nodeName && nodeName[0]) espNowCopyFixedText(slot->nodeName, sizeof(slot->nodeName), nodeName);
   else if (!slot->nodeName[0]) espNowCopyFixedText(slot->nodeName, sizeof(slot->nodeName), "ESP-NOW");
   return slot;
@@ -879,8 +878,6 @@ const char *EspNowManager::defaultExportSensorName(uint8_t sensorId) {
   if (sensorId == SENSOR_LINKY) return "Linky";
   if (sensorId == SENSOR_JSY) return "JSY";
   if (sensorId >= 20 && sensorId <= 22) return "DS18B20";
-  if (sensorId == 30) return "Battery";
-  if (sensorId == 31) return "Solar";
   return "Sensor";
 }
 
@@ -888,8 +885,6 @@ uint8_t EspNowManager::defaultExportSensorType(uint8_t sensorId) {
   if (sensorId == SENSOR_LINKY) return SENSOR_LINKY;
   if (sensorId == SENSOR_JSY) return SENSOR_JSY;
   if (sensorId >= 20 && sensorId <= 22) return SENSOR_DS18B20;
-  if (sensorId == 30) return SENSOR_BATTERY;
-  if (sensorId == 31) return SENSOR_SOLAR;
   return SENSOR_UNKNOWN;
 }
 
@@ -929,8 +924,6 @@ EspNowExportConfig EspNowManager::exportConfigFor(uint8_t sensorId, const char *
     bool matches = false;
     if (sensorId == SENSOR_LINKY && (id == "tic_linky" || type == "TIC Linky")) matches = true;
     if (sensorId == SENSOR_JSY && (id == "jsy_grid" || type == "JSY-MK-194T")) matches = true;
-    if (sensorId == 30 && type == "Battery") matches = true;
-    if (sensorId == 31 && type == "Solar") matches = true;
     if (!matches) continue;
 
     const char *name = sensor["name"] | sensor["id"] | out.sensorName;
@@ -1003,16 +996,8 @@ bool EspNowManager::currentExportValue(uint8_t sensorId, float &value) {
     value = state.ds18b20Temps[index];
     return true;
   }
-  if (sensorId == 30) {
-    if (!state.batteryOnline || isnan(state.batteryVoltageV)) return false;
-    value = state.batteryVoltageV;
-    return true;
-  }
-  if (sensorId == 31) {
-    if (isnan(state.productionW) || state.productionW <= 0.0f) return false;
-    value = state.productionW;
-    return true;
-  }
+
+
   return false;
 }
 
@@ -1064,19 +1049,8 @@ bool EspNowManager::buildFastPacketForSensor(uint8_t sensorId, EspNowFastSensorP
     addFastPacketValue(packet, VALUE_TEMPERATURE_C, state.ds18b20Temps[index]);
     return packet.valueCount > 0;
   }
-  if (sensorId == 30) {
-    if (!state.batteryOnline) return false;
-    addFastPacketValue(packet, VALUE_BATTERY_VOLTAGE_V, state.batteryVoltageV);
-    addFastPacketValue(packet, VALUE_BATTERY_CURRENT_A, state.batteryCurrentA);
-    addFastPacketValue(packet, VALUE_POWER_W, state.batteryPowerW);
-    addFastPacketValue(packet, VALUE_BATTERY_SOC_PERCENT, state.batterySocPct);
-    return packet.valueCount > 0;
-  }
-  if (sensorId == 31) {
-    if (isnan(state.productionW) || state.productionW <= 0.0f) return false;
-    addFastPacketValue(packet, VALUE_POWER_W, state.productionW);
-    return packet.valueCount > 0;
-  }
+
+
   return false;
 }
 
@@ -1125,13 +1099,6 @@ bool EspNowManager::buildDiscoveryPacketForSensor(uint8_t sensorId, EspNowSensor
     addSensorDiscoveryValue(packet, VALUE_FREQUENCY_HZ, "FREQ", "Hz");
   } else if (sensorId >= 20 && sensorId <= 22) {
     addSensorDiscoveryValue(packet, VALUE_TEMPERATURE_C, "TEMP", "C");
-  } else if (sensorId == 30) {
-    addSensorDiscoveryValue(packet, VALUE_BATTERY_VOLTAGE_V, "BATV", "V");
-    addSensorDiscoveryValue(packet, VALUE_BATTERY_CURRENT_A, "BATA", "A");
-    addSensorDiscoveryValue(packet, VALUE_POWER_W, "BATP", "W");
-    addSensorDiscoveryValue(packet, VALUE_BATTERY_SOC_PERCENT, "SOC", "%");
-  } else if (sensorId == 31) {
-    addSensorDiscoveryValue(packet, VALUE_POWER_W, "POWER", "W");
   }
   return packet.valueCount > 0;
 }
@@ -1218,6 +1185,8 @@ bool EspNowManager::sendJsySensorDataChunks(uint32_t now) {
   addSensorPacketValue(packet2, VALUE_ENERGY_KWH, "CH2_EPOS", state.jsyImportEnergyWh2, "Wh");
   addSensorPacketValue(packet2, VALUE_ENERGY_KWH, "CH2_ENEG", state.jsyExportEnergyWh2, "Wh");
   addSensorPacketValue(packet2, VALUE_STATE_BOOL, "CH2_DIR", state.energyDirection2 == "injection" ? -1.0f : 1.0f, "");
+  addSensorPacketValue(packet2, VALUE_POWER_W, "CH1_W_RAW", state.jsyMeasuredPowerW1, "W");
+  addSensorPacketValue(packet2, VALUE_POWER_W, "CH2_W_RAW", state.jsyMeasuredPowerW2, "W");
 
   bool sent = false;
   if (packet1.valueCount) sent = sendSensorPacketToPeers(packet1) || sent;
@@ -1295,12 +1264,18 @@ void EspNowManager::exportSensorIfNeeded(uint8_t sensorId) {
   float currentValue = 0.0f;
   if (!currentExportValue(sensorId, currentValue)) return;
   if (!shouldExportSensor(sensorId, currentValue)) return;
+  // Export at most once per physical power reading; heartbeat/discovery remain independent.
+  const bool meteredPower = sensorId == SENSOR_JSY || sensorId == SENSOR_LINKY;
+  const uint32_t sampleMs = sensorId == SENSOR_JSY ? state.lastJsyReadMs : state.lastTicPowerReadMs;
+  const int8_t sampleSlot = ensureExportRuntimeIndex(sensorId);
+  if (meteredPower && (!sampleMs || sampleSlot < 0 || exportLastSampleMs[sampleSlot] == sampleMs)) return;
 
   if (sensorId == SENSOR_JSY) {
     if (!sendJsySensorDataChunks(currentLoopNowMs)) return;
     int8_t slot = ensureExportRuntimeIndex(sensorId);
     if (slot >= 0) {
       exportLastSentMs[slot] = currentLoopNowMs;
+      if (meteredPower) exportLastSampleMs[slot] = sampleMs;
       exportLastValues[slot] = currentValue;
       exportLastValueValid[slot] = true;
     }
@@ -1314,6 +1289,7 @@ void EspNowManager::exportSensorIfNeeded(uint8_t sensorId) {
   int8_t slot = ensureExportRuntimeIndex(sensorId);
   if (slot >= 0) {
     exportLastSentMs[slot] = currentLoopNowMs;
+      if (meteredPower) exportLastSampleMs[slot] = sampleMs;
     exportLastValues[slot] = currentValue;
     exportLastValueValid[slot] = true;
   }
@@ -1323,11 +1299,17 @@ void EspNowManager::sendSensorFastData(uint8_t sensorId) {
   float currentValue = 0.0f;
   if (!currentExportValue(sensorId, currentValue)) return;
   uint32_t now = millis();
+  // Export at most once per physical power reading; heartbeat/discovery remain independent.
+  const bool meteredPower = sensorId == SENSOR_JSY || sensorId == SENSOR_LINKY;
+  const uint32_t sampleMs = sensorId == SENSOR_JSY ? state.lastJsyReadMs : state.lastTicPowerReadMs;
+  const int8_t sampleSlot = ensureExportRuntimeIndex(sensorId);
+  if (meteredPower && (!sampleMs || sampleSlot < 0 || exportLastSampleMs[sampleSlot] == sampleMs)) return;
   if (sensorId == SENSOR_JSY) {
     if (!sendJsySensorDataChunks(now)) return;
     int8_t slot = ensureExportRuntimeIndex(sensorId);
     if (slot >= 0) {
       exportLastSentMs[slot] = now;
+      if (meteredPower) exportLastSampleMs[slot] = sampleMs;
       exportLastValues[slot] = currentValue;
       exportLastValueValid[slot] = true;
     }
@@ -1339,6 +1321,7 @@ void EspNowManager::sendSensorFastData(uint8_t sensorId) {
   int8_t slot = ensureExportRuntimeIndex(sensorId);
   if (slot >= 0) {
     exportLastSentMs[slot] = now;
+      if (meteredPower) exportLastSampleMs[slot] = sampleMs;
     exportLastValues[slot] = currentValue;
     exportLastValueValid[slot] = true;
   }
@@ -1373,8 +1356,6 @@ void EspNowManager::publishLocalSensorsIfNeeded(uint32_t now) {
   JsonArray ds18b20 = config.sensorsDoc()["ds18b20"].as<JsonArray>();
   for (uint8_t i = 0; i < 3 && i < ds18b20.size(); i++) exportSensorIfNeeded(20 + i);
 
-  exportSensorIfNeeded(30);
-  exportSensorIfNeeded(31);
 }
 
 void EspNowManager::publishLocalSensorDiscoveryIfNeeded(uint32_t now) {
@@ -1396,8 +1377,6 @@ void EspNowManager::sendAllSensorDiscovery() {
     sendSensorDiscovery(20 + i);
   }
 
-  sendSensorDiscovery(30);
-  sendSensorDiscovery(31);
 }
 
 void EspNowManager::sendAllActuatorDiscovery() {
@@ -1651,8 +1630,6 @@ bool EspNowManager::debugEnabledForRemoteSensor(const String &sourceMac, uint8_t
     if ((configuredType.indexOf("TIC") >= 0 || configuredType.indexOf("LINKY") >= 0) && sensorType == SENSOR_LINKY) typeMatches = true;
     if (configuredType.indexOf("JSY") >= 0 && sensorType == SENSOR_JSY) typeMatches = true;
     if ((configuredType.indexOf("DS18") >= 0 || configuredType.indexOf("TEMP") >= 0) && (sensorType == SENSOR_DS18B20 || sensorType == SENSOR_TEMP_HUM)) typeMatches = true;
-    if (configuredType.indexOf("BAT") >= 0 && sensorType == SENSOR_BATTERY) typeMatches = true;
-    if ((configuredType.indexOf("SOLAR") >= 0 || configuredType.indexOf("SOLAIRE") >= 0) && sensorType == SENSOR_SOLAR) typeMatches = true;
     if (configuredType.length() && !typeMatches) continue;
 
     configuredName = sensor["name"] | sensor["id"] | "";
@@ -1867,25 +1844,23 @@ void EspNowManager::logDebugDiagnosticPacketIfNeeded(const String &sourceMac, co
   state.logEvent("INFO", "ESPNOW_SENSOR_DECODE", line, "EspNow");
 }
 
-uint8_t EspNowManager::localRoleFlags() const {
-  switch (state.role) {
-    case ROLE_MASTER:
-    case ROLE_BACKUP:
-      return ESPNOW_ROLE_CONSUMER | ESPNOW_ROLE_ROUTER | ESPNOW_ROLE_ACTUATOR;
-    case ROLE_NODE_SENSOR:
-      return ESPNOW_ROLE_PRODUCER;
-    case ROLE_NODE_ACTUATOR:
-      return ESPNOW_ROLE_CONSUMER | ESPNOW_ROLE_ACTUATOR;
-    case ROLE_NODE_MIXED:
-      return ESPNOW_ROLE_PRODUCER | ESPNOW_ROLE_CONSUMER | ESPNOW_ROLE_ACTUATOR;
-    default:
-      return ESPNOW_ROLE_NONE;
+uint8_t EspNowManager::localServiceFlags() const {
+  // Protocol capability bits are derived from enabled configuration, never a role.
+  uint8_t flags = ESPNOW_SERVICE_CONSUMER;
+  for (JsonObject sensor : config.sensors()) {
+    if (sensor["enabled"] | true) flags |= ESPNOW_SERVICE_PRODUCER;
   }
+  for (JsonObject sensor : config.sensorsDoc()["ds18b20"].as<JsonArray>()) {
+    if (sensor["enabled"] | true) flags |= ESPNOW_SERVICE_PRODUCER;
+  }
+  for (JsonObject actuator : config.actuators()) {
+    if (actuator["enabled"] | true) flags |= ESPNOW_SERVICE_ACTUATOR;
+  }
+  return flags;
 }
 
 uint16_t EspNowManager::localCapabilityFlags() {
   uint16_t flags = ESPNOW_CAP_NONE;
-  if (state.role == ROLE_MASTER || state.role == ROLE_BACKUP) flags |= ESPNOW_CAP_ROUTER;
   for (JsonObject sensor : config.sensors()) {
     String type = sensor["type"] | "";
     type.toUpperCase();
@@ -1910,12 +1885,6 @@ uint8_t EspNowManager::fallbackNodeIdFromMac(const uint8_t *mac) const {
   return static_cast<uint8_t>((macHash % 254U) + 1U);
 }
 
-uint8_t EspNowManager::localRedundancyRole() const {
-  if (state.role == ROLE_MASTER) return ESPNOW_REDUNDANCY_MASTER;
-  if (state.role == ROLE_BACKUP) return ESPNOW_REDUNDANCY_BACKUP;
-  return ESPNOW_REDUNDANCY_STANDALONE;
-}
-
 uint8_t EspNowManager::espNowActuatorTypeFor(const String &type) {
   String normalized = type;
   normalized.toUpperCase();
@@ -1932,23 +1901,10 @@ bool EspNowManager::acceptActuatorCommand(const EspNowMessage &message, const St
     state.addLog("ESP-NOW commande refusee: Safety CRITICAL");
     return false;
   }
-  if (message.ttlMs && millis() - message.timestamp > message.ttlMs) {
-    state.addLog("ESP-NOW commande refusee: expiree");
-    return false;
-  }
-  if (!state.activeMasterId.length()) {
-    state.addLog("ESP-NOW commande refusee: master inconnu");
-    return false;
-  }
-  if (String(message.masterId) != state.activeMasterId) {
-    state.addLog("ESP-NOW commande refusee: ancien masterId depuis " + mac);
-    return false;
-  }
-  if (message.epoch < state.redundancyEpoch) {
-    state.addLog("ESP-NOW commande refusee: epoch ancien");
-    return false;
-  }
-  if (message.epoch > state.redundancyEpoch) state.redundancyEpoch = message.epoch;
+  // Sender and receiver millis() have unrelated boot origins. The actuator
+  // watchdog applies ttlMs from local reception, never from message.timestamp.
+  // The receive path already requires an explicitly authorised peer and a valid checksum.
+  if (!isPeerKnown(mac)) return false;
   return true;
 }
 

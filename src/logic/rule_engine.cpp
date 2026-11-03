@@ -1,8 +1,19 @@
+#include "../config/legacy_config_migration.h"
 #include "rule_engine.h"
+#include "../config/pid_config_migration.h"
 
 // Catalogue serveur des sources et mesures autorisees pour les conditions.
 // Toute condition sauvegardee en JSON doit correspondre a une entree de cette table.
 static const RuleEngine::MeasureDef RULE_MEASURES[] = {
+  {"JSY-MK-194T", "jsyGridPowerW", RuleEngine::MEASURE_NUMBER, "W", ""},
+  {"JSY-MK-194T", "jsyInjectionW", RuleEngine::MEASURE_NUMBER, "W", ""},
+  {"JSY-MK-194T", "jsyPurchaseW", RuleEngine::MEASURE_NUMBER, "W", ""},
+  {"JSY-MK-194T", "loadPowerW", RuleEngine::MEASURE_NUMBER, "W", ""},
+  {"JSY-MK-194T", "loadCurrentA", RuleEngine::MEASURE_NUMBER, "A", ""},
+  {"JSY-MK-194T", "loadEnergyWh", RuleEngine::MEASURE_NUMBER, "Wh", ""},
+  {"JSY-MK-194T", "jsyProductionW", RuleEngine::MEASURE_NUMBER, "W", ""},
+  {"JSY-MK-194T", "jsyGridAvailable", RuleEngine::MEASURE_BOOL, "", ""},
+  {"JSY-MK-194T", "jsyLoadAvailable", RuleEngine::MEASURE_BOOL, "", ""},
   {"JSY-MK-194T", "gridPowerW", RuleEngine::MEASURE_NUMBER, "W", ""},
   {"JSY-MK-194T", "injectionW", RuleEngine::MEASURE_NUMBER, "W", ""},
   {"JSY-MK-194T", "consumptionW", RuleEngine::MEASURE_NUMBER, "W", ""},
@@ -65,15 +76,9 @@ static const RuleEngine::MeasureDef RULE_MEASURES[] = {
   {"Systeme", "wifiStatus", RuleEngine::MEASURE_ENUM, "", "CONNECTED,AP_FALLBACK,DISCONNECTED"},
   {"Systeme", "uptimeMs", RuleEngine::MEASURE_NUMBER, "ms", ""},
   {"Systeme", "freeHeap", RuleEngine::MEASURE_NUMBER, "B", ""},
-  {"Systeme", "role", RuleEngine::MEASURE_ENUM, "", "MASTER,BACKUP,NODE_SENSOR,NODE_ACTUATOR,NODE_MIXED"},
   {"Securite", "safetyLevel", RuleEngine::MEASURE_ENUM, "", "OK,WARNING,DEGRADED,CRITICAL"},
   {"Securite", "safetyReason", RuleEngine::MEASURE_TEXT, "", ""},
   {"Securite", "isCritical", RuleEngine::MEASURE_BOOL, "", ""},
-  {"Redondance", "activeRole", RuleEngine::MEASURE_ENUM, "", "MASTER,BACKUP,NODE_SENSOR,NODE_ACTUATOR,NODE_MIXED"},
-  {"Redondance", "isActiveMaster", RuleEngine::MEASURE_BOOL, "", ""},
-  {"Redondance", "activeMasterId", RuleEngine::MEASURE_TEXT, "", ""},
-  {"Redondance", "epoch", RuleEngine::MEASURE_NUMBER, "", ""},
-  {"Redondance", "lastHeartbeatAgeMs", RuleEngine::MEASURE_NUMBER, "ms", ""}
 };
 
 void RuleEngine::begin() {
@@ -91,6 +96,27 @@ void RuleEngine::loop(uint32_t now) {
 
 void RuleEngine::loadRules() {
   lastCommandCount = 0;
+  for (uint8_t i = 0; i < MAX_RULES; ++i) {
+    eventBranch[i] = 0;
+    eventPending[i] = false;
+    eventLogged[i] = false;
+    lastEventMs[i] = 0;
+  }
+}
+
+bool RuleEngine::shouldLogBranch(uint8_t index, uint8_t branch, uint32_t now) {
+  if (index >= MAX_RULES) return false;
+  if (eventBranch[index] != branch) {
+    eventBranch[index] = branch;
+    eventPending[index] = true;
+  }
+  if (!eventPending[index]) return false;
+  // Keep only the latest branch pending during chatter. No waiting in the loop.
+  if (eventLogged[index] && static_cast<uint32_t>(now - lastEventMs[index]) < 5000UL) return false;
+  eventPending[index] = false;
+  eventLogged[index] = true;
+  lastEventMs[index] = now;
+  return true;
 }
 
 void RuleEngine::evaluate(uint32_t now) {
@@ -103,7 +129,9 @@ void RuleEngine::evaluateRules(uint32_t now) {
 
 RuleEngine::RuleDecision RuleEngine::evaluateDecision(uint32_t now) {
   RuleDecision decision;
+  selectedCount = 0;
   if (state.safetyTripped) {
+    for (uint8_t i = 0; i < MAX_RULES; ++i) { eventBranch[i] = 0; eventPending[i] = false; }
     pid.reset();
     decision.reason = "Safety active";
     lastRuleCount = 0;
@@ -131,14 +159,14 @@ RuleEngine::RuleDecision RuleEngine::evaluateDecision(uint32_t now) {
     }
   }
 
-  bool surplusRegulationActive = false;
+  bool visited[MAX_RULES] = {};
   for (uint8_t idx = 0; idx < count; idx++) {
     JsonObject rule = ruleAt(order[idx]);
     if (!rule["enabled"]) continue;
     String errors;
-    DynamicJsonDocument oneRule(2048);
+    DynamicJsonDocument oneRule(4096);
     oneRule["rules"].to<JsonArray>().add(rule);
-    if (!validateRulesDocument(oneRule, errors)) continue;
+    if (oneRule.overflowed() || !validateRulesDocument(oneRule, errors)) continue;
     String logic = rule["logic"] | "AND";
     bool matched = logic == "AND";
     for (JsonObject condition : rule["conditions"].as<JsonArray>()) {
@@ -149,20 +177,33 @@ RuleEngine::RuleDecision RuleEngine::evaluateDecision(uint32_t now) {
     JsonArray actions = matched ? rule["actions"].as<JsonArray>() : rule["elseActions"].as<JsonArray>();
     if (actions.isNull()) actions = matched ? rule["then"].as<JsonArray>() : rule["else"].as<JsonArray>();
     if (actions.isNull()) continue;
-    decision.matched = matched;
-    decision.elseBranch = !matched;
-    decision.ruleId = rule["id"] | "";
-    decision.ruleName = rule["name"] | rule["id"] | "regle";
-    decision.priority = rule["priority"] | 0;
-    decision.reason = String("Regle ") + decision.ruleName + (matched ? " ALORS" : " SINON");
+    visited[order[idx]] = true;
+    const bool emitEvent = shouldLogBranch(order[idx], matched ? 1 : 2, now);
+    uint8_t actionIndex = 0;
     for (JsonObject action : actions) {
-      String command = action["command"] | "";
-      if (command == "setPowerFromSurplus" || command == "setActuatorPercentFromSurplus") surplusRegulationActive = true;
-      if (actionToDecision(action, decision.ruleName, decision)) break;
+      const String command = action["command"] | "";
+      const String target = action["actuatorId"] | "";
+      bool claimed = false;
+      for (uint8_t n = 0; n < selectedCount; ++n) if (selected[n].actuatorId == target) claimed = true;
+      if (!claimed || command == "logEvent" || command == "setSafetyWarning") {
+        RuleDecision candidate;
+        candidate.matched = matched; candidate.elseBranch = !matched;
+        candidate.ruleId = rule["id"] | "";
+        candidate.ruleName = rule["name"] | rule["id"] | "regle";
+        candidate.priority = rule["priority"] | 0;
+        candidate.reason = String("Regle ") + candidate.ruleName + (matched ? " ALORS" : " SINON");
+        candidate.pidContext = candidate.ruleId + (matched ? ":then:" : ":else:") + String(actionIndex) + ":" + target;
+        if (actionToDecision(action, candidate.ruleName, candidate, emitEvent) && selectedCount < 16) {
+          selected[selectedCount++] = candidate;
+        }
+      }
+      ++actionIndex;
     }
-    if (decision.hasCommand) break;
   }
-  if (!surplusRegulationActive) pid.reset();
+  for (uint8_t i = 0; i < MAX_RULES; ++i) {
+    if (!visited[i]) { eventBranch[i] = 0; eventPending[i] = false; }
+  }
+  if (selectedCount) decision = selected[0];
   if (!decision.hasCommand && !decision.ruleName.length()) decision.reason = "Aucune regle active";
   return decision;
 }
@@ -176,20 +217,20 @@ void RuleEngine::executeAction(JsonObject action, const String &ruleName) {
   actionToDecision(action, ruleName, ignored);
 }
 
-bool RuleEngine::actionToDecision(JsonObject action, const String &ruleName, RuleDecision &decision) {
+bool RuleEngine::actionToDecision(JsonObject action, const String &ruleName, RuleDecision &decision, bool emitEvent) {
   if (state.safetyTripped) return false;
   String command = action["command"] | "";
   String actuatorId = action["actuatorId"] | "";
 
   if (command == "logEvent") {
-    state.addLog(String("Regle ") + ruleName + ": " + String(action["message"] | "evenement"));
+    if (emitEvent) state.addLog(String("Regle ") + ruleName + ": " + String(action["message"] | "evenement"));
     return false;
   }
 
   if (command == "setSafetyWarning") {
     state.safetyLevel = "WARNING";
     state.safetyReason = action["message"] | "Alerte regle";
-    state.addLog(String("Regle ") + ruleName + ": safety warning");
+    if (emitEvent) state.addLog(String("Regle ") + ruleName + ": safety warning");
     return false;
   }
 
@@ -207,20 +248,50 @@ bool RuleEngine::actionToDecision(JsonObject action, const String &ruleName, Rul
   const char *sourceVariable = action["sourceVariable"] | "";
   if (strlen(sourceSensorId) && strlen(sourceVariable)) {
     float sourced = sensorValue(sourceSensorId, sourceVariable);
-    if (!isnan(sourced)) value = sourced;
+    if (isfinite(sourced)) value = sourced;
+    else {
+      value = 0.0f;
+      decision.reason = "Mesure source indisponible";
+    }
   }
 
   if (command == "setPowerFromSurplus" || command == "setActuatorPercentFromSurplus") {
-    value = surplusRegulationPercent(action);
+    String regulation = action["regulation"] | "PID";
+    regulation.toUpperCase();
+    decision.pidRegulation = regulation != "PROPORTIONAL";
+    if (decision.pidRegulation) decision.pidAction = action;
+    value = decision.pidRegulation ? 0.0f : surplusRegulationPercent(action);
+    const float limit = action["maxPercent"] | 100.0f;
+    value = isfinite(limit) ? min(value, constrain(limit, 0.0f, 100.0f)) : 0.0f;
+    command = "setPower";
+  } else if (command == "setPowerWatts" || command == "setPowerFromWatts" || command == "setPowerFromSensorWatts") {
+    // Convert the requested watts before RuleDecision/AutomateManager clamp
+    // their percentage fields. Sending watts through those fields capped at
+    // 100 W and converted again in ActuatorManager.
+    value = actuators.powerWattsToPercent(actuatorId, value, action["maxOutputPowerW"] | 0.0f);
     command = "setPower";
   }
 
+  // Reflect the effective fixed command, including legacy actions whose value
+  // is zero even though 'on' means full output.
+  if (command == "on") value = 100.0f;
+  else if (command == "stop" || command == "off" || command == "safetyShutdown") value = 0.0f;
   decision.hasCommand = actuatorId.length() && command.length();
   decision.actuatorId = actuatorId;
   decision.command = command;
   decision.commandPercent = constrain(value, 0.0f, 100.0f);
-  if (decision.hasCommand) logCommandChange(actuatorId + "." + command, value, ruleName);
+  if (decision.hasCommand && !decision.pidRegulation) logCommandChange(actuatorId + "." + command, value, ruleName);
   return decision.hasCommand;
+}
+
+void RuleEngine::resolvePID(RuleDecision &decision, uint32_t now) {
+  if (!decision.pidRegulation) return;
+  // Acquisition may have completed after the scheduler took its loop timestamp.
+  now = millis();
+  JsonObject a = decision.pidAction;
+  const auto sample = sensors.gridPowerSample(a["pidSensorId"] | "grid", a["pidMeasurement"] | "gridPowerW", now);
+  decision.commandPercent = pid.compute(a, sample, now, decision.pidContext);
+  logCommandChange(decision.actuatorId + ".setPower", decision.commandPercent, decision.ruleName);
 }
 
 void RuleEngine::printRulesStatus() {
@@ -244,7 +315,7 @@ String RuleEngine::validateRulesJson() {
 }
 
 bool RuleEngine::validateRulesPayload(const String &payload, String &errorsJson) {
-  DynamicJsonDocument doc(12288);
+  DynamicJsonDocument doc(32768);
   DeserializationError err = deserializeJson(doc, payload);
   if (err) {
     DynamicJsonDocument out(256);
@@ -252,6 +323,8 @@ bool RuleEngine::validateRulesPayload(const String &payload, String &errorsJson)
     serializeJson(out, errorsJson);
     return false;
   }
+  migratePIDActions(doc.as<JsonObject>(), config.system()["router"], config.sensors());
+  if (doc.overflowed()) { errorsJson = "[\"Migration PID trop volumineuse\"]"; return false; }
   return validateRulesDocument(doc, errorsJson);
 }
 
@@ -265,18 +338,61 @@ bool RuleEngine::validateRulesDocument(JsonDocument &doc, String &errorsJson) {
     if (!rule["conditions"].is<JsonArray>()) errors.add(ruleId + ": conditions manquantes");
     if (!rule["actions"].is<JsonArray>()) errors.add(ruleId + ": actions manquantes");
     for (JsonObject condition : rule["conditions"].as<JsonArray>()) validateCondition(condition, errors, ruleId);
-    for (JsonObject action : rule["actions"].as<JsonArray>()) {
+    for (const char *branch : {"actions", "elseActions", "then", "else"}) {
+    for (JsonObject action : rule[branch].as<JsonArray>()) {
       String cmd = action["command"] | "";
       if (!cmd.length()) errors.add(ruleId + ": action sans commande");
+      bool knownCommand = false;
+      for (const char *allowed : {"setActuatorPercent", "setPower", "setPWM", "setPowerFromSurplus", "setActuatorPercentFromSurplus", "setPowerWatts", "setPowerFromWatts", "setPowerFromSensorWatts", "stop", "off", "on", "toggle", "setMode", "safetyShutdown", "logEvent", "setSafetyWarning"}) {
+        if (cmd == allowed) knownCommand = true;
+      }
+      if (!knownCommand) errors.add(ruleId + ": commande inconnue");
       if (cmd != "logEvent" && cmd != "setSafetyWarning" && !action["actuatorId"].is<const char *>()) errors.add(ruleId + ": action sans actuatorId");
       if (cmd == "setMode" && !action["mode"].is<const char *>() && !action["value"].is<const char *>()) errors.add(ruleId + ": mode actionneur manquant");
+      if (cmd == "setPowerFromSurplus" || cmd == "setActuatorPercentFromSurplus") {
+        const String algorithm = action["regulation"] | "PID";
+        if (algorithm != "PID" && algorithm != "I" && algorithm != "PROPORTIONAL") errors.add(ruleId + ": algorithme inconnu");
+        if (algorithm == "I") {
+          const float reactivity = action["reactivity"] | 10.0f;
+          if ((action.containsKey("reactivity") && !action["reactivity"].is<float>() && !action["reactivity"].is<int>()) ||
+              !isfinite(reactivity) || reactivity < 0 || reactivity > 200 ||
+              (action.containsKey("kp") && (action["kp"] | -1.0f) != 0) ||
+              (action.containsKey("kd") && (action["kd"] | -1.0f) != 0) ||
+              (action.containsKey("ki") && (!isfinite(action["ki"] | NAN) || fabsf((action["ki"] | -1.0f) - reactivity / 2000.0f) > 0.000001f)))
+            errors.add(ruleId + ": reactivite ou coefficients du mode I invalides");
+        }
+      }
+      if ((cmd == "setPowerFromSurplus" || cmd == "setActuatorPercentFromSurplus") && String(action["regulation"] | "PID") != "PROPORTIONAL") {
+        if ((action["pidSchema"] | 0) < 1) errors.add(ruleId + ": migration PID requise");
+        for (const char *key : {"pidEnabled", "requireProduction"}) {
+          if (action.containsKey(key) && !action[key].is<bool>()) errors.add(ruleId + ": option PID non booleenne: " + key);
+        }
+        if (!validPIDSettings(PIDController::settings(action))) errors.add(ruleId + ": parametres PID invalides");
+        for (const char *key : {"kp", "ki", "kd", "gridSetpointW", "deadbandW", "biasPercent", "maxPercent", "maxOutputRampPercentPerSecond", "maxOutputDropPercentPerSecond", "measurementFilterMs", "derivativeFilterMs", "pidIntervalMs", "measurementTimeoutMs"}) {
+          if (action.containsKey(key) && !action[key].is<float>() && !action[key].is<int>()) errors.add(ruleId + ": valeur PID non numerique: " + key);
+        }
+        const String variable = action["pidMeasurement"] | "gridPowerW";
+        if (variable != "gridPowerW" && variable != "jsyGridPowerW") errors.add(ruleId + ": PID exige une puissance reseau signee");
+        bool outputFound = false;
+        for (JsonObject output : config.actuators()) {
+          if (String(output["id"] | "") != String(action["actuatorId"] | "")) continue;
+          const String type = output["type"] | "";
+          outputFound = type == "SSR" || type == "RobotDyn Triac" || type == "PWM";
+        }
+        if (!outputFound) errors.add(ruleId + ": sortie PID incompatible ou absente");
+      }
     }
   }
+    }
   serializeJson(out, errorsJson);
   return errors.size() == 0;
 }
 
 float RuleEngine::sensorValue(const String &sensorId, const String &variable) {
+  if (sensorId == "jsy_grid") {
+    if (variable == "jsyGridPowerW") return sensors.jsyRoleValue("grid", "POWER");
+    if (variable == "loadPowerW") return sensors.jsyRoleValue("load", "POWER");
+  }
   if (sensorId == "jsy_grid" && variable == "activePower") return state.gridPowerW;
   if (sensorId == "jsy_grid" && variable == "voltageV") return state.gridVoltageV;
   if (sensorId == "jsy_grid" && variable == "frequencyHz") return state.gridFrequencyHz;
@@ -300,9 +416,9 @@ float RuleEngine::sensorValue(const String &sensorId, const String &variable) {
   if (sensorId == "jsy_grid" && variable == "currentA2") return state.currentA2;
   if (sensorId == "jsy_grid" && variable == "powerFactor1") return state.powerFactor1;
   if (sensorId == "jsy_grid" && variable == "powerFactor2") return state.powerFactor2;
-  if (sensorId == "temp_tank_top" && variable == "temperature") return state.tankTopC;
-  if (sensorId == "temp_tank_middle" && variable == "temperature") return state.tankMiddleC;
-  if (sensorId == "temp_tank_bottom" && variable == "temperature") return state.tankBottomC;
+  if (genericTemperatureId(sensorId) == "temperature_1" && variable == "temperature") return state.temperature1C;
+  if (genericTemperatureId(sensorId) == "temperature_2" && variable == "temperature") return state.temperature2C;
+  if (genericTemperatureId(sensorId) == "temperature_3" && variable == "temperature") return state.temperature3C;
   if (sensorId == "virtual_surplus" && variable == "surplus") return state.surplusW;
   return NAN;
 }
@@ -402,6 +518,21 @@ bool RuleEngine::validateCondition(JsonObject condition, JsonArray errors, const
 
 float RuleEngine::numericMeasureValue(const String &source, const String &measure) {
   if (source == "JSY-MK-194T") {
+    if (measure == "jsyGridPowerW" || measure == "jsyInjectionW" || measure == "jsyPurchaseW" || measure == "jsyGridAvailable") {
+      const float power = sensors.jsyRoleValue("grid", "POWER");
+      if (measure == "jsyGridAvailable") return isfinite(power) ? 1.0f : 0.0f;
+      if (!isfinite(power)) return NAN;
+      if (measure == "jsyInjectionW") return max(0.0f, -power);
+      if (measure == "jsyPurchaseW") return max(0.0f, power);
+      return power;
+    }
+    if (measure == "loadPowerW" || measure == "jsyLoadAvailable") {
+      const float power = sensors.jsyRoleValue("load", "POWER");
+      return measure == "jsyLoadAvailable" ? (isfinite(power) ? 1.0f : 0.0f) : power;
+    }
+    if (measure == "loadCurrentA") return sensors.jsyRoleValue("load", "CURR");
+    if (measure == "loadEnergyWh") return sensors.jsyRoleValue("load", "ENERGY_POS");
+    if (measure == "jsyProductionW") return sensors.jsyRoleValue("production", "POWER");
     if (measure == "gridPowerW") return state.gridPowerW;
     if (measure == "activePowerW" || measure == "activePowerW1") return state.activePowerW1;
     if (measure == "activePowerW2") return state.activePowerW2;
@@ -443,27 +574,21 @@ float RuleEngine::numericMeasureValue(const String &source, const String &measur
     if (measure == "lastValidReadAgeMs") return state.ds18b20LastReadMs[index] ? millis() - state.ds18b20LastReadMs[index] : 4294967295.0f;
   }
   if (source == "DS18B20_TOP") {
-    if (measure == "temperatureC") return state.tankTopC;
-    if (measure == "available") return isnan(state.tankTopC) ? 0 : 1;
-    if (measure == "lastValidReadAgeMs") return isnan(state.tankTopC) ? 4294967295.0f : 0;
+    if (measure == "temperatureC") return state.temperature1C;
+    if (measure == "available") return isnan(state.temperature1C) ? 0 : 1;
+    if (measure == "lastValidReadAgeMs") return isnan(state.temperature1C) ? 4294967295.0f : 0;
   }
   if (source == "DS18B20_MIDDLE") {
-    if (measure == "temperatureC") return state.tankMiddleC;
-    if (measure == "available") return isnan(state.tankMiddleC) ? 0 : 1;
-    if (measure == "lastValidReadAgeMs") return isnan(state.tankMiddleC) ? 4294967295.0f : 0;
+    if (measure == "temperatureC") return state.temperature2C;
+    if (measure == "available") return isnan(state.temperature2C) ? 0 : 1;
+    if (measure == "lastValidReadAgeMs") return isnan(state.temperature2C) ? 4294967295.0f : 0;
   }
   if (source == "DS18B20_BOTTOM") {
-    if (measure == "temperatureC") return state.tankBottomC;
-    if (measure == "available") return isnan(state.tankBottomC) ? 0 : 1;
-    if (measure == "lastValidReadAgeMs") return isnan(state.tankBottomC) ? 4294967295.0f : 0;
+    if (measure == "temperatureC") return state.temperature3C;
+    if (measure == "available") return isnan(state.temperature3C) ? 0 : 1;
+    if (measure == "lastValidReadAgeMs") return isnan(state.temperature3C) ? 4294967295.0f : 0;
   }
-  if (source == "battery") {
-    if (measure == "voltageV") return state.batteryVoltageV;
-    if (measure == "currentA") return state.batteryCurrentA;
-    if (measure == "powerW") return state.batteryPowerW;
-    if (measure == "socPct") return state.batterySocPct;
-    if (measure == "available") return state.batteryOnline ? 1 : 0;
-  }
+
   if (source == "solar") {
     if (measure == "powerW") return state.productionW;
     if (measure == "available") return isnan(state.productionW) ? 0 : 1;
@@ -474,26 +599,16 @@ float RuleEngine::numericMeasureValue(const String &source, const String &measur
     if (measure == "freeHeap") return ESP.getFreeHeap();
   }
   if (source == "Securite" && measure == "isCritical") return state.safetyTripped ? 1 : 0;
-  if (source == "Redondance") {
-    if (measure == "isActiveMaster") return state.isActiveMaster ? 1 : 0;
-    if (measure == "epoch") return state.redundancyEpoch;
-    if (measure == "lastHeartbeatAgeMs") return millis() - state.lastMasterHeartbeatMs;
-  }
   return NAN;
 }
 
 String RuleEngine::textMeasureValue(const String &source, const String &measure) {
   if (source == "Systeme") {
     if (measure == "wifiStatus") return state.wifiConnected ? "CONNECTED" : (state.networkMode == "AP_FALLBACK" ? "AP_FALLBACK" : "DISCONNECTED");
-    if (measure == "role") return RuntimeState::roleToString(state.role);
   }
   if (source == "Securite") {
     if (measure == "safetyLevel") return state.safetyLevel;
     if (measure == "safetyReason") return state.safetyReason;
-  }
-  if (source == "Redondance") {
-    if (measure == "activeRole") return RuntimeState::roleToString(state.role);
-    if (measure == "activeMasterId") return state.activeMasterId;
   }
   if (source == "TIC Linky" && measure == "tariff") return state.ticTariff;
   return "";
@@ -503,11 +618,12 @@ float RuleEngine::surplusRegulationPercent(JsonObject action) {
   String regulation = action["regulation"] | "PID";
   regulation.toUpperCase();
   if (regulation == "PROPORTIONAL") {
-    float maxPowerW = action["maxHeaterPowerW"] | action["maxPowerW"] | config.system()["router"]["ssr1MaxW"] | 1500.0f;
+    float maxPowerW = action["maxOutputPowerW"] | action["maxPowerW"] | config.system()["router"]["outputMaxPowerW"] | config.system()["router"]["ssr1MaxW"] | 1500.0f;
+    if (!isfinite(maxPowerW) || !isfinite(state.surplusW)) return 0.0f;
     if (maxPowerW <= 1.0f) maxPowerW = 1500.0f;
     return constrain((state.surplusW / maxPowerW) * 100.0f, 0.0f, 100.0f);
   }
-  return pid.computeSurplusPercent(action, millis());
+  return 0.0f; // PID evaluation is deferred until this output wins arbitration.
 }
 
 void RuleEngine::logCommandChange(const String &key, float value, const String &ruleName) {

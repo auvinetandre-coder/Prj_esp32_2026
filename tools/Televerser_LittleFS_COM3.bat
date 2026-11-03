@@ -82,7 +82,7 @@ echo %IMAGE%
 echo Image LittleFS horodatee:
 echo %VERSIONED_IMAGE%
 echo.
-echo Tu peux utiliser ce fichier pour l'OTA LittleFS depuis la page Secours.
+echo Tu peux utiliser ce fichier pour l'OTA LittleFS depuis la factory recovery (passage explicite).
 echo Cette image ne contient pas /config/system.json utilisateur.
 echo.
 choice /C ON /N /M "Veux-tu aussi televerser maintenant sur %PORT% ? [O/N] "

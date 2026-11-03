@@ -5,6 +5,7 @@
 #include "../runtime/runtime_state.h"
 #include "../actuators/actuator_manager.h"
 #include "pid_controller.h"
+#include "../sensors/sensor_manager.h"
 
 class RuleEngine {
 public:
@@ -60,6 +61,9 @@ public:
     bool matched = false;
     bool elseBranch = false;
     bool hasCommand = false;
+    bool pidRegulation = false;
+    JsonObject pidAction;
+    String pidContext;
     String ruleId = "";
     String ruleName = "";
     String actuatorId = "";
@@ -86,8 +90,8 @@ public:
     const char *enumValues;
   };
 
-  RuleEngine(ConfigManager &config, RuntimeState &state, ActuatorManager &actuators, PIDController &pid)
-      : config(config), state(state), actuators(actuators), pid(pid) {}
+  RuleEngine(ConfigManager &config, RuntimeState &state, ActuatorManager &actuators, PIDController &pid, SensorManager &sensors)
+      : config(config), state(state), actuators(actuators), pid(pid), sensors(sensors) {}
   void begin();
   void loop();
   void loop(uint32_t now);
@@ -96,6 +100,13 @@ public:
   void evaluateRules(uint32_t now);
   RuleDecision evaluateDecision(uint32_t now);
   const RuleDecision &decision() const { return lastDecision; }
+  uint8_t decisionCount() const { return selectedCount; }
+  RuleDecision &selectedDecision(uint8_t n) { return selected[n]; }
+  void beginPIDCycle() { pid.beginCycle(); }
+  void endPIDCycle() { pid.endCycle(); }
+  void resolvePID(RuleDecision &decision, uint32_t now);
+  void pidApplied(const String &id) { pid.applied(id, actuators.acceptedPercent(id)); }
+  void pidToJson(JsonArray out) { pid.toJson(out); }
   uint8_t ruleCount() const { return lastRuleCount; }
   String activeRuleName() const { return lastDecision.ruleName; }
   bool evaluateCondition(JsonObject condition);
@@ -109,12 +120,20 @@ private:
   RuntimeState &state;
   ActuatorManager &actuators;
   PIDController &pid;
+  SensorManager &sensors;
   static const uint8_t MAX_RULES = 24;
   String lastCommandKey[MAX_RULES];
   float lastCommandValue[MAX_RULES] = {NAN};
   uint8_t lastCommandCount = 0;
   RuleDecision lastDecision;
+  RuleDecision selected[16];
+  uint8_t selectedCount = 0;
   uint8_t lastRuleCount = 0;
+  uint8_t eventBranch[MAX_RULES] = {};
+  bool eventPending[MAX_RULES] = {};
+  bool eventLogged[MAX_RULES] = {};
+  uint32_t lastEventMs[MAX_RULES] = {};
+  bool shouldLogBranch(uint8_t index, uint8_t branch, uint32_t now);
 
   float sensorValue(const String &sensorId, const String &variable);
   const MeasureDef *findMeasure(const String &source, const String &measure);
@@ -127,7 +146,7 @@ private:
   bool conditionMatches(JsonObject condition);
   bool timeWindowMatches(JsonObject condition);
   float surplusRegulationPercent(JsonObject action);
-  bool actionToDecision(JsonObject action, const String &ruleName, RuleDecision &decision);
+  bool actionToDecision(JsonObject action, const String &ruleName, RuleDecision &decision, bool emitEvent = true);
   void logCommandChange(const String &key, float value, const String &ruleName);
   JsonObject ruleAt(uint8_t index);
 };

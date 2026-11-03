@@ -31,18 +31,25 @@ public:
   bool parseFrame(uint32_t now);
   void calculatePowerDirection();
   bool isAvailable() const { return reading.available; }
+  uint32_t powerSampleMs() const { return reading.lastValidReadMs; }
   float getGridPowerW() const { return reading.gridPowerW; }
   float getInjectionW() const { return reading.injectionW; }
   float getSurplusW() const { return reading.surplusW; }
   void reloadConfig();
   void stop();
   void printStatus();
+  float channelValue(uint8_t index, const String &metric) const;
   bool reconfigureTo19200();
 
 private:
   ConfigManager &config;
   RuntimeState &state;
   JSYMK194TReading reading;
+  float channelPower[2] = {NAN, NAN};
+  float channelMeasuredPower[2] = {NAN, NAN};
+  float channelCurrent[2] = {NAN, NAN};
+  float channelPf[2] = {NAN, NAN};
+  float channelEnergy[2] = {NAN, NAN};
 
   uint8_t modbusAddress = 1;
   uint8_t rxPin = 26;

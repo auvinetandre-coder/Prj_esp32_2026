@@ -2,8 +2,8 @@
   "version": 2,
   "actuators": [
     {
-      "id": "ssr1_water_heater",
-      "name": "SSR1 chauffe-eau principal",
+      "id": "ssr1_output",
+      "name": "SSR1 sortie principale",
       "type": "SSR",
       "source": "local",
       "gpio": 5,
@@ -11,7 +11,8 @@
       "maxPowerW": 1500,
       "cycleMs": 1000,
       "enabled": true,
-      "critical": true
+      "critical": true,
+      "usage": "routing"
     },
     {
       "id": "ssr2_aux",

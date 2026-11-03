@@ -1,25 +1,28 @@
 # RouteurSolaireESP32
 
+Installation d'un nouvel ESP32 : [procedure par phases 00 a 04](doc/INSTALLATION_PAR_PHASES.md), avec les lanceurs numerotes a la racine.
+
 Firmware Arduino IDE pour ESP32 permettant de realiser un routeur solaire photovoltaique local, modulaire, distribue et redondant.
 
-Le principe du projet est de garder un seul firmware commun pour tous les ESP32. Le role de chaque module est choisi lors de l'installation depuis l'interface Web locale, puis stocke dans LittleFS.
+Le projet garde un firmware commun pour tous les ESP32. Chaque module fonctionne selon ses capteurs, actionneurs et regles configures dans LittleFS, sans selection de role ni redondance.
+
+État du code et limites : [bilan du 18 octobre 2026](doc/ETAT_DU_PROJET.md), [audit détaillé](doc/AUDIT_2026-10-18.md) et [référence ESP-NOW](doc/ESP_NOW.md). Plusieurs défauts de sécurité restent ouverts ; les fonctionnalités décrites ne constituent pas une validation matérielle.
 
 ## Avertissement securite 230 V
 
-Ce projet peut piloter des equipements raccordes au secteur 230 V : chauffe-eau, SSR, triac RobotDyn, relais ou contacteur. Une erreur de cablage, d'isolation, de dissipation thermique ou de configuration peut provoquer electrocution, incendie, destruction de materiel ou declenchement dangereux.
+Ce projet peut piloter des equipements raccordes au secteur 230 V : charge, SSR, triac RobotDyn, relais ou contacteur. Une erreur de cablage, d'isolation, de dissipation thermique ou de configuration peut provoquer electrocution, incendie, destruction de materiel ou declenchement dangereux.
 
 Ne jamais intervenir sous tension. Utiliser des protections materielles adaptees : disjoncteur, differentiel, fusible, terre, boitier ferme, bornes isolees, dissipateur SSR, cables dimensionnes, separation basse tension/secteur et arret d'urgence. Le cablage 230 V doit etre realise ou verifie par une personne qualifiee.
 
-Les securites logicielles du firmware ne remplacent jamais les securites materielles du chauffe-eau, du thermostat, du limiteur thermique, du tableau electrique ou du montage SSR/triac.
+Les securites logicielles du firmware ne remplacent jamais les securites materielles du charge, du thermostat, du limiteur thermique, du tableau electrique ou du montage SSR/triac.
 
 ## Objectifs
 
-- Router le surplus photovoltaique vers un chauffe-eau.
+- Router le surplus photovoltaique vers un charge.
 - Fonctionner entierement en local, sans Internet.
-- Utiliser un firmware unique multi-role.
+- Utiliser un firmware unique configurable.
 - Configurer dynamiquement les capteurs, actionneurs et regles.
 - Supporter ESP-NOW pour des modules distribues.
-- Gerer une redondance MASTER/BACKUP.
 - Continuer a fonctionner sans WiFi maison grace au point d'acces local.
 - Publier et recevoir des donnees MQTT vers Jeedom si l'option est activee.
 
@@ -75,7 +78,6 @@ Modules principaux :
 - `EspNowManager` : communication ESP-NOW.
 - `EspNowNode` : brique ESP-NOW generique pour decouverte et trames capteurs multi-noeuds.
 - `MqttManager` : publication et reception MQTT pour Jeedom.
-- `RedundancyManager` : MASTER/BACKUP.
 - `WebUi` : API REST et interface Web.
 - `RuntimeState` : etat global.
 - `Logger` : logs et evenements.
@@ -100,38 +102,9 @@ Au boot :
 13. Demarrage interface Web.
 14. Boucle principale non bloquante avec `millis()`.
 
-## Roles ESP32
+## Configuration des ESP32
 
-Le role est stocke dans `/config/device.json`.
-
-- `MASTER` : controleur actif principal.
-- `BACKUP` : surveille le MASTER et reprend si besoin.
-- `NODE_SENSOR` : module capteurs distant.
-- `NODE_ACTUATOR` : module actionneurs distant.
-- `NODE_MIXED` : capteurs et actionneurs.
-
-Tous les roles utilisent le meme firmware.
-
-## Redondance MASTER/BACKUP
-
-Le MASTER actif envoie des heartbeats via ESP-NOW. Le BACKUP surveille ces messages.
-
-Valeurs par defaut :
-
-- Heartbeat : 300 ms.
-- Takeover : 1000 ms.
-- `epoch` augmente a chaque reprise.
-
-Etats possibles :
-
-- `PASSIVE`
-- `ACTIVE_MASTER`
-- `BACKUP_READY`
-- `TAKEOVER_PENDING`
-- `TAKEOVER_ACTIVE`
-- `SPLIT_BRAIN_DETECTED`
-
-En cas de double MASTER ou split brain, le SafetyManager doit passer en etat critique.
+Chaque ESP utilise le meme firmware et execute ses capteurs, actionneurs et regles actives. Aucun role de module ni bascule automatique entre ESP. Les anciens parametres sont retires par une migration ciblee ; voir [la decision et les tests](doc/SUPPRESSION_ROLES.md).
 
 ## WiFi
 
@@ -279,7 +252,7 @@ Commande JSON depuis Jeedom :
 
 ```json
 {
-  "actuatorId": "ssr1_water_heater",
+  "actuatorId": "ssr1_output",
   "command": "setActuatorPercent",
   "value": 25
 }
@@ -288,7 +261,7 @@ Commande JSON depuis Jeedom :
 Commande directe par topic :
 
 ```text
-Topic: routeurSolaire/actuator/ssr1_water_heater/set
+Topic: routeurSolaire/actuator/ssr1_output/set
 Payload: 25
 ```
 
@@ -299,7 +272,6 @@ En etat Safety CRITICAL, les commandes MQTT actionneurs sont refusees sauf les c
 Le dashboard affiche :
 
 - nom du module
-- role ESP32
 - WiFi, IP, RSSI
 - etat securite
 - etat simulation
@@ -339,7 +311,7 @@ L'historique rapide reste cote navigateur. Il n'est pas stocke dans LittleFS et 
 
 ## Regulation PID
 
-Le pilotage chauffe-eau utilise un controleur PID separe du gestionnaire de capteurs.
+Le pilotage charge utilise un controleur PID separe du gestionnaire de capteurs.
 
 Principe :
 
@@ -361,7 +333,7 @@ Parametres principaux dans `system.json` :
     "deadbandW": 30,
     "alphaFilter": 0.25,
     "maxOutputRampPercentPerSecond": 5,
-    "heaterMaxPowerW": 1500,
+    "outputMaxPowerW": 1500,
     "jsyReadIntervalMs": 100,
     "kp": 0.02,
     "ki": 0.002,
@@ -374,7 +346,7 @@ Cadences principales :
 
 - JSY : 80 a 100 ms si configure
 - SensorManager : 100 ms
-- PIDController : 100 ms
+- Regles et AutomateManager : 250 ms ; le PID est calcule lorsqu'une action de regulation le demande, sans tache autonome de 100 ms
 - SafetyManager : 100 ms
 - ActuatorManager : appele a chaque boucle, pilotage non bloquant
 
@@ -397,9 +369,6 @@ Capteurs supportes :
 - JSY-MK-194T
 - TIC Linky
 - DS18B20
-- Entree analogique
-- Entree digitale
-- Capteur virtuel
 
 ### JSY-MK-194T
 
@@ -497,11 +466,11 @@ Les sondes sont generiques :
 
 Le role reel vient de `sensors.json` ou de l'interface :
 
-- `ballon_haut`
-- `ballon_milieu`
-- `ballon_bas`
-- `depart_eau_chaude`
-- `retour_eau_froide`
+- `temperature_1`
+- `temperature_2`
+- `temperature_3`
+- `temperature_1`
+- `temperature_2`
 - `ambiance`
 - `autre`
 
@@ -527,7 +496,7 @@ Le scan ne sait pas quelle sonde est en haut/milieu/bas. Il faut associer chaque
 
 Actionneurs par defaut :
 
-- SSR1 chauffe-eau principal : GPIO5.
+- SSR1 charge principal : GPIO5.
 - SSR2 auxiliaire : GPIO17.
 - RobotDyn Triac : zero-cross a renseigner selon PCB, controle GPIO33.
 
@@ -545,8 +514,8 @@ Modes supportes :
 - `OFF`
 - `ON_OFF`
 - `BURST_FIRE`
-- `TRAIN_ONDES_ENTIERES`
-- `ZERO_CROSS_BURST`
+- `MULTI_SINUS`
+- `DEMI_SINUS`
 - `LOW_FREQ_PWM`
 - `PHASE_ANGLE`
 - `MANUAL_SAFE`
@@ -558,15 +527,14 @@ L'interface filtre les modes selon le type choisi.
 SSR :
 
 - `BURST_FIRE`
-- `TRAIN_ONDES_ENTIERES`
-- `ZERO_CROSS_BURST`
+- `MULTI_SINUS`
+- `DEMI_SINUS`
 - `LOW_FREQ_PWM`
 - `MANUAL_SAFE`
 
 RobotDyn Triac :
 
 - `PHASE_ANGLE`
-- `ZERO_CROSS_BURST`
 - `BURST_FIRE`
 - `MANUAL_SAFE`
 
@@ -575,9 +543,11 @@ Relais :
 - `ON_OFF`
 - `MANUAL_SAFE`
 
-Le mode `ON_OFF` est du tout ou rien. Il est adapte a un relais, une sortie digitale ou un contacteur. Il n'est pas adapte au routage progressif d'un chauffe-eau.
+Le mode `ON_OFF` est du tout ou rien. Il est adapte a un relais, une sortie digitale ou un contacteur. Il n'est pas adapte au routage progressif d'un charge.
 
 Le mode `PHASE_ANGLE` est reserve au RobotDyn/Triac avec detection zero-cross. Il permet un dosage fin mais peut generer davantage de parasites.
+
+Pour un SSR AC zero-cross et une charge résistive, `MULTI_SINUS` répartit la commande en salves à trame variable. `BURST_FIRE` utilise la fenêtre configurée par `cycleMs`. Voir le [guide MULTI_SINUS](doc/MULTI_SINUS.md) pour les réglages, les binaires de la livraison et la validation sur banc.
 
 ## Moteur de regles
 
@@ -636,8 +606,6 @@ Causes possibles :
 - JSY absent
 - TIC absente
 - incoherence capteur
-- perte MASTER
-- risque double MASTER
 - erreur configuration
 - arret manuel urgence
 
@@ -675,8 +643,8 @@ Scenarios :
 - `production_low`
 - `injection_medium`
 - `injection_high`
-- `tank_almost_hot`
-- `tank_overheat`
+- `temperature_near_limit`
+- `temperature_overheat`
 - `critical_sensor_lost`
 - `jsy_lost`
 
@@ -693,10 +661,12 @@ Les anciennes sorties LED de simulation ont ete supprimees. La simulation reste 
 
 ## ESP-NOW
 
-Le projet contient deux couches ESP-NOW :
+Le projet contient un gestionnaire integre au main et une brique autonome d'exemple :
 
-- `EspNowManager` : couche historique utilisee par la redondance MASTER/BACKUP et les commandes d'actionneurs.
-- `EspNowNode` : brique generique evolutive pour des ESP32 producteurs et/ou consommateurs de donnees capteurs.
+- `EspNowManager` : gestionnaire du main, traitant le protocole generique v4 et le format historique de redondance/commandes.
+- `EspNowNode` : brique autonome pour producteurs/consommateurs, utilisee par l'exemple ; elle n'est pas instanciee dans le main.
+
+La reference du fonctionnement actuel, des limites et des tests est [doc/ESP_NOW.md](doc/ESP_NOW.md).
 
 La brique generique se trouve dans :
 
@@ -709,20 +679,13 @@ examples/EspNowSensorSender/EspNowSensorSender.ino
 
 ### Noeud ESP-NOW generique
 
-Un ESP32 n'est pas limite a un role source ou destination. Il peut combiner plusieurs roles :
-
-- `ESPNOW_ROLE_PRODUCER` : produit des valeurs capteur.
-- `ESPNOW_ROLE_CONSUMER` : recoit des valeurs d'autres ESP.
-- `ESPNOW_ROLE_ROUTER` : routeur principal ou noeud de decision.
-- `ESPNOW_ROLE_ACTUATOR` : noeud capable d'agir sur une sortie.
+Les services radio sont deduits de la configuration active : acquisition, reception et commandes actionneurs. Aucun role de module a selectionner.
 
 Les capacites declarent ce qu'un noeud sait produire ou traiter :
 
 - `ESPNOW_CAP_LINKY`
 - `ESPNOW_CAP_JSY`
 - `ESPNOW_CAP_TEMP`
-- `ESPNOW_CAP_BATTERY`
-- `ESPNOW_CAP_SOLAR`
 - `ESPNOW_CAP_ROUTER`
 - `ESPNOW_CAP_ACTUATOR`
 
@@ -745,7 +708,7 @@ La decouverte ne donne pas a elle seule le droit d'injecter des donnees critique
 - type de trame `ESPNOW_PACKET_DISCOVERY` ;
 - `nodeId` ;
 - `nodeName` ;
-- roles ;
+- services actifs ;
 - capacites ;
 - type capteur principal ;
 - MAC source ;
@@ -753,7 +716,7 @@ La decouverte ne donne pas a elle seule le droit d'injecter des donnees critique
 - uptime ;
 - checksum.
 
-### Protocole capteurs v3
+### Protocole capteurs v4
 
 Les capteurs ESP-NOW utilisent un protocole separe en trois familles. ESP-NOW reste uniquement le transport ; `SensorManager` normalise ensuite les valeurs et met a jour le `RuntimeState`.
 
@@ -769,7 +732,7 @@ Types de trames :
 - `ESPNOW_PACKET_FAST_DATA` : valeurs compactes frequentes, sans noms ni unites.
 - `ESPNOW_PACKET_SENSOR_DISCOVERY` : metadonnees capteur, noms, unites, types de valeurs.
 - `ESPNOW_PACKET_DIAGNOSTIC` : qualite radio et diagnostic noeud.
-- `ESPNOW_PACKET_DISCOVERY` : presence generale du noeud, roles et capacites.
+- `ESPNOW_PACKET_DISCOVERY` : presence generale du noeud, services et capacites.
 
 La trame rapide compacte contient uniquement :
 
@@ -804,7 +767,7 @@ La trame de decouverte capteur contient :
 - liste des `valueType`, `key`, `unit` disponibles ;
 - checksum.
 
-`sensorRole` transporte le role metier du capteur source. Pour une sonde temperature, par exemple, la destination peut reprendre automatiquement `ballon_haut`, `depart_eau_chaude`, `ambiance` ou tout autre role configure cote source.
+`sensorRole` transporte le role metier du capteur source. Pour une sonde temperature, par exemple, la destination peut reprendre automatiquement `temperature_1`, `temperature_1`, `ambiance` ou tout autre role configure cote source.
 
 La trame diagnostic contient :
 
@@ -826,8 +789,6 @@ SENSOR_LINKY = 1
 SENSOR_JSY = 2
 SENSOR_DS18B20 = 3
 SENSOR_TEMP_HUM = 4
-SENSOR_BATTERY = 5
-SENSOR_SOLAR = 6
 SENSOR_RELAY_STATUS = 7
 SENSOR_ROUTER = 8
 SENSOR_CUSTOM = 255
@@ -846,9 +807,6 @@ VALUE_FREQUENCY_HZ = 7
 VALUE_TEMPERATURE_C = 8
 VALUE_HUMIDITY_PERCENT = 9
 VALUE_ENERGY_KWH = 10
-VALUE_BATTERY_VOLTAGE_V = 11
-VALUE_BATTERY_CURRENT_A = 12
-VALUE_BATTERY_SOC_PERCENT = 13
 VALUE_STATE_BOOL = 14
 VALUE_RSSI_DBM = 15
 ```
@@ -877,13 +835,6 @@ Temperature :
 - `TEMP` en `C`
 - `HUM` en `%`
 
-Batterie :
-
-- `BATV` en `V`
-- `BATA` en `A`
-- `SOC` en `%`
-- `BATP` en `W`
-
 Convention obligatoire pour le routeur solaire :
 
 ```text
@@ -901,17 +852,17 @@ Le sketch `examples/EspNowSensorSender/EspNowSensorSender.ino` montre un noeud L
 - envoi d'une trame Linky simulee toutes les 500 ms vers `receiverMac` ;
 - logs serie complets sur sequence, valeurs, taille de trame, checksum et resultat d'envoi.
 
-Pour transformer l'exemple Linky en JSY, temperature ou batterie :
+Pour transformer l'exemple Linky en JSY ou DS18B20 :
 
 1. changer `NODE_ID` ;
 2. changer `NODE_NAME` ;
 3. changer `SENSOR_TYPE` ;
 4. changer `capabilityFlags` ;
-5. appeler `buildJsyPacket()`, `buildTemperaturePacket()` ou `buildBatteryPacket()` dans `loop()`.
+5. appeler `buildJsyPacket()` ou `buildTemperaturePacket()` dans `loop()`.
 
 ### Validation terrain minimale
 
-1. Flasher la source et la destination avec le meme protocole ESP-NOW, actuellement `ESPNOW_PROTOCOL_VERSION = 3`.
+1. Flasher la source et la destination avec le meme protocole ESP-NOW, actuellement `ESPNOW_PROTOCOL_VERSION = 4`.
 2. Ouvrir les deux moniteurs serie a 115200 bauds.
 3. Verifier que chaque ESP affiche sa MAC source.
 4. Verifier que chaque ESP affiche au moins un `ESP-NOW discovery RX`.
@@ -946,9 +897,9 @@ Le bloc historique `system.espnow.exports` n'est plus utilise pour activer un ex
 
 Champs importants :
 
-- `sensorId` identifie le capteur local exporte. Convention actuelle : `1` Linky, `2` JSY, `20..22` DS18B20, `30` batterie, `31` solaire.
+- `sensorId` identifie le capteur local exporte. Convention actuelle : `1` Linky, `2` JSY, `20..22` DS18B20.
 - `sensorName` est envoye dans la trame `SENSOR_DISCOVERY`.
-- `sensorType` suit l'enum ESP-NOW : Linky `1`, JSY `2`, DS18B20 `3`, batterie `5`, solaire `6`.
+- `sensorType` suit l'enum ESP-NOW : Linky `1`, JSY `2`, DS18B20 `3`.
 - `exportEnabled = false` garde le capteur local uniquement.
 - `exportIntervalMs` fixe la periode maximale entre deux trames rapides.
 - `sendOnChange` + `minDelta` permettent d'envoyer plus vite si la valeur principale varie assez.
@@ -959,7 +910,6 @@ Les valeurs ne sont donc plus toutes envoyees a la meme frequence :
 - JSY / puissance reseau : trame rapide, typiquement 200 a 500 ms.
 - Linky : trame rapide, typiquement 500 a 1000 ms.
 - DS18B20 : trame rapide seulement quand disponible ; la periode peut etre augmentee ensuite vers 5 a 30 s.
-- Batterie : 5 a 15 s vise a terme.
 - Diagnostic : 10 s par defaut.
 - Decouverte capteur : 30 s par defaut.
 
@@ -968,7 +918,6 @@ Les pertes de paquets sont calculees par `nodeId + sensorId` a partir du compteu
 - JSY : 1000 ms ;
 - Linky : 3000 ms ;
 - temperature : 30000 ms ;
-- batterie : 15000 ms ;
 - defaut : 2000 ms.
 
 Si un capteur distant expire, il est marque `ok = false`. Les modules metier continuent a lire uniquement `SensorManager` ou `RuntimeState`.
@@ -979,7 +928,7 @@ L'interface Web principale expose une page dediee `ESP-NOW`, placee dans le menu
 
 Endpoints disponibles :
 
-- `GET /api/espnow` : etat local ESP-NOW, MAC locale, roles, capacites, peers autorises et noeuds detectes.
+- `GET /api/espnow` : etat local ESP-NOW, MAC locale, services, capacites, peers autorises et noeuds detectes.
 - `GET /api/espnow/discovery` : liste brute des noeuds ESP-NOW detectes.
 - `POST /api/espnow/discovery/announce` : force une annonce de presence immediate.
 - `POST /api/espnow/sensors/announce` : force l'annonce immediate des capteurs locaux exportables par `SENSOR_DISCOVERY`.
@@ -990,12 +939,12 @@ La page Web affiche :
 
 - l'etat local ESP-NOW ;
 - la MAC locale ;
-- les roles et capacites declares ;
+- les services et capacites declares ;
 - les ESP detectes par broadcast ;
 - les peers autorises ;
 - les options de debug transport, separees entre transmission et reception.
 
-Dans la page `Capteurs`, les trames `SENSOR_DISCOVERY` recues font apparaitre une section `Capteurs ESP-NOW disponibles`. Un bouton `Ajouter` cree automatiquement la configuration locale du capteur distant avec :
+Dans la page `Capteurs`, les trames `SENSOR_DISCOVERY` recues font apparaitre une section `Capteurs ESP-NOW disponibles`. Seule l'action utilisateur `Ajouter`, suivie de la sauvegarde, cree la configuration locale du capteur distant avec :
 
 - `source = espnow` ;
 - la MAC source ;
@@ -1004,7 +953,7 @@ Dans la page `Capteurs`, les trames `SENSOR_DISCOVERY` recues font apparaitre un
 - le role metier repris depuis `sensorRole` ;
 - `remoteKey = ALL`.
 
-La liste est regroupee par ESP source. Un capteur deja ajoute est grise et ne peut pas etre ajoute une seconde fois. Pour les sondes temperature, le role envoye par la source est conserve afin qu'une sonde `ballon_haut` ou `ballon_milieu` reste exploitable comme une sonde locale equivalente sur la destination.
+La liste est regroupee par ESP source. Un capteur deja ajoute est grise et ne peut pas etre ajoute une seconde fois. Pour les sondes temperature, le role envoye par la source est conserve afin qu'une sonde `temperature_1` ou `temperature_2` reste exploitable comme une sonde locale equivalente sur la destination.
 
 Le capteur distant est ensuite vu par `SensorManager` comme un capteur local virtuel. Pour un Linky ESP-NOW, `remoteKey = ALL` importe :
 
@@ -1016,23 +965,23 @@ Le capteur distant est ensuite vu par `SensorManager` comme un capteur local vir
 Les autres profils suivent la meme logique :
 
 - `JSY-MK-194T` : `VOLT`, `CURR`, `POWER`, `GRID`, `PF`, `FREQ`, `ENERGY` si disponible ;
-- `DS18B20` / temperature : `TEMP`, `HUM` ; le role envoye par la source indique comment `TEMP` est utilisee ;
-- `Battery` : `BATV`, `BATA`, `BATP`, `SOC` ;
-- `Solar` : `POWER`, `ENERGY`, `VOLT`, `CURR`.
+- `DS18B20` : `TEMP` ; le role envoye par la source indique comment `TEMP` est utilisee ;
 
 Il reste possible de choisir une seule valeur distante en remplacant `ALL` par une cle precise comme `GRID`, `TEMP`, `VOLT` ou `POWER`. L'option `Debug trames ESP-NOW` est commune a tous les profils : elle ajoute dans les evenements une ligne decodee avec la sequence, le type et toutes les valeurs de chaque trame recue depuis la MAC configuree.
 
 Important : seules les trames provenant d'un peer autorise sont appliquees. Cette separation evite qu'un ESP inconnu ou mal configure puisse modifier directement `state.gridPowerW` ou les variables utilisees par la regulation.
 
-### Etat implementation ESP-NOW 20260525
+### Etat implementation ESP-NOW relu le 18 octobre 2026
 
 - Les trames rapides `FAST_DATA` sont compactes et ne transportent plus les noms, roles ni unites.
 - Les trames `SENSOR_DISCOVERY` transportent les metadonnees : `nodeName`, `sensorName`, `sensorRole`, `sensorType`, firmware et valeurs disponibles.
 - Les trames `DIAGNOSTIC` transportent les informations radio et systeme.
 - `SensorManager` conserve les capteurs distants dans une table runtime et les expose dans `/api/status`.
-- La page `Capteurs` peut ajouter automatiquement un capteur distant decouvert.
+- La page `Capteurs` permet l'ajout manuel d'un capteur distant decouvert ; aucune discovery seule ne cree sa configuration.
 - Les options de debug ESP-NOW sont separees entre transmission et reception dans la page `ESP-NOW`.
 - Le JSON capteurs accepte maintenant une liste `sensors` vide, sans recreer automatiquement un capteur distant supprime.
+
+Les TTL, le filtrage des heartbeats et l'arbitrage des commandes distantes restent a corriger ; voir [les limites ESP-NOW](doc/ESP_NOW.md#défauts-prioritaires-ouverts).
 
 ### Messages historiques EspNowManager
 
@@ -1049,19 +998,11 @@ Les messages incluent notamment :
 
 - `sequenceNumber`
 - `senderId`
-- `role`
 - `timestamp`
 - checksum
-- `masterId`
-- `epoch`
 - TTL pour les commandes actionneurs
 
-Un `NODE_ACTUATOR` doit refuser une commande si :
-
-- le MASTER n'est pas reconnu
-- l'epoch est trop ancien
-- le TTL est expire
-- le SafetyManager est en `CRITICAL`
+Un actionneur refuse les commandes d'un pair non autorise, au checksum invalide, expirees ou interdites par SafetyManager. Aucun MASTER ni epoch d'autorite. Les emplacements retires dans les trames sont reserves pour conserver le format radio.
 
 ## Fichiers LittleFS
 
@@ -1436,7 +1377,6 @@ Regle pratique :
 6. Aller dans Parametres.
 7. Regler :
    - nom module
-   - role
    - WiFi
    - source puissance reseau JSY/TIC/AUTO
    - Safety
@@ -1511,8 +1451,6 @@ Evenements typiques :
 - `DS18B20_MISSING`
 - `SAFETY_TRIGGERED`
 - `SIMULATION_TIMEOUT`
-- `MASTER_TAKEOVER`
-- `SPLIT_BRAIN_DETECTED`
 - `ACTUATOR_FORCED_OFF`
 - `CONFIG_CHANGED`
 
@@ -1588,5 +1526,4 @@ Points restant a tester sur materiel reel :
 - SSR reels
 - RobotDyn reel
 - ESP-NOW multi-modules
-- redondance MASTER/BACKUP
 - comportement Safety sur defaut reel

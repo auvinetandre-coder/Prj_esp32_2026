@@ -11,7 +11,7 @@
 struct EspNowNodeConfig {
   uint8_t nodeId = 0;
   const char *nodeName = "ESP_NODE";
-  uint8_t roleFlags = ESPNOW_ROLE_PRODUCER;
+  uint8_t serviceFlags = ESPNOW_SERVICE_PRODUCER;
   uint16_t capabilityFlags = ESPNOW_CAP_NONE;
   uint8_t primarySensorType = SENSOR_UNKNOWN;
   uint32_t announceIntervalMs = ESPNOW_DEFAULT_ANNOUNCE_INTERVAL_MS;

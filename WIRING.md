@@ -23,3 +23,6 @@ GPIO4 et GPIO15 peuvent influencer le boot selon le montage. Si l'ESP32 ne demar
 
 Les sorties de puissance doivent passer par des interfaces isolees et correctement dimensionnees. Ne jamais connecter directement une charge secteur a l'ESP32.
 
+## SSR en mode MULTI_SINUS
+
+Utiliser un SSR AC zero-cross avec une charge résistive. Vérifier la tension et le courant de son entrée, la polarité configurée et le niveau OFF au reset. Le moteur utilise l’horloge interne de l’ESP32. L’entrée zero-cross du RobotDyn appartient à son circuit de commande. Voir les [essais sur banc](doc/MULTI_SINUS.md#validation-sur-banc-avant-utilisation).

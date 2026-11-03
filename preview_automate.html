@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Aperçu local — Automate ESP32</title>
+  <link rel="stylesheet" href="data/www/style.css?v=47">
+  <style>.previewNotice{padding:7px 12px;border:1px solid #b88f31;background:#292315;color:#f6c74a;font-size:12px;margin-bottom:12px}#previewSaved:empty{display:none}#previewSaved{font-size:12px;max-height:260px;overflow:auto}</style>
+</head>
+<body>
+  <nav><strong class="brand"><span>Routeur</span>Solaire<small>ESP32 local router</small></strong><button class="active" onclick="page='logic';drawLogicPage()">Automate</button><button onclick="page='sensors';drawSensorsPage()">Capteurs JSY</button><span class="muted">Aperçu local</span></nav>
+  <main><div class="previewNotice">Aperçu local · données d’exemple · aucune connexion à un ESP. Sauvegarder affiche uniquement le JSON ci-dessous.</div><div id="app"></div><pre id="previewSaved"></pre></main>
+  <script>
+    // Keep production startup isolated from hardware and background polling.
+    window.fetch = function () { return new Promise(function () {}); };
+    window.setInterval = function () { return 0; };
+  </script>
+  <script src="preview-app.js?v=47"></script>
+  <script>
+    page = "logic";
+    cache.rules = {version:2,rules:[
+      {id:"solar_routing",name:"Régulation solaire",enabled:true,priority:20,logic:"AND",conditions:[
+        {id:"solar_ok",source:"JSY-MK-194T",measure:"jsyGridAvailable",operator:"==",type:"boolean",value:true},
+        {id:"safe",source:"Securite",measure:"isCritical",operator:"==",type:"boolean",value:false}
+      ],actions:[{actuatorId:"ssr2",command:"setPowerFromSurplus",regulation:"PID",maxOutputPowerW:2000}],elseActions:[{actuatorId:"ssr2",command:"stop"}]},
+      {id:"fixed_output",name:"Sortie à puissance fixe",enabled:false,priority:10,logic:"AND",conditions:[
+        {id:"power_ok",source:"JSY-MK-194T",measure:"injectionW",operator:">",type:"number",value:800}
+      ],actions:[{actuatorId:"ssr2",command:"setActuatorPercent",value:49}],elseActions:[{actuatorId:"ssr2",command:"off"}]},
+      {id:"linky_routing",name:"Routage Linky",enabled:false,priority:5,logic:"AND",conditions:[
+        {id:"production",source:"Production",measure:"powerW",operator:">",type:"number",value:0}
+      ],actions:[{actuatorId:"ssr2",command:"setPowerFromLinky",maxOutputPowerW:2000}],elseActions:[{actuatorId:"ssr2",command:"stop"}]}
+    ]};
+    // Use catalogue IDs from the production editor, including its 'solar' source.
+    cache.rules.rules.forEach(function(r){r.conditions.forEach(function(c){if(c.source==="Production")c.source="solar";});});
+    cache.actuators = {actuators:[{id:"ssr2",name:"SSR2",type:"SSR",enabled:true},{id:"relay1",name:"Relais 1",type:"RELAY",enabled:true}]};
+    cache.system = {router:{gridPowerSource:"JSY",gridSetpointW:0}};
+    cache.sensors = {sensors:[{id:"jsy_grid",name:"JSY réseau et charge",type:"JSY-MK-194T",source:"local",enabled:true,channels:[{id:"clamp1",name:"Charge SSR2",role:"load",actuatorId:"ssr2",measures:["power","current"]},{id:"clamp2",name:"Échanges réseau",role:"grid",measures:["power","current"]}]}],ds18b20:[]};
+    cache.espnow = {discoveredNodes:[],peers:[]};
+    Object.assign(state,{jsyOnline:true,activePowerW1:900,activePowerW2:-300,currentA1:4,currentA2:1.3,gridPowerW:-300,gridVoltageV:230,gridFrequencyHz:50});
+    api = async function (url) { return url === "/api/rules/validate" ? [] : {}; };
+    postJson = async function (url, data) {
+      document.getElementById("previewSaved").textContent = JSON.stringify({url:url,data:data},null,2);
+      return {ok:true};
+    };
+    window.alert = function(message){document.getElementById("previewSaved").textContent += "\n" + message;};
+    drawLogicPage();
+    editRule(0);
+  </script>
+</body>
+</html>

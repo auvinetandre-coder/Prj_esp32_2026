@@ -24,15 +24,15 @@ enum EspNowMessageType {
 
 struct EspNowMessage {
   uint8_t messageType = MSG_STATUS;
-  uint8_t role = ROLE_NODE_MIXED;
+  uint8_t reservedByte = 0xff; // Preserve the legacy message wire layout.
   uint16_t checksum = 0;
   uint32_t sequenceNumber = 0;
   uint32_t timestamp = 0;
-  uint32_t epoch = 0;
+  uint32_t reservedCounter = 0;
   uint32_t ttlMs = 1000;
   char senderId[18]{};
   char targetId[18]{};
-  char masterId[18]{};
+  char reservedId[18]{};
   char sensorId[24]{};
   char actuatorId[24]{};
   char variable[20]{};
@@ -55,9 +55,25 @@ struct EspNowExportConfig {
   uint32_t timeoutMs = 0;
 };
 
+struct EspNowActuatorState {
+  bool used = false;
+  uint8_t mac[6]{};
+  char actuatorId[24]{};
+  float percent = 0;
+  float commandPercent = 0;
+  bool outputOn = false;
+  bool enabled = false;
+  bool safetyLocked = false;
+  bool simulated = false;
+  char source[24]{};
+  uint32_t receivedMs = 0;
+  char controlMode[8]{};
+  uint32_t controlToken = 0;
+};
+
 class EspNowManager {
 public:
-  typedef bool (*ActuatorCommandHandler)(void *context, const String &actuatorId, const String &command, float value, const String &mode);
+  typedef bool (*ActuatorCommandHandler)(void *context, const String &actuatorId, const String &command, float value, const String &mode, uint32_t ttlMs, const String &peer, uint32_t token);
 
   EspNowManager(ConfigManager &config, RuntimeState &state) : config(config), state(state) {}
   bool begin();
@@ -67,10 +83,11 @@ public:
   bool removePeer(const String &mac);
   bool isPeerKnown(const String &mac);
   bool sendMessage(const String &peer, EspNowMessage message);
-  bool sendHeartbeat(const String &peer);
   bool sendSensorValue(const String &peer, const String &sensorId, const String &variable, float value);
-  bool sendActuatorCommand(const String &peer, const String &actuatorId, float commandPercent, const String &mode, uint32_t ttlMs = 1000);
+  bool sendActuatorCommand(const String &peer, const String &actuatorId, float commandPercent, const String &mode, uint32_t ttlMs = 1000, uint32_t token = 0, const String &command = "setPower");
   bool sendStatus(const String &peer, const String &variable, float value);
+  void sendActuatorState(const String &id, float commandPercent, float outputPercent, bool outputOn, bool enabled, bool locked, const String &source, const char *controlMode = "AUTO", uint32_t controlToken = 0);
+  bool remoteActuatorState(const String &mac, const String &id, EspNowActuatorState &out);
   bool sendError(const String &peer, const String &text);
   void onReceive(const uint8_t *mac, const uint8_t *data, int len);
   void onSent(const uint8_t *mac, esp_now_send_status_t status);
@@ -121,10 +138,12 @@ private:
   uint32_t currentLoopNowMs = 0;
   uint8_t exportRuntimeSensorIds[MAX_EXPORT_RUNTIME_SLOTS]{};
   uint32_t exportLastSentMs[MAX_EXPORT_RUNTIME_SLOTS]{};
+  uint32_t exportLastSampleMs[MAX_EXPORT_RUNTIME_SLOTS]{};
   float exportLastValues[MAX_EXPORT_RUNTIME_SLOTS]{};
   bool exportLastValueValid[MAX_EXPORT_RUNTIME_SLOTS]{};
   EspNowDiscoveredNode discoveredNodes[ESPNOW_MAX_DISCOVERED_NODES]{};
   EspNowDiscoveredActuator discoveredActuators[MAX_DISCOVERED_ACTUATORS]{};
+  EspNowActuatorState actuatorStates[MAX_DISCOVERED_ACTUATORS]{};
   ActuatorCommandHandler actuatorHandler = nullptr;
   void *actuatorHandlerContext = nullptr;
 
@@ -134,6 +153,7 @@ private:
   uint16_t checksumFor(EspNowMessage message);
   bool checksumValid(const EspNowMessage &message);
   bool acceptActuatorCommand(const EspNowMessage &message, const String &mac);
+  void receiveActuatorState(const String &mac, const EspNowMessage &message);
   bool addBroadcastPeer();
   void handleDiscoveryPacket(const uint8_t *mac, const uint8_t *data, int len);
   void handleSensorPacket(const uint8_t *mac, const uint8_t *data, int len);
@@ -179,11 +199,10 @@ private:
   bool espNowSensorDebugEnabledForMac(const String &sourceMac);
   bool espNowActuatorDebugEnabledForMac(const String &sourceMac);
   void logDebugMapping(const String &message);
-  uint8_t localRoleFlags() const;
+  uint8_t localServiceFlags() const;
   uint16_t localCapabilityFlags();
   uint8_t localNodeId() const;
   uint8_t fallbackNodeIdFromMac(const uint8_t *mac) const;
-  uint8_t localRedundancyRole() const;
   uint8_t espNowActuatorTypeFor(const String &type);
   const char *messageTypeText(uint8_t type);
 };

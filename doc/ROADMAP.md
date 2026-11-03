@@ -1,5 +1,17 @@
 # ROADMAP.md - Feuille de route RouteurSolaireESP32
 
+Relecture du 20 octobre 2026 : les lots de [TODO_PRIORITES.md](TODO_PRIORITES.md) précèdent ces extensions. Consulter le [bilan](ETAT_DU_PROJET.md) et l'[audit](AUDIT_2026-10-20.md) pour distinguer code présent, défaut ouvert et validation. Cette feuille de route ne décide aucune refonte.
+
+## Ordre de travail courant
+
+1. Anciennes sorties, priorité système OFF et autorité locale/distante.
+2. Configuration transactionnelle et maintenance protégée avec préservation vérifiée.
+3. TTL/heartbeat/redondance et traitements réseau bornés.
+4. Décisions par actionneur, unités explicites, persistance maîtrisée et contrats API.
+5. Dashboard fidèle aux mesures/états ; puis rôles séparés avec migration, bilans énergétiques persistants et supervision du parc.
+
+Déjà présents : AutomateManager, éditeur Web de règles, commande manuelle Web maintenue, routage Linky et production MQTT. Il faut les stabiliser et les tester sur appareil ; ne pas les recréer. Les rubriques P1 à P10 ci-dessous conservent le cadrage par domaine.
+
 ## P1 - Stabilisation Recovery/Main
 
 - valider le partitionnement `factory` / `ota_0` / LittleFS ;
@@ -47,7 +59,7 @@
 
 - afficher tous les capteurs via SensorManager ;
 - corriger les mappings ESP-NOW ;
-- afficher achat, injection, routage et temperature ballon ;
+- afficher achat, injection, routage et temperature equipement ;
 - ajouter graphes PID ;
 - fiabiliser personnalisation dashboard ;
 - garder HTML/CSS/JavaScript natif.
@@ -119,6 +131,4 @@
 - reduction LittleFS sans mesure prealable.
 
 
-PRIORITE 2
-
-Conception et implémentation du couple AutomateManager / RuleEngine configurable depuis la WebUI avec conditions capteurs, horaires, système, variables virtuelles, simulation et imbrication limitée à 2 niveaux.
+Les conditions calendaires, variables utilisateur, simulation complète de règle et imbrication limitée à deux niveaux restent des extensions de l'automate après stabilisation ; voir [ROADMAP_AUTOMATE.md](ROADMAP_AUTOMATE.md).

@@ -38,35 +38,19 @@ Le projet utilise un seul firmware pour tous les ESP.
 
 Le comportement dÃ©pend de la configuration locale :
 
-- rÃ´le de lâ€™ESP ;
 - capteurs activÃ©s ;
 - actionneurs activÃ©s ;
 - rÃ¨gles ;
 - PID ;
 - rÃ©seau ;
-- redondance.
 
 Ne pas crÃ©er plusieurs firmwares spÃ©cialisÃ©s sauf demande explicite.
 
 ---
 
-## RÃ´les
+## Configuration des equipements
 
-RÃ´les actuels ou attendus :
-
-- `MASTER`
-- `BACKUP`
-- `STANDALONE`
-- `NODE_SENSOR`
-- `NODE_ACTUATOR`
-- `NODE_MIXED`
-
-Ã‰volution cible :
-
-- rÃ´le de redondance : `MASTER`, `BACKUP`, `STANDALONE`
-- rÃ´le fonctionnel : `SENSOR`, `ACTUATOR`, `MIXED`
-
-Ne pas supprimer brutalement les rÃ´les historiques.
+Les roles de module et la redondance sont supprimes depuis le 21 octobre 2026 sur demande utilisateur. Le comportement depend des equipements configures. Voir doc/ROUTAGE_GENERIQUE.md.
 
 ---
 
@@ -93,12 +77,11 @@ ESP-NOW sert Ã  :
 
 - discovery ;
 - heartbeat ;
-- annonce de rÃ´les ;
+- annonce des capacites ;
 - annonce de capteurs ;
 - annonce dâ€™actionneurs ;
 - remontÃ©e de mesures ;
 - diagnostics ;
-- supervision MASTER/BACKUP.
 
 ESP-NOW ne doit jamais transporter un firmware `.bin`.
 
@@ -158,6 +141,17 @@ Regles :
 - la recovery garde son AP actif et tente le WiFi local si les identifiants sont connus.
 ---
 
+## Versions des livraisons
+
+Instruction utilisateur du 25 octobre 2026 : les versions doivent toujours s'incrementer.
+
+- Chaque nouvelle livraison porte une version superieure a la precedente, meme pour une modification LittleFS seule.
+- Conserver le format `YYYYMMDD-NN` : pour une meme date, prendre le plus grand numero deja genere pour le firmware ou LittleFS, puis incrementer `NN`.
+- Ne jamais reutiliser un numero ni ecraser un binaire versionne existant. Les copies courantes sans numero peuvent etre actualisees.
+- Aligner les versions annoncees, les marqueurs embarques et les noms des fichiers effectivement livres.
+
+---
+
 ## LittleFS
 
 LittleFS contient notamment la WebUI et des fichiers de configuration.
@@ -186,7 +180,7 @@ ParamÃ¨tres importants :
 - Kd ;
 - consigne rÃ©seau ;
 - deadband ;
-- puissance chauffe-eau max ;
+- puissance sortie max ;
 - filtre mesure ;
 - rampe ;
 - intervalle de calcul ;
@@ -197,7 +191,7 @@ Le dashboard doit afficher :
 - erreur PID ;
 - sortie PID ;
 - commande routeur ;
-- puissance chauffe-eau ;
+- puissance sortie ;
 - Ã©tat de saturation ou oscillation si disponible.
 
 ---
@@ -210,7 +204,6 @@ Le dashboard doit afficher :
 - coupure en cas dâ€™erreur critique ;
 - surveillance capteurs critiques ;
 - dÃ©tection perte capteur ;
-- dÃ©tection double MASTER ;
 - logs dâ€™Ã©vÃ©nements.
 
 ---

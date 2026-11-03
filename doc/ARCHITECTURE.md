@@ -1,5 +1,13 @@
 # ARCHITECTURE.md - Architecture RouteurSolaireESP32
 
+Relecture du 20 octobre 2026 : architecture retenue et exigences, distinctes d'une validation matérielle. L'[état courant](ETAT_DU_PROJET.md) et l'[audit](AUDIT_2026-10-20.md) décrivent les corrections présentes et les défauts ouverts. La sûreté des sorties et la conservation de configuration ne sont pas garanties sur tous les chemins.
+
+## Chemin réellement exécuté
+
+Le main appelle SensorManager/Safety à 100 ms et RuleEngine/AutomateManager à 250 ms, sous réserve des blocages de la boucle coopérative. Le PID est appelé par les actions de régulation ; la branche Linky calcule par nouvelle lecture TIC. `SolarRouter` reste instancié mais sa boucle n'est pas appelée ; `EspNowNode` sert à l'exemple autonome.
+
+Le manuel Web maintenu est implemente. La réception radio appelle directement le handler actionneur et doit encore être intégrée à l'arbitrage d'autorité. Les groupes imbriqués, variables utilisateur et décisions multi-actionneurs restent des évolutions. La production MQTT passe par SensorManager avec origine `MQTT`, validité et expiration.
+
 ## Vue generale
 
 RouteurSolaireESP32 est un systeme distribue base sur ESP32.
@@ -9,9 +17,8 @@ Il permet :
 - mesure reseau ;
 - mesure production / consommation ;
 - routage du surplus solaire ;
-- pilotage chauffe-eau ;
+- pilotage charge ;
 - supervision de capteurs locaux et ESP-NOW ;
-- redondance MASTER/BACKUP ;
 - WebUI embarquee ;
 - maintenance locale par architecture Recovery/Main.
 
@@ -28,7 +35,7 @@ Firmware principal unique
    ->
 /config/device.json
    ->
-Role + capteurs + actionneurs + regles
+Capteurs + actionneurs + regles
 ```
 
 L'architecture de boot est separee :
@@ -81,7 +88,6 @@ Modules a respecter :
 - SimulationManager
 - EspNowManager
 - EspNowNode
-- RedundancyManager
 - MqttManager
 - WebUi
 - DisplayManager
@@ -150,15 +156,15 @@ Il ne doit jamais etre charge dans le recovery.
 2. BootManager et informations partition ;
 3. chargement configuration ;
 4. logs ;
-5. capteurs ;
-6. actionneurs ;
+5. actionneurs et securite ;
+6. capteurs ;
 7. Wi-Fi ;
 8. ESP-NOW ;
 9. redondance ;
 10. WebUI ;
 11. AutomateManager / regles / routage ;
 12. supervision ;
-13. loop non bloquante.
+13. boucle cooperative instrumentee ; certains chemins reseau restent bloquants.
 
 ---
 
@@ -212,14 +218,17 @@ Modes :
 
 SafetyManager garde toujours la priorite.
 
+La liste ci-dessus décrit les états applicatifs cibles. Le champ `actuators[].mode` sélectionne un mode électrique tel que `ON_OFF`, `MULTI_SINUS` ou `PHASE_ANGLE`. Le champ `router.mode` décrit le mode applicatif.
+
+Pour `MULTI_SINUS`, ActuatorManager publie par canal la trame autorisée et son échéance vers le timer matériel de 10 ms. Le timer applique les fronts et coupe à expiration. Le RobotDyn conserve son chemin dédié. Voir le [guide SSR](MULTI_SINUS.md).
+
 ---
 
 ## ESP-NOW
 
-Trames fonctionnelles :
+Trames génériques présentes (protocole v4) :
 
 - DISCOVERY ;
-- HEARTBEAT ;
 - SENSOR_DATA ;
 - FAST_DATA ;
 - DIAGNOSTIC ;
@@ -228,27 +237,15 @@ Trames fonctionnelles :
 
 Le protocole doit rester leger et robuste.
 
+HEARTBEAT et les commandes actionneurs utilisent le format historique distinct. Voir [ESP_NOW.md](ESP_NOW.md) pour les formats, limites et tests.
+
 ESP-NOW ne transporte jamais de firmware `.bin`.
 
 ---
 
-## Redondance
+## Fonctionnement des modules
 
-Roles :
-
-- MASTER ;
-- BACKUP ;
-- STANDALONE.
-
-Le BACKUP surveille le MASTER.
-
-Cas critique :
-
-```text
-DOUBLE_MASTER_RISK
-```
-
----
+Chaque ESP execute ses capacites configurees sans role ni election. Voir [la suppression des roles](SUPPRESSION_ROLES.md).
 
 ## WebUI
 
@@ -268,10 +265,10 @@ Le dashboard lit l'etat global via API.
 
 ## Maintenance et mises a jour
 
-Mises a jour validees :
+Architecture de mise a jour retenue (validation complete restante) :
 
 - firmware main par upload local depuis recovery vers `ota_0` ;
-- LittleFS separe, avec preservation de `/config`.
+- LittleFS separe, avec exigence de preservation de `/config` ; le backup/restauration actuel reste conditionnel et doit etre fiabilise.
 
 GitHub OTA cote ESP32 n'est pas dans l'architecture validee actuelle.
 
@@ -279,7 +276,7 @@ GitHub OTA cote ESP32 n'est pas dans l'architecture validee actuelle.
 
 ## Vision cible
 
-Le MASTER devient superviseur du parc ESP32 :
+Chaque ESP peut superviser les modules du parc ESP32 :
 
 - inventaire ;
 - versions ;

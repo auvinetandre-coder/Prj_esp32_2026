@@ -199,7 +199,7 @@ bool DS18B20Manager::assignAddress(const String &sensorId, const String &address
                     : config.sensorsDoc()["ds18b20"].to<JsonArray>();
   const char *defaultIds[] = {"sonde1", "sonde2", "sonde3"};
   const char *defaultNames[] = {"Sonde 1", "Sonde 2", "Sonde 3"};
-  const char *defaultRoles[] = {"ballon_haut", "ballon_milieu", "ballon_bas"};
+  const char *defaultRoles[] = {"temperature_1", "temperature_2", "temperature_3"};
   while (arr.size() < MAX_DS18B20) {
     uint8_t i = arr.size();
     JsonObject sensor = arr.add<JsonObject>();
@@ -312,9 +312,9 @@ void DS18B20Manager::publishRuntimeState() {
     state.ds18b20LastReadMs[i] = i < sensorCount ? sensors[i].lastReadMs : 0;
     state.ds18b20ErrorCount[i] = i < sensorCount ? sensors[i].errorCount : 0;
   }
-  state.tankTopC = getTemperatureByRole("ballon_haut");
-  state.tankMiddleC = getTemperatureByRole("ballon_milieu");
-  state.tankBottomC = getTemperatureByRole("ballon_bas");
+  state.temperature1C = getTemperatureByRole("temperature_1");
+  state.temperature2C = getTemperatureByRole("temperature_2");
+  state.temperature3C = getTemperatureByRole("temperature_3");
   state.ds18b20CriticalMissing = isCriticalSensorMissing();
   state.ds18b20CriticalMissingList = getCriticalMissingSensors();
 }

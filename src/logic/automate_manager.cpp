@@ -1,4 +1,5 @@
 #include "automate_manager.h"
+#include <math.h>
 
 void AutomateManager::begin(uint32_t now) {
   currentState = BOOT;
@@ -12,6 +13,7 @@ void AutomateManager::begin(uint32_t now) {
 }
 
 void AutomateManager::loop(uint32_t now) {
+  rules.beginPIDCycle();
   Priority priority = PRIORITY_IDLE;
   AutomateState nextState = IDLE;
   FinalCommand command = arbitrate(now, priority, nextState);
@@ -19,11 +21,41 @@ void AutomateManager::loop(uint32_t now) {
 
   state.activePriority = priorityName(priority);
   state.commandSource = command.source;
+  state.commandActuatorId = command.actuatorId;
   state.commandPercent = command.commandPercent;
   state.pidAllowed = priority == PRIORITY_RULE_ENGINE || priority == PRIORITY_AUTO_ROUTING;
   state.routingAllowed = state.pidAllowed && !state.safetyActive && !state.errorActive;
 
-  applyFinalCommand(command);
+  if (heldManualActuatorId.length() &&
+      (priority != PRIORITY_MANUAL_FORCE || !state.manualCommandPersistent || command.actuatorId != heldManualActuatorId)) {
+    if (!actuators.hasEspNowCommand(heldManualActuatorId)) actuators.command(heldManualActuatorId, "stop", 0.0f);
+    heldManualActuatorId = "";
+  }
+  if (priority == PRIORITY_MANUAL_FORCE && state.manualCommandPersistent) heldManualActuatorId = command.actuatorId;
+  // Release every output no longer selected, including deleted/disabled rules.
+  for (uint8_t n = 0; n < ruleActuatorCount; ++n) {
+    bool retained = false;
+    if (priority == PRIORITY_RULE_ENGINE) {
+      for (uint8_t k = 0; k < rules.decisionCount(); ++k)
+        if (ruleActuatorIds[n] == rules.selectedDecision(k).actuatorId) retained = true;
+    }
+    if (!retained && !actuators.hasEspNowCommand(ruleActuatorIds[n])) actuators.command(ruleActuatorIds[n], "stop", 0);
+  }
+  ruleActuatorCount = 0;
+  if (priority == PRIORITY_RULE_ENGINE) {
+    for (uint8_t n = 0; n < rules.decisionCount(); ++n) {
+      auto &selected = rules.selectedDecision(n);
+      ruleActuatorIds[ruleActuatorCount++] = selected.actuatorId;
+      if (actuators.hasEspNowCommand(selected.actuatorId)) continue;
+      rules.resolvePID(selected, now);
+      const FinalCommand effective = ruleCommand(selected);
+      applyFinalCommand(effective);
+      rules.pidApplied(selected.actuatorId);
+      state.commandPercent = actuators.acceptedPercent(effective.actuatorId);
+      state.commandActuatorId = effective.actuatorId;
+    }
+  } else applyFinalCommand(command);
+  rules.endPIDCycle();
 }
 
 void AutomateManager::requestRecovery(const String &reason) {
@@ -39,8 +71,15 @@ void AutomateManager::clearRecoveryRequest() {
 AutomateManager::FinalCommand AutomateManager::arbitrate(uint32_t now, Priority &priority, AutomateState &nextState) {
   (void)now;
   FinalCommand command;
+  command.actuatorId = config.routingActuatorId();
   state.safetyActive = state.safetyTripped || state.safetyLevel == "CRITICAL";
   state.errorActive = errorDetected();
+
+  if (state.manualCommandPersistent && (state.safetyActive || state.errorActive || recoveryRequested ||
+      state.simulationMode != state.manualCommandSimulationMode)) {
+    state.manualCommandPending = false;
+    state.manualCommandPersistent = false;
+  }
 
   if (state.safetyActive) {
     priority = PRIORITY_SAFETY;
@@ -58,6 +97,7 @@ AutomateManager::FinalCommand AutomateManager::arbitrate(uint32_t now, Priority 
     nextState = ERROR;
     command.enabled = true;
     command.commandPercent = 0.0f;
+    command.command = "allOff";
     command.source = "ERROR";
     command.reason = "Erreur systeme active";
     return command;
@@ -68,6 +108,7 @@ AutomateManager::FinalCommand AutomateManager::arbitrate(uint32_t now, Priority 
     nextState = RECOVERY_REQUEST;
     command.enabled = true;
     command.commandPercent = 0.0f;
+    command.command = "allOff";
     command.source = "RECOVERY";
     command.reason = recoveryReason;
     return command;
@@ -77,6 +118,15 @@ AutomateManager::FinalCommand AutomateManager::arbitrate(uint32_t now, Priority 
   String mode = router["mode"] | "AUTO";
   mode.toUpperCase();
   state.systemMode = mode;
+
+  if (mode == "OFF") {
+    state.manualCommandPending = false; state.manualCommandPersistent = false;
+    priority = PRIORITY_IDLE; nextState = IDLE;
+    command.enabled = true; command.command = "allOff";
+    command.source = "IDLE"; command.reason = "Mode OFF";
+    return command;
+  }
+
 
   if (state.manualAllOffPending) {
     priority = PRIORITY_MANUAL_FORCE;
@@ -88,19 +138,30 @@ AutomateManager::FinalCommand AutomateManager::arbitrate(uint32_t now, Priority 
     command.source = "MANUAL";
     command.reason = "Arret manuel toutes sorties";
     state.manualAllOffPending = false;
+    state.manualCommandPending = false;
+    state.manualCommandPersistent = false;
     return command;
   }
 
   if (state.manualCommandPending) {
+    bool available = false;
+    for (JsonObject actuator : config.actuators()) {
+      if (state.manualCommandActuatorId == (actuator["id"] | "") && (actuator["enabled"] | false)) available = true;
+    }
+    if (!available || !isfinite(state.manualCommandPercent)) {
+      state.manualCommandPercent = 0.0f;
+      state.manualCommand = "stop";
+      state.manualCommandPersistent = false;
+    }
     priority = PRIORITY_MANUAL_FORCE;
     nextState = MANUAL_FORCE;
     command.enabled = true;
-    command.actuatorId = state.manualCommandActuatorId.length() ? state.manualCommandActuatorId : "ssr1_water_heater";
+    command.actuatorId = state.manualCommandActuatorId;
     command.command = state.manualCommand.length() ? state.manualCommand : "setPower";
     command.commandPercent = constrain(state.manualCommandPercent, 0.0f, 100.0f);
     command.source = state.manualCommandSource.length() ? state.manualCommandSource : "MANUAL";
     command.reason = state.manualCommandReason.length() ? state.manualCommandReason : "Commande manuelle";
-    state.manualCommandPending = false;
+    state.manualCommandPending = state.manualCommandPersistent;
     return command;
   }
 
@@ -141,7 +202,7 @@ AutomateManager::FinalCommand AutomateManager::arbitrate(uint32_t now, Priority 
 AutomateManager::FinalCommand AutomateManager::manualCommand(JsonObject router) {
   FinalCommand command;
   command.enabled = true;
-  command.actuatorId = router["forcedActuatorId"] | "ssr1_water_heater";
+  command.actuatorId = router["forcedActuatorId"] | router["actuatorId"] | "";
   command.command = "setPower";
   command.commandPercent = constrain(router["forcedPercent"] | 0.0f, 0.0f, 100.0f);
   command.source = "MANUAL";
@@ -152,10 +213,10 @@ AutomateManager::FinalCommand AutomateManager::manualCommand(JsonObject router) 
 AutomateManager::FinalCommand AutomateManager::ruleCommand(const RuleEngine::RuleDecision &decision) {
   FinalCommand command;
   command.enabled = true;
-  command.actuatorId = decision.actuatorId.length() ? decision.actuatorId : "ssr1_water_heater";
+  command.actuatorId = decision.actuatorId;
   command.command = decision.command.length() ? decision.command : "setPower";
   command.mode = decision.mode;
-  command.commandPercent = constrain(decision.commandPercent, 0.0f, 100.0f);
+  command.commandPercent = isfinite(decision.commandPercent) ? constrain(decision.commandPercent, 0.0f, 100.0f) : 0.0f;
   command.source = "RULE_ENGINE";
   command.reason = decision.reason;
   return command;
@@ -164,15 +225,19 @@ AutomateManager::FinalCommand AutomateManager::ruleCommand(const RuleEngine::Rul
 void AutomateManager::applyFinalCommand(const FinalCommand &command) {
   if (!command.enabled) return;
   if (state.safetyActive || command.safetyLimited) {
-    actuators.command(command.actuatorId, "stop", 0.0f);
-    return;
-  }
-  if (command.command == "setMode") {
-    actuators.setMode(command.actuatorId, command.mode);
+    actuators.allOff();
     return;
   }
   if (command.command == "allOff") {
     actuators.allOff();
+    return;
+  }
+  if (!command.actuatorId.length()) return;
+  // A received command owns only its target until its local watchdog expires.
+  // Safety/recovery/allOff above and explicit local manual control stay prioritary.
+  if (state.activePriority != "MANUAL_FORCE" && actuators.hasEspNowCommand(command.actuatorId)) return;
+  if (command.command == "setMode") {
+    actuators.setMode(command.actuatorId, command.mode);
     return;
   }
   actuators.command(command.actuatorId, command.command, command.commandPercent);
@@ -202,7 +267,6 @@ const char *AutomateManager::stateName(AutomateState value) {
     case IDLE: return "IDLE";
     case AUTO_ROUTING: return "AUTO_ROUTING";
     case MANUAL_FORCE: return "MANUAL_FORCE";
-    case SCHEDULE_FORCE: return "SCHEDULE_FORCE";
     case SAFETY: return "SAFETY";
     case ERROR: return "ERROR";
     case RECOVERY_REQUEST: return "RECOVERY_REQUEST";
@@ -216,7 +280,6 @@ const char *AutomateManager::priorityName(Priority value) {
     case PRIORITY_ERROR: return "ERROR";
     case PRIORITY_RECOVERY_REQUEST: return "RECOVERY_REQUEST";
     case PRIORITY_MANUAL_FORCE: return "MANUAL_FORCE";
-    case PRIORITY_SCHEDULE_FORCE: return "SCHEDULE_FORCE";
     case PRIORITY_RULE_ENGINE: return "RULE_ENGINE";
     case PRIORITY_AUTO_ROUTING: return "AUTO_ROUTING";
     case PRIORITY_IDLE:

@@ -30,6 +30,7 @@ public:
 
   JsonObject device();
   JsonObject system();
+  String routingActuatorId() { return system()["router"]["actuatorId"] | ""; }
   JsonArray sensors();
   JsonArray actuators();
   JsonArray rules();
@@ -45,13 +46,14 @@ private:
   DynamicJsonDocument systemConfig{12288};
   DynamicJsonDocument sensorsConfig{16384};
   DynamicJsonDocument actuatorsConfig{8192};
-  DynamicJsonDocument rulesConfig{12288};
+  DynamicJsonDocument rulesConfig{32768};
   String configLastError = "";
   bool allowEmptyConfigWrite = false;
   bool allowWifiClearConfigWrite = false;
 
   bool loadOrDefault(const char *path, DynamicJsonDocument &doc, void (ConfigManager::*defaults)());
   bool saveDoc(const char *path, DynamicJsonDocument &doc);
+  bool migrateRetiredConfig(const char *path, DynamicJsonDocument &doc);
   bool validateDoc(const char *path, DynamicJsonDocument &doc);
   bool restoreBackupFile(const char *path, DynamicJsonDocument &doc);
   bool writeDiagnosticFile(const char *path, const String &reason);

@@ -681,7 +681,7 @@ main {
 }
 
 .energyFlowSvg .sunNode circle { stroke: #22c55e; }
-.energyFlowSvg .heaterNode rect { stroke: #f97316; }
+.energyFlowSvg .outputNode rect { stroke: #f97316; }
 .energyFlowSvg.inject .gridNode rect { stroke: #22c55e; }
 .energyFlowSvg.buy .gridNode rect { stroke: #f87171; }
 
@@ -700,7 +700,7 @@ main {
 .flowLine {
   fill: none;
   stroke: #6b7280;
-  stroke-width: 4;
+  stroke-width: 2;
   stroke-linecap: round;
   marker-end: url(#flowArrow);
   opacity: .62;
@@ -714,15 +714,24 @@ main {
   fill: #6b7280;
 }
 
+.energyFlowSvg #flowArrowSolar path { fill: #22c55e; }
+.energyFlowSvg.buy #flowArrowGrid path { fill: #f87171; }
+.energyFlowSvg.inject #flowArrowGrid path { fill: #22c55e; }
+.energyFlowSvg #flowArrowOutput path { fill: #f97316; }
+.energyFlowSvg.pvActive .solarLine { marker-end: url(#flowArrowSolar); }
+.energyFlowSvg.buy .gridLine,
+.energyFlowSvg.inject .gridLine { marker-end: url(#flowArrowGrid); }
+.energyFlowSvg.heat .outputLine { marker-end: url(#flowArrowOutput); }
+.energyFlowSvg.neutral .gridLine,
+.energyFlowSvg.unknown .gridLine { marker-end: none; }
+
 .energyFlowSvg .solarLine {
   stroke: #22c55e;
   opacity: .16;
 }
 
 .energyFlowSvg.pvActive .solarLine {
-  opacity: 1;
-  stroke-dasharray: 8 10;
-  animation: flowDash 1.7s linear infinite;
+  opacity: .5;
 }
 
 .energyFlowSvg .flowValue {
@@ -736,25 +745,29 @@ main {
 .energyFlowSvg.buy .fromGrid,
 .energyFlowSvg.inject .gridBoth,
 .energyFlowSvg.buy .gridBoth,
-.energyFlowSvg.heat .heaterLine {
-  opacity: 1;
-  stroke-dasharray: 8 10;
-  animation: flowDash 1.2s linear infinite;
+.energyFlowSvg.heat .outputLine {
+  opacity: .5;
 }
 
 .energyFlowSvg.inject .toGrid { stroke: #22c55e; }
 .energyFlowSvg.buy .fromGrid { stroke: #f87171; }
 .energyFlowSvg.inject .gridBoth { stroke: #22c55e; }
 .energyFlowSvg.buy .gridBoth { stroke: #f87171; }
-.energyFlowSvg.heat .heaterLine { stroke: #f97316; }
+.energyFlowSvg.heat .outputLine { stroke: #f97316; }
 .energyFlowSvg.inject .fromGrid,
 .energyFlowSvg.buy .toGrid,
 .energyFlowSvg.neutral .gridLine,
-.energyFlowSvg.noHeat .heaterLine,
+.energyFlowSvg.noHeat .outputLine,
 .energyFlowSvg.unknown .gridLine { opacity: .16; }
 
-@keyframes flowDash {
-  to { stroke-dashoffset: -44; }
+.flowElectrons { pointer-events: none; }
+.solarElectrons { color: #22c55e; }
+.buyElectrons { color: #f87171; }
+.outputElectrons { color: #f97316; }
+.electronGlow { fill: currentColor; opacity: .2; }
+.electronCore { fill: #fff; stroke: currentColor; stroke-width: 2; }
+@media (prefers-reduced-motion: reduce) {
+  .flowElectrons { display: none; }
 }
 
 .pidCockpit {
@@ -900,6 +913,39 @@ main {
   border: 1px solid #26272b;
   border-radius: 8px;
   background: #101115;
+}
+
+.pidTrendPanel { padding: 22px; border-top: 2px solid #8b7cf8; }
+.pidTrendHeader { display: flex; justify-content: space-between; align-items: center; gap: 24px; margin-bottom: 18px; }
+.pidTrendEyebrow { color: #b4a6ff; font-size: 10px; font-weight: 750; letter-spacing: .18em; }
+.pidTrendHeader h2 { margin: 5px 0; color: #eef2ff; font-size: 22px; }
+.pidTrendHeader p, .pidTrendFootnote { color: #909caf; font-size: 12px; margin: 4px 0; }
+.pidTrendSelector { display: grid; gap: 7px; color: #b8c4d6; font-size: 11px; min-width: 260px; max-width: 55%; }
+.pidTrendSelector select { width: 100%; min-height: 40px; background: #111722; border: 1px solid #44506a; border-radius: 9px; color: #e2e8f0; padding: 8px 12px; }
+.pidTrendLive { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; color: #a9b5c8; font-size: 12px; }
+.pidTrendStatus { border: 1px solid #354052; background: #19202a; border-radius: 20px; padding: 5px 10px; color: #a9b5c8; font-size: 11px; }
+.pidTrendStatus.active { color: #67e8c2; border-color: #236153; background: #12332e; }
+.pidTrendStatus.fault { color: #fca5a5; border-color: #7f3535; background: #3a1b24; }
+.pidTrendMetrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin: 18px 0 22px; }
+.pidTrendMetrics > div { border: 1px solid #303a4b; border-radius: 10px; background: #111925; padding: 13px 16px; }
+.pidTrendMetrics small { display: block; font-size: 11px; color: #9eacc0; }
+.pidTrendMetrics strong { display: block; margin-top: 6px; color: #e2e8f0; font-size: 23px; font-variant-numeric: tabular-nums; }
+.pidTrendMetrics > div:first-child strong { color: #c4b5fd; }
+.pidTrendMetrics > div:nth-child(2) strong { color: #38bdf8; }
+.pidTrendMetrics > div:nth-child(3) strong { color: #fbbf24; }
+.pidTrendPlot { margin: 16px 0; }
+.pidTrendPlotLabel { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; margin-bottom: 8px; color: #cbd5e1; font-size: 12px; }
+.pidTrendPlotLabel small, .pidTrendPlotLabel span { color: #91a0b5; font-size: 11px; }
+.pidLegendCalculated, .pidLegendCommand { display: inline-block; width: 16px; height: 3px; border-radius: 3px; vertical-align: middle; margin: 0 5px 2px 10px; background: #38bdf8; }
+.pidLegendCommand { background: #fbbf24; }
+.pidTrendFootnote { padding-top: 8px; }
+@media (max-width: 640px) {
+  .pidTrendPanel { padding: 14px; }
+  .pidTrendHeader { flex-direction: column; align-items: stretch; gap: 14px; }
+  .pidTrendSelector { min-width: 0; max-width: none; }
+  .pidTrendMetrics { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .pidTrendMetrics > div { padding: 10px; }
+  .pidTrendMetrics strong { font-size: 20px; }
 }
 
 .miniButton {
@@ -3161,6 +3207,17 @@ details[open] > summary.compactPanelHead::before {
   margin-bottom: 10px;
 }
 
+.diagnosticColumn {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+
+.diagnosticGrid .panel {
+  margin-bottom: 0;
+}
+
 .settingsGrid .panel h2 {
   margin: 0 0 8px;
   font-size: 16px;
@@ -3637,3 +3694,238 @@ td, th {
     font-size: 8px;
   }
 }
+.manualControl { border: 1px solid #e9aa32; }
+.manualControl h2 { margin: 0; }
+.manualPowerValue { display: flex; justify-content: center; align-items: baseline; gap: 8px; color: #ffcb54; font-size: 48px; font-weight: 750; margin: 18px 0; }
+.manualPowerValue small { font-size: 22px; }
+.manualPowerInputs { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.manualPowerInputs input[type="range"] { flex: 1; min-width: 150px; accent-color: #ffcb54; cursor: pointer; }
+.manualPowerInputs input[type="number"] { width: 88px; }
+.manualPowerActions { display: flex; gap: 10px; flex-wrap: wrap; }
+
+.energyIcon { width: 24px; height: 24px; }
+.energyFlowSvg > .energyIcon { color: #a8b5c7; }
+.energyChartLegend { display: flex; flex-wrap: wrap; gap: 10px 20px; margin: 4px 0 14px; color: #cbd5e1; font-size: 12px; }
+.energyChartLegend > span { display: inline-flex; align-items: center; gap: 7px; }
+.energyChartLegend i { width: 8px; height: 8px; border-radius: 50%; }
+.energyChartLegend small { color: #7f8b9d; }
+.energyChartHint { margin: -4px 0 12px; font-size: 11px; color: #99a5b5; }
+.dashboardEnergyCharts canvas { cursor: crosshair; }
+
+/* Dashboard: energy first, technical details available on demand. */
+.cockpitHeader {
+  position: static;
+  margin-bottom: 0;
+  padding-top: 12px;
+  padding-bottom: 12px;
+  flex-wrap: wrap;
+}
+.cockpitHeader .statusBadges {
+  display: flex;
+  flex-wrap: wrap;
+  min-width: 0;
+  gap: 8px;
+}
+.cockpitHeader .statusBadge {
+  min-height: 0;
+  padding: 6px 10px;
+  background: transparent;
+  border-color: #2a2b30;
+}
+.cockpitHeader .statusBadge small { max-width: 200px; }
+.dashboardSummary { margin: 12px 0; }
+.dashboardSummary .routerMood.headerMood {
+  min-width: 0;
+  min-height: 0;
+  width: auto;
+  gap: 10px;
+  padding: 0;
+  background: transparent;
+  border: 0;
+}
+.dashboardSummary .routerMood.headerMood > span { font-size: 20px; }
+.dashboardSummary .routerMood b { display: none; }
+.dashboardSummary .routerMood strong { margin: 0; font-size: 13px; }
+.cockpitDashboard .energyTopBand { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.cockpitDashboard .cockpitMetric {
+  padding: 18px;
+  min-height: 120px;
+  border-color: #303138;
+}
+.cockpitDashboard .cockpitMetric strong { font-size: 34px; }
+.cockpitDashboard .cockpitMetric small { line-height: 1.5; }
+.cockpitDashboard .cockpitMainGrid {
+  grid-template-columns: minmax(0, 1.65fr) minmax(290px, 1fr);
+  align-items: start;
+}
+.cockpitDashboard .pidCockpit { align-content: start; gap: 16px; }
+.pidAppliedCommand { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.pidAppliedCommand span { font-size: 12px; color: #9ca3af; }
+.pidAppliedCommand strong { font-size: 26px; color: #f9fafb; }
+.cockpitDashboard .pidCommandBar { height: 8px; }
+.dashboardDetails {
+  min-width: 0;
+  border: 1px solid #303138;
+  border-radius: 8px;
+  background: #131417;
+}
+.dashboardDetails > summary {
+  padding: 14px;
+  cursor: pointer;
+  color: #d1d5db;
+  font-size: 13px;
+  font-weight: 650;
+}
+.dashboardDetails > summary:hover { color: #fff; background: #1b1d22; }
+.dashboardDetails > summary:focus-visible { outline: 2px solid #38bdf8; outline-offset: -3px; }
+.dashboardDetails[open] > summary { border-bottom: 1px solid #303138; }
+.dashboardDetails > .pidGrid,
+.dashboardDetails > .cockpitCharts,
+.dashboardDetails > .cockpitBottomGrid { padding: 12px; }
+.dashboardEnergyCharts { grid-template-columns: repeat(auto-fit, minmax(min(100%, 350px), 1fr)); }
+.dashboardChartDetails > .cockpitCharts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+#dashboardGraphEditor:empty,
+.dashboardEnergyCharts:empty { display: none; }
+@media (max-width: 1100px) {
+  .cockpitDashboard .cockpitMainGrid,
+  .cockpitDashboard .cockpitBottomGrid { grid-template-columns: 1fr; }
+}
+@media (max-width: 620px) {
+  .cockpitDashboard .energyTopBand,
+  .dashboardChartDetails > .cockpitCharts { grid-template-columns: 1fr; }
+  .cockpitDashboard .cockpitMetric { min-height: 105px; }
+  .cockpitDashboard .cockpitMetric strong { font-size: 28px; }
+}
+
+/* Soft accents keep energy values prominent without competing with alarms. */
+.cockpitDashboard .cockpitMetric {
+  --energy-accent: #8995a8;
+  position: relative;
+  border-radius: 14px;
+  border-top: 2px solid var(--energy-accent);
+  background: linear-gradient(140deg, #202730, #15191f 75%);
+  padding: 20px;
+  min-height: 144px;
+}
+.cockpitDashboard .cockpitMetric.consume { --energy-accent: #f87171; }
+.cockpitDashboard .cockpitMetric.solar { --energy-accent: #4ade80; }
+.cockpitDashboard .cockpitMetric.heat { --energy-accent: #fb923c; }
+.cockpitDashboard .cockpitMetric.metric-solar { --energy-accent: #f5c85a; }
+.cockpitDashboard .cockpitMetric > .energyIcon {
+  position: absolute;
+  top: 16px;
+  right: 18px;
+  width: 26px;
+  height: 26px;
+  padding: 9px;
+  border-radius: 13px;
+  color: var(--energy-accent);
+  background: #ffffff07;
+}
+.cockpitDashboard .cockpitMetric > .metricLabel { padding-right: 54px; }
+.cockpitDashboard .cockpitMetric strong { font-size: clamp(28px, 3vw, 40px); letter-spacing: -.035em; }
+.cockpitDashboard .cockpitMetric small { color: #a3adba; }
+.cockpitDashboard .energyFlowPanel,
+.cockpitDashboard .pidCockpit,
+.cockpitDashboard .canvasChartCard { border-radius: 14px; background: linear-gradient(160deg, #1b2028, #15181e); border-color: #2c3440; }
+.cockpitDashboard .energyFlowSvg,
+.cockpitDashboard .canvasChartCard canvas { border-radius: 10px; background: #10151c; }
+.cockpitDashboard .wideChartHead b { color: #e5edf7; }
+.cockpitDashboard .pidModeLine strong { letter-spacing: .06em; }
+.cockpitDashboard .pidAppliedCommand strong { color: #fdba74; }
+.cockpitDashboard .dashboardDetails { background: #13181f; border-color: #2b3441; }
+@media (prefers-reduced-motion: no-preference) {
+  .cockpitDashboard .cockpitMetric { transition: border-color .2s ease; }
+}
+
+/* Compact scenario editor. Keep the ESP palette and scope density to Automate. */
+.scenarioWorkspace { font-size: 13px; line-height: 1.4; }
+.scenarioWorkspace h1 { font-size: 21px; margin: 0 0 3px; }
+.scenarioWorkspace h2 { font-size: 15px; margin: 0; }
+.scenarioWorkspace .muted { color: #9ca3af; }
+.scenarioPageHeader, .scenarioEditorTitle { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 12px; }
+.scenarioWorkspace .toolbar { margin: 0; gap: 5px; flex-wrap: wrap; }
+.scenarioWorkspace button { font-size: 12px; min-height: 28px; padding: 4px 9px; border-radius: 5px; }
+.scenarioWorkspace .scenarioPrimary { border-color: #b88f31; color: #f6c74a; background: #292315; }
+.scenarioWorkspace input, .scenarioWorkspace select { font: inherit; font-size: 12px; min-height: 28px; padding: 4px 6px; margin-top: 2px; border-radius: 4px; background: #101114; border-color: #383a40; }
+.scenarioWorkspace input:focus-visible, .scenarioWorkspace select:focus-visible, .scenarioWorkspace button:focus-visible, .scenarioWorkspace summary:focus-visible { outline: 2px solid #f6c74a; outline-offset: 2px; }
+.scenarioWorkspace label { min-width: 0; font-size: 11px; color: #a7afbd; }
+.scenarioWorkspace .check { min-height: auto; width: auto; accent-color: #22c55e; }
+.scenarioCards { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 8px; margin-bottom: 14px; }
+.scenarioCard { min-width: 0; border: 1px solid #303238; border-radius: 7px; background: #191a1e; overflow: hidden; }
+.scenarioCard.isOpen { border-color: #b88f31; }
+.scenarioCard.isOpen .scenarioOpen { background: #292315; }
+.scenarioEditor[hidden] { display: none; }
+.scenarioWorkspace .scenarioOpen { display: block; width: 100%; text-align: left; border: 0; border-radius: 0; background: transparent; padding: 7px 9px; }
+.scenarioOpen:hover { background: #222327; }
+.scenarioCardTitle { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.scenarioCardTitle strong { overflow-wrap: anywhere; }
+.scenarioCardMeta { display: block; color: #9ca3af; font-size: 11px; margin-top: 4px; }
+.scenarioCardTools { display: flex; flex-wrap: wrap; gap: 4px; border-top: 1px solid #2c2d32; padding: 6px; }
+.scenarioWorkspace .scenarioCardTools button { font-size: 11px; min-height: 25px; padding: 3px 7px; }
+.scenarioEditor { padding: 12px; background: #161719; border-color: #303238; }
+.scenarioMetadata { display: grid; grid-template-columns: minmax(180px, 1fr) 90px 80px minmax(110px, 180px); align-items: end; gap: 10px; margin-bottom: 12px; }
+.scenarioMetadata > label:nth-child(3) { padding-bottom: 5px; }
+.scenarioIdentity { align-self: center; font-size: 11px; color: #9ca3af; }
+.scenarioIdentity summary { cursor: pointer; }
+.scenarioBlock { margin: 7px 0; border: 1px solid #34363d; border-left: 3px solid #f6c74a; border-radius: 5px; background: #1b1c20; }
+.scenarioBlock > summary { cursor: pointer; padding: 6px 10px; background: #242326; font-size: 12px; }
+.scenarioBlock > summary b { display: inline-block; min-width: 60px; color: #f6c74a; font-size: 12px; }
+.scenarioBlock > summary span { color: #a7afbd; font-size: 11px; margin-left: 8px; }
+.scenarioThen { border-left-color: #22c55e; margin-left: 14px; }
+.scenarioThen > summary b { color: #4ade80; }
+.scenarioElse { border-left-color: #fb923c; margin-left: 14px; }
+.scenarioElse > summary b { color: #fb923c; }
+.scenarioBlockBody { padding: 6px 8px; }
+.scenarioWorkspace .ruleRows { gap: 4px; }
+.scenarioWorkspace .ruleRows:empty::before { content: 'Aucune ligne'; color: #777f8c; font-size: 11px; padding: 6px; }
+.scenarioWorkspace .ruleRow, .scenarioWorkspace .ruleActionRow { gap: 6px; padding: 5px 6px; border-radius: 4px; background: #141518; border-color: #2d3037; align-items: end; }
+.scenarioWorkspace .ruleRow { grid-template-columns: minmax(140px, 1.1fr) minmax(170px, 1.3fr) 110px minmax(100px, .8fr) 22px 80px; }
+.scenarioWorkspace .ruleRow > label { display: flex; align-items: center; gap: 5px; white-space: nowrap; font-size: 10px; }
+.scenarioWorkspace .ruleRow > label input, .scenarioWorkspace .ruleRow > label select { min-width: 0; flex: 1; margin: 0; }
+.scenarioWorkspace .ruleActionRow { grid-template-columns: minmax(115px, .85fr) minmax(155px, 1.1fr) minmax(210px, 2fr) 80px; }
+.scenarioActionParameters, .scenarioActionParameters .actionValueHost { display: flex; flex-wrap: wrap; align-items: end; gap: 6px; min-width: 0; }
+.scenarioActionParameters > label, .scenarioActionParameters .actionValueHost > label { flex: 1 1 90px; }
+.scenarioActionParameters .actionValueHost { flex: 2 1 90px; }
+.scenarioActionParameters .actionValueHost > input, .scenarioActionParameters .actionValueHost > select { width: auto; flex: 1 1 85px; min-width: 0; }
+.scenarioActionParameters .actionValueHost > .muted { font-size: 10px; flex-basis: 100%; }
+.scenarioWorkspace .unitCell { padding-bottom: 6px; font-size: 10px; }
+.scenarioRowTools { display: flex; gap: 2px; align-self: end; }
+.scenarioWorkspace .scenarioRowTools button { width: 25px; min-height: 28px; padding: 2px; }
+.scenarioBranchToolbar { display: flex; gap: 7px; align-items: end; margin: 5px 0; }
+.scenarioBranchToolbar label { display: flex; gap: 8px; align-items: center; }
+.scenarioBranchToolbar select { width: auto; margin: 0; }
+.scenarioZeroConditions { display: none; color: #9ca3af; font-size: 11px; margin: 5px; }
+.scenarioWorkspace #condRows:empty + .scenarioZeroConditions { display: block; }
+.scenarioBranchWarning { font-size: 11px; }
+.scenarioBranchWarning:empty { display: none; }
+.scenarioFooter { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 12px; }
+.scenarioFooter span { margin-left: auto; font-size: 11px; }
+.scenarioEmpty { color: #9ca3af; padding: 16px 8px; }
+@media (max-width: 1100px) {
+  .scenarioWorkspace .ruleActionRow { grid-template-columns: minmax(120px, 1fr) minmax(160px, 1.5fr) 80px; }
+  .scenarioActionParameters { grid-column: 1 / 3; grid-row: 2; }
+  .scenarioWorkspace .ruleActionRow > .scenarioRowTools { grid-column: 3; grid-row: 1 / 3; }
+  .scenarioWorkspace .ruleRow { grid-template-columns: minmax(100px, 1fr) minmax(120px, 1.2fr) 70px; }
+  .scenarioWorkspace .ruleRow > label { display: block; white-space: normal; }
+  .scenarioWorkspace .ruleRow > .scenarioRowTools { justify-self: end; }
+}
+@media (max-width: 640px) {
+  .scenarioPageHeader, .scenarioEditorTitle { align-items: start; flex-direction: column; }
+  .scenarioMetadata { grid-template-columns: 1fr 85px; }
+  .scenarioWorkspace .ruleActionRow, .scenarioWorkspace .ruleRow { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .scenarioActionParameters { grid-column: 1 / -1; grid-row: auto; }
+  .scenarioWorkspace .ruleActionRow > .scenarioRowTools { grid-column: 2; grid-row: auto; justify-self: end; }
+  .scenarioThen, .scenarioElse { margin-left: 6px; }
+  .scenarioWorkspace .ruleRow > .scenarioRowTools { grid-column: 2; }
+  .scenarioFooter span { margin-left: 0; }
+  .scenarioCards { grid-template-columns: 1fr; }
+}
+
+/* PID settings belong to each automate action. */
+.pidActionSettings:not([hidden]) { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; flex-basis: 100%; padding: 10px; border: 1px solid var(--border, #334155); border-radius: 8px; }
+.pidActionSettings[hidden] { display: none; }
+.pidActionSettings .muted { grid-column: 1 / -1; }
+.pidGainControl { grid-column: 1 / -1; display: grid; gap: 6px; }
+.pidGainControl .sliderRow { display: grid; grid-template-columns: minmax(0, 1fr) 100px; align-items: center; gap: 12px; }
+.pidGainControl input[type="range"] { width: 100%; min-width: 0; accent-color: #38bdf8; }

@@ -1,5 +1,9 @@
 # RouteurSolaireESP32 — Partitionnement Recovery/Main ESP32
 
+Relecture documentaire du 20 octobre 2026 : le CSV officiel reste `partitions_recovery_main_4MB.csv`, avec `factory` à `0x10000`/taille `0x110000`, `ota_0` à `0x120000`/taille `0x1E0000`, et `spiffs` à `0x300000`/taille `0x100000`. Le nom `spiffs` est conservé pour LittleFS. Le contrôle statique de non-chevauchement et de limite 4 Mo passe ; aucun repartitionnement ni flash exécuté.
+
+Les tailles de firmware et procédures datées qui suivent sont historiques. Aucune compilation nouvelle n'a été réalisée pour cette relecture ; ne pas extrapoler une marge actuelle à partir de ces chiffres. L'ancien CSV double-slot reste dans le dépôt mais n'est pas le schéma cible. Voir l'[état du projet](ETAT_DU_PROJET.md) et les [limites de maintenance](OTA.md).
+
 ## 1. Objectif
 
 Mettre en place un schéma de partitions ESP32 4 MB adapté au projet RouteurSolaireESP32.

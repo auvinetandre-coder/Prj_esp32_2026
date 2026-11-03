@@ -4,7 +4,6 @@
 
 void RuntimeState::begin(ConfigManager &config) {
   JsonObject device = config.device();
-  role = roleFromString(device["role"] | "MASTER");
   moduleName = device["deviceName"] | device["name"] | "Routeur solaire";
   deviceId = WiFi.macAddress();
   uint32_t configuredNodeId = device["nodeId"] | 0UL;
@@ -16,9 +15,6 @@ void RuntimeState::begin(ConfigManager &config) {
     configuredNodeId = (macHash % 254U) + 1U;
   }
   nodeId = static_cast<uint8_t>(configuredNodeId);
-  isActiveMaster = role == ROLE_MASTER;
-  masterAlive = role == ROLE_MASTER;
-  activeMasterId = isActiveMaster ? deviceId : "";
   simulationMode = config.system()["simulation"]["enabled"] | config.system()["simulationMode"] | false;
   simulationType = config.system()["simulation"]["mode"] | "manual";
   simulationScenario = config.system()["simulation"]["scenario"] | "normal";
@@ -85,9 +81,6 @@ void RuntimeState::toJson(JsonObject out, bool includeLogs) {
   out["deviceId"] = deviceId;
   out["nodeId"] = nodeId;
   out["moduleName"] = moduleName;
-  out["role"] = roleToString(role);
-  out["redundancyRole"] = redundancyRoleToString(role);
-  out["functionalRole"] = functionalRoleToString(role);
   out["networkMode"] = networkMode;
   out["localIp"] = localIp;
   out["stationIp"] = stationIp;
@@ -101,13 +94,6 @@ void RuntimeState::toJson(JsonObject out, bool includeLogs) {
   out["lastNtpSyncAgeMs"] = lastNtpSyncMs ? millis() - lastNtpSyncMs : 4294967295UL;
   out["espNowReady"] = espNowReady;
   out["lastEspNowSensorReceiveMs"] = lastEspNowSensorReceiveMs;
-  out["isActiveMaster"] = isActiveMaster;
-  out["masterAlive"] = masterAlive;
-  out["activeMasterId"] = activeMasterId;
-  out["epoch"] = redundancyEpoch;
-  out["redundancyState"] = redundancyState;
-  out["splitBrainDetected"] = splitBrainDetected;
-  out["lastMasterHeartbeatAgeMs"] = lastMasterHeartbeatMs ? millis() - lastMasterHeartbeatMs : 4294967295UL;
   out["safetyTripped"] = safetyTripped;
   out["safetyLevel"] = safetyLevel;
   out["safetyReason"] = safetyReason;
@@ -157,16 +143,10 @@ void RuntimeState::toJson(JsonObject out, bool includeLogs) {
   out["injectionW"] = injectionW;
   out["consumptionW"] = consumptionW;
   out["productionW"] = productionW;
-  out["batteryVoltageV"] = batteryVoltageV;
-  out["batteryCurrentA"] = batteryCurrentA;
-  out["batteryPowerW"] = batteryPowerW;
-  out["batterySocPct"] = batterySocPct;
-  out["batteryOnline"] = batteryOnline;
-  out["lastBatteryReadMs"] = lastBatteryReadMs;
   out["surplusW"] = surplusW;
-  out["tankTopC"] = tankTopC;
-  out["tankMiddleC"] = tankMiddleC;
-  out["tankBottomC"] = tankBottomC;
+  out["temperature1C"] = temperature1C;
+  out["temperature2C"] = temperature2C;
+  out["temperature3C"] = temperature3C;
   JsonArray ds = out["ds18b20"].to<JsonArray>();
   for (uint8_t i = 0; i < 3; i++) {
     JsonObject s = ds.add<JsonObject>();
@@ -187,7 +167,7 @@ void RuntimeState::toJson(JsonObject out, bool includeLogs) {
   out["ssr1PinHigh"] = ssr1PinHigh;
   out["ssr2PinHigh"] = ssr2PinHigh;
   out["robotDynPinHigh"] = robotDynPinHigh;
-  out["heaterPowerW"] = heaterPowerW;
+  out["outputPowerW"] = outputPowerW;
   out["commandPercent"] = commandPercent;
   out["automateState"] = automateState;
   out["previousAutomateState"] = previousAutomateState;
@@ -286,34 +266,4 @@ void RuntimeState::recordLoopPerf(LoopPerfModule module, uint32_t elapsedMs) {
     lastSlowModule = stat.name;
     lastSlowModuleMs = elapsedMs;
   }
-}
-
-DeviceRole RuntimeState::roleFromString(const String &value) {
-  if (value == "BACKUP") return ROLE_BACKUP;
-  if (value == "NODE_SENSOR") return ROLE_NODE_SENSOR;
-  if (value == "NODE_ACTUATOR") return ROLE_NODE_ACTUATOR;
-  if (value == "NODE_MIXED") return ROLE_NODE_MIXED;
-  return ROLE_MASTER;
-}
-
-const char *RuntimeState::roleToString(DeviceRole role) {
-  switch (role) {
-    case ROLE_BACKUP: return "BACKUP";
-    case ROLE_NODE_SENSOR: return "NODE_SENSOR";
-    case ROLE_NODE_ACTUATOR: return "NODE_ACTUATOR";
-    case ROLE_NODE_MIXED: return "NODE_MIXED";
-    default: return "MASTER";
-  }
-}
-
-const char *RuntimeState::redundancyRoleToString(DeviceRole role) {
-  if (role == ROLE_MASTER) return "MASTER";
-  if (role == ROLE_BACKUP) return "BACKUP";
-  return "STANDALONE";
-}
-
-const char *RuntimeState::functionalRoleToString(DeviceRole role) {
-  if (role == ROLE_NODE_SENSOR) return "SENSOR";
-  if (role == ROLE_NODE_ACTUATOR) return "ACTUATOR";
-  return "MIXED";
 }

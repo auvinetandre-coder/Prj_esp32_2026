@@ -269,16 +269,24 @@ bool LinkyTICManager::validateChecksum(const String &line) {
 }
 
 void LinkyTICManager::applyLabelValue(const String &label, const String &value) {
+  // Other TIC fields/heartbeats must not turn an old power value into a new sample.
+  if (label == "PAPP" || label == "SINSTS" || label == "SINSTI") reading.lastPowerReadMs = millis();
   if (label == "PAPP") {
     reading.apparentPowerVA = value.toFloat();
     reading.gridPowerW = reading.apparentPowerVA;
   } else if (label == "SINSTS") {
-    reading.apparentPowerVA = value.toFloat();
-    reading.gridPowerW = reading.apparentPowerVA;
+    const float consumedVA = value.toFloat();
+    if (consumedVA > 0 || reading.gridPowerW >= 0) {
+      reading.apparentPowerVA = consumedVA;
+      reading.gridPowerW = consumedVA;
+    }
   } else if (label == "SINSTI") {
     float injectedVA = value.toFloat();
-    reading.apparentPowerVA = injectedVA;
-    reading.gridPowerW = injectedVA > 0 ? -injectedVA : 0;
+    // Zero injection must not erase a positive SINSTS consumption in the same frame.
+    if (injectedVA > 0 || reading.gridPowerW < 0) {
+      reading.apparentPowerVA = injectedVA;
+      reading.gridPowerW = injectedVA > 0 ? -injectedVA : 0;
+    }
   } else if (label == "IINST" || label == "IRMS1") {
     reading.currentA = value.toFloat();
   } else if (label == "BASE" || label == "HCHC" || label == "EAST") {
@@ -414,6 +422,7 @@ void LinkyTICManager::publishRuntime() {
   state.ticTariff = reading.tariff;
   state.ticPeriod = reading.period;
   state.lastTicReadMs = reading.lastValidReadMs;
+  state.lastTicPowerReadMs = reading.lastPowerReadMs;
   state.ticErrorCount = reading.errorCount;
 }
 

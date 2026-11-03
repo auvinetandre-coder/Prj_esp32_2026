@@ -1,5 +1,31 @@
 # Memo Arduino, partitions et fichiers
 
+Procedure numerotee du 26 octobre 2026 : voir [INSTALLATION_PAR_PHASES.md](INSTALLATION_PAR_PHASES.md).
+Les lanceurs `00_` a `04_` sont a la racine du projet. La phase 02 inclut maintenant
+le bootloader et la selection factory, pour une carte neuve ou effacee.
+
+## Relecture et portée — 20 octobre 2026
+
+Les chemins et scripts ci-dessous sont des outils présents ; leur présence n'est pas un résultat de compilation ou de flash. Aucun build ni téléversement relancé pour cette mise à jour documentaire. Versions déclarées des sources : firmware `20261020-06`, WebUI/LittleFS `20261020-01` ; version installée non vérifiée. Les mesures du 18 octobre restent historiques.
+
+Pour une mise à jour utilisateur, conserver le passage explicite en factory recovery. Les scripts `Televerser_*_COM3/COM4.bat` écrivent directement par USB : ils relèvent de l'installation/maintenance et contournent les contrôles factory. Un transfert d'image LittleFS remplace la partition entière, y compris `/config`, pas seulement les fichiers Web ; sa sauvegarde/restauration actuelle reste conditionnelle. Voir [OTA.md](OTA.md) et l'[audit courant](AUDIT_2026-10-20.md).
+
+Points d'outillage ouverts : `Detect_Arduino_Tools.bat` garde une variable `ARDUINO_CLI` déjà définie à un chemin invalide, empêchant son repli PATH. Les scripts habituels de compilation génèrent `build_info.h` ; les scripts de packaging/LittleFS peuvent modifier les marqueurs de version. Ne pas les lancer pour une simple vérification documentaire. `build_release.bat` et `publish_release.bat` existent ; leur vocabulaire/URLs GitHub historiques ne réintroduisent pas de téléchargement automatique par l'ESP.
+
+### Vérifications locales sans appareil
+
+Depuis la racine, avec Node disponible :
+
+```powershell
+node --check data/www/app.js
+Get-ChildItem tools/test_*.js | ForEach-Object {
+    & node $_.FullName
+    if ($LASTEXITCODE -ne 0) { throw ('Echec du test : ' + $_.Name) }
+}
+```
+
+Les sept scripts passent lors de la relecture. Ils exercent des fonctions UI et des blocs C++ traduits en JavaScript, pas le firmware compilé. Plusieurs tests sont encore non suivis par Git. Les anciens scripts locaux de `build_audit/` sont ignorés : le contrôle statique signale toujours `/lite`, et le smoke dashboard doit retirer aussi le nouveau démarrage du polling pour fonctionner avec son DOM simulé. Résultats et limites dans l'[audit](AUDIT_2026-10-20.md#contrôles-exécutés).
+
 Ce fichier est le point de reference rapide pour eviter de rechercher a chaque fois la configuration Arduino, le schema de partitions, les scripts, les noms de fichiers et les emplacements.
 
 ## Dossier projet
@@ -114,6 +140,33 @@ tools\Installer_Partition_Arduino.bat
 
 Le script de compilation copie aussi automatiquement `partitions_recovery_main_4MB.csv` dans le dossier partitions du core ESP32 Arduino.
 
+### Menu toujours absent : correction du 18 octobre 2026
+
+Sur ce poste, avec le core ESP32 `3.3.12`, l'option ajoutee dans `boards.local.txt` etait reconnue par Arduino CLI, mais restait absente du menu Arduino IDE, meme apres redemarrage et rechargement des donnees de la carte.
+
+La correction appliquee a ete de sauvegarder `boards.txt`, puis d'ajouter directement ces lignes dans ce fichier :
+
+```ini
+esp32.menu.PartitionScheme.routeursolairerecovery=RouteurSolaire Recovery/Main (factory 1.06MB / main 1.88MB / LittleFS 1MB)
+esp32.menu.PartitionScheme.routeursolairerecovery.build.partitions=partitions_recovery_main_4MB
+esp32.menu.PartitionScheme.routeursolairerecovery.upload.maximum_size=1966080
+```
+
+Fichiers concernes sur ce poste :
+
+```text
+C:\Users\andre\AppData\Local\Arduino15\packages\esp32\hardware\esp32\3.3.12\boards.txt
+C:\Users\andre\AppData\Local\Arduino15\packages\esp32\hardware\esp32\3.3.12\tools\partitions\partitions_recovery_main_4MB.csv
+```
+
+Sauvegarde creee avant modification : `boards.txt.routeursolaire-20261018-112602.bak`, dans le meme dossier que `boards.txt`.
+
+Apres fermeture de toutes les fenetres Arduino IDE et reouverture, l'utilisateur a confirme que le choix etait visible. Selectionner `ESP32 Dev Module`, puis cette partition dans `Outils > Partition Scheme`, en fin de liste apres `Custom`.
+
+Le script `Installer_Partition_Arduino.bat` ajoute actuellement les entrees dans `boards.local.txt` uniquement : il ne reproduit pas cette correction directe dans `boards.txt`. Une mise a jour ou reinstallation du core peut necessiter de refaire l'installation dans le dossier de la nouvelle version. Sauvegarder le fichier avant toute modification et ne pas dupliquer les entrees si elles existent deja.
+
+Le choix du menu Arduino IDE ne change pas les commandes des `.bat` : les scripts imposent eux-memes leur schema de partitions. Installer le menu ne modifie pas la table de partitions presente sur l'ESP32.
+
 ## Compiler le firmware principal
 
 Script recommande :
@@ -154,6 +207,30 @@ tools\Televerser_Firmware_COM4.bat
 ```
 
 Ces scripts televersent le firmware principal vers `ota_0`.
+
+Ils recompilent le code actuel du dossier projet (`RouteurSolaireESP32.ino` et les sources), puis envoient `build\esp32.esp32.esp32\RouteurSolaireESP32.ino.bin` a l'adresse `0x120000`. Ils ne televersent ni LittleFS ni la recovery.
+
+Arduino IDE peut rester ferme : les scripts utilisent Arduino CLI. Fermer le moniteur serie pour liberer le port COM. La compilation peut rester silencieuse plusieurs minutes ; attendre le bilan de taille puis le message `Ecriture firmware principal dans ota_0 uniquement...`.
+
+### Depannage USB COM4 : vitesse et boutons BOOT / EN
+
+Le 18 octobre 2026, la compilation a reussi mais la connexion sur COM4 a echoue avec :
+
+```text
+Invalid head of packet (0x65): Possible serial noise or corruption.
+```
+
+La vitesse dans `tools\Televerser_Firmware_COM4.bat` a ete reduite de `921600` a `115200` bauds pour tenter de fiabiliser le transfert. Le succes d'un televersement apres cette modification n'a pas ete confirme dans cet echange. Cette modification concerne seulement ce script, pas les scripts COM3, LittleFS ou recovery.
+
+En cas de `Wrong boot mode`, ou si la connexion n'aboutit pas :
+
+1. Relancer `tools\Televerser_Firmware_COM4.bat`.
+2. A l'apparition de `Connecting...`, maintenir `BOOT`.
+3. Appuyer brievement sur `EN` / `RESET` en gardant `BOOT` appuye.
+4. Relacher `BOOT` lorsque l'ecriture commence (`Writing...` ou progression).
+5. Attendre `Firmware principal ota_0 televerse avec succes.`
+
+Si l'erreur de communication persiste, essayer un autre cable USB de donnees et un port USB direct du PC. Les avertissements `Deprecated` concernant `default_reset`, `hard_reset` et `write_flash` ne sont pas l'erreur fatale de cet essai. Ne pas effacer la flash pour ce depannage.
 
 Alternative recommandee si le recovery est deja en place :
 
@@ -433,3 +510,7 @@ Partition = partitions_recovery_main_4MB.csv
 Web UI = data\www\
 Config ESP = /config/*.json dans LittleFS
 ```
+
+## Images de la livraison MULTI_SINUS
+
+Dans `build/ota`, le firmware `RouteurSolaireESP32_firmware_20261103-05.bin` contient le moteur SSR et `RouteurSolaireESP32_littlefs_20261103-05.bin` contient la WebUI associée. Les copies courantes conservent les noms `RouteurSolaireESP32_firmware.bin` et `RouteurSolaireESP32_littlefs.bin`. Voir le [bilan de livraison](MULTI_SINUS.md#livraison-du-3-novembre-2026).

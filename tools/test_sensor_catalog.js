@@ -1,0 +1,16 @@
+const fs=require('fs'),path=require('path'),assert=require('assert/strict'),vm=require('vm');
+const read=p=>fs.readFileSync(path.join(__dirname,'..',p),'utf8');const ui=read('data/www/app.js');
+const types=JSON.parse(ui.match(/var sensorTypes = (\[[^;]+\]);/)[1]);assert.deepEqual(types,['JSY-MK-194T','TIC Linky','DS18B20']);
+const context={cache:{sensors:{ds18b20:[]}},state:{},sensorTypes:types,esc:String,options:(arr,selected)=>JSON.stringify({arr,selected}),defaultJsyChannels:()=>[]};vm.createContext(context);
+for(const name of ['remoteSensorConfigType','sensorWizardTypes','defaultSensorForWizard','sensorTypeOptions'])vm.runInContext(ui.match(new RegExp('function '+name+'\\([^]*?\\n\\}'))[0],context);
+assert.deepEqual(Array.from(context.sensorWizardTypes(),x=>x.key),['tic','jsy','ds','espnow']);
+for(const [number,type]of [[1,'TIC Linky'],[2,'JSY-MK-194T'],[3,'DS18B20']])assert.equal(context.remoteSensorConfigType({sensorType:number}),type);
+for(const n of [0,4,5,6,255])assert.equal(context.remoteSensorConfigType({sensorType:n}),'');
+assert.throws(()=>context.defaultSensorForWizard('generic'));
+assert.match(context.sensorTypeOptions('OldType'),/non pris en charge/);
+const protocol=read('src/communication/espnow_protocol.h');assert.match(protocol,/SENSOR_LINKY = 1/);assert.match(protocol,/SENSOR_JSY = 2/);assert.match(protocol,/SENSOR_DS18B20 = 3/);assert.match(protocol,/VALUE_STATE_BOOL = 14/);
+for(const p of ['src/runtime/runtime_state.h','src/runtime/runtime_state.cpp','src/sensors/sensor_manager.cpp','src/communication/espnow_manager.cpp','src/communication/espnow_protocol.h'])assert.doesNotMatch(read(p),/battery|SENSOR_SOLAR/i,p);
+assert.equal((read('src/sensors/sensor_manager.cpp').match(/if \(packet.sensorType != SENSOR_LINKY && packet.sensorType != SENSOR_JSY && packet.sensorType != SENSOR_DS18B20\) return false;/g)||[]).length,3);
+assert.match(read('src/config/config_manager.cpp'),/Type de capteur non pris en charge/);
+assert.match(read('src/sensors/sensor_manager.cpp'),/refreshMqttProduction/);
+console.log('PASS: three supported sensor types, four wizard choices, unsupported radio imports rejected, wire IDs unchanged, obsolete runtime removed, MQTT retained');

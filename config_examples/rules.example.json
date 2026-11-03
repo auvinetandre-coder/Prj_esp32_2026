@@ -2,21 +2,12 @@
   "version": 2,
   "rules": [
     {
-      "id": "solar_water_heater_routing",
-      "name": "Routage solaire chauffe-eau SSR1",
+      "id": "solar_output_routing",
+      "name": "Routage solaire charge SSR1",
       "enabled": true,
       "priority": 10,
       "logic": "AND",
       "conditions": [
-        {
-          "id": "cond_injection",
-          "source": "JSY-MK-194T",
-          "measure": "injectionW",
-          "type": "number",
-          "operator": ">",
-          "value": 200,
-          "unit": "W"
-        },
         {
           "id": "cond_safety_ok",
           "source": "Securite",
@@ -28,16 +19,34 @@
       ],
       "actions": [
         {
-          "actuatorId": "ssr1_water_heater",
+          "actuatorId": "ssr1_output",
           "command": "setPowerFromSurplus",
           "regulation": "PID",
-          "maxHeaterPowerW": 1500
+          "maxOutputPowerW": 1500,
+          "pidSchema": 1,
+          "pidEnabled": true,
+          "pidSensorId": "grid",
+          "pidMeasurement": "gridPowerW",
+          "kp": 0.02,
+          "ki": 0.002,
+          "kd": 0,
+          "gridSetpointW": 0,
+          "deadbandW": 30,
+          "biasPercent": 0,
+          "maxPercent": 100,
+          "maxOutputRampPercentPerSecond": 5,
+          "maxOutputDropPercentPerSecond": 100,
+          "measurementFilterMs": 0,
+          "derivativeFilterMs": 500,
+          "pidIntervalMs": 200,
+          "measurementTimeoutMs": 5000,
+          "requireProduction": false
         }
       ]
     },
     {
-      "id": "tank_temperature_safety",
-      "name": "Securite temperature ballon",
+      "id": "temperature_safety",
+      "name": "Securite temperature equipement",
       "enabled": true,
       "priority": 100,
       "logic": "OR",
@@ -53,7 +62,7 @@
       ],
       "actions": [
         {
-          "actuatorId": "ssr1_water_heater",
+          "actuatorId": "ssr1_output",
           "command": "stop"
         },
         {

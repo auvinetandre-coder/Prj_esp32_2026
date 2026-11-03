@@ -31,22 +31,21 @@ enum EspNowFrameType : uint8_t {
   FRAME_ACTUATOR_DISCOVERY = ESPNOW_PACKET_ACTUATOR_DISCOVERY
 };
 
-enum EspNowNodeRole : uint8_t {
-  ESPNOW_ROLE_NONE = 0x00,
-  ESPNOW_ROLE_PRODUCER = 0x01,
-  ESPNOW_ROLE_CONSUMER = 0x02,
-  ESPNOW_ROLE_ROUTER = 0x04,
-  ESPNOW_ROLE_ACTUATOR = 0x08
+enum EspNowNodeServices : uint8_t {
+  ESPNOW_SERVICE_NONE = 0x00,
+  ESPNOW_SERVICE_PRODUCER = 0x01,
+  ESPNOW_SERVICE_CONSUMER = 0x02,
+  ESPNOW_SERVICE_ROUTER = 0x04,
+  ESPNOW_SERVICE_ACTUATOR = 0x08
 };
 
+// Removed wire identifiers are intentionally not reused.
 enum EspNowSensorType : uint8_t {
   SENSOR_UNKNOWN = 0,
   SENSOR_LINKY = 1,
   SENSOR_JSY = 2,
   SENSOR_DS18B20 = 3,
   SENSOR_TEMP_HUM = 4,
-  SENSOR_BATTERY = 5,
-  SENSOR_SOLAR = 6,
   SENSOR_RELAY_STATUS = 7,
   SENSOR_ROUTER = 8,
   SENSOR_CUSTOM = 255
@@ -81,9 +80,6 @@ enum EspNowSensorValueType : uint8_t {
   VALUE_TEMPERATURE_C = 8,
   VALUE_HUMIDITY_PERCENT = 9,
   VALUE_ENERGY_KWH = 10,
-  VALUE_BATTERY_VOLTAGE_V = 11,
-  VALUE_BATTERY_CURRENT_A = 12,
-  VALUE_BATTERY_SOC_PERCENT = 13,
   VALUE_STATE_BOOL = 14,
   VALUE_RSSI_DBM = 15,
   VALUE_CUSTOM = 255
@@ -101,16 +97,8 @@ enum EspNowCapability : uint16_t {
   ESPNOW_CAP_LINKY = 0x0001,
   ESPNOW_CAP_JSY = 0x0002,
   ESPNOW_CAP_TEMP = 0x0004,
-  ESPNOW_CAP_BATTERY = 0x0008,
-  ESPNOW_CAP_SOLAR = 0x0010,
   ESPNOW_CAP_ROUTER = 0x0020,
   ESPNOW_CAP_ACTUATOR = 0x0040
-};
-
-enum EspNowRedundancyRole : uint8_t {
-  ESPNOW_REDUNDANCY_STANDALONE = 0,
-  ESPNOW_REDUNDANCY_MASTER = 1,
-  ESPNOW_REDUNDANCY_BACKUP = 2
 };
 
 typedef struct __attribute__((packed)) {
@@ -216,8 +204,8 @@ typedef struct __attribute__((packed)) {
   uint8_t packetType;
   uint8_t nodeId;
   char nodeName[20];
-  uint8_t roleFlags;
-  uint8_t redundancyRole;
+  uint8_t serviceFlags;
+  uint8_t reserved = 0; // Preserve the v4 discovery wire layout.
   uint16_t capabilityFlags;
   uint8_t primarySensorType;
   uint8_t mac[6];
@@ -235,8 +223,7 @@ struct EspNowDiscoveredNode {
   char nodeName[20]{};
   char firmwareVersion[12]{};
   char littlefsVersion[12]{};
-  uint8_t roleFlags = ESPNOW_ROLE_NONE;
-  uint8_t redundancyRole = ESPNOW_REDUNDANCY_STANDALONE;
+  uint8_t serviceFlags = ESPNOW_SERVICE_NONE;
   uint16_t capabilityFlags = ESPNOW_CAP_NONE;
   uint8_t primarySensorType = SENSOR_UNKNOWN;
   uint32_t lastSeenMs = 0;
@@ -279,6 +266,8 @@ static_assert(sizeof(EspNowFastSensorPacket) <= 250, "EspNowFastSensorPacket dep
 static_assert(sizeof(EspNowSensorDiscoveryPacket) <= 250, "EspNowSensorDiscoveryPacket depasse la limite ESP-NOW de 250 octets.");
 static_assert(sizeof(EspNowActuatorDiscoveryPacket) <= 250, "EspNowActuatorDiscoveryPacket depasse la limite ESP-NOW de 250 octets.");
 static_assert(sizeof(EspNowDiagnosticPacket) <= 250, "EspNowDiagnosticPacket depasse la limite ESP-NOW de 250 octets.");
+static_assert(sizeof(EspNowDiscoveryPacket) == 68, "Conserver le format discovery ESP-NOW v4.");
+static_assert(offsetof(EspNowDiscoveryPacket, capabilityFlags) == 25, "Conserver les offsets discovery v4.");
 static_assert(sizeof(EspNowDiscoveryPacket) <= 250, "EspNowDiscoveryPacket depasse la limite ESP-NOW de 250 octets.");
 
 inline void espNowCopyFixedText(char *dest, size_t destSize, const char *src) {
@@ -347,8 +336,6 @@ inline const char *espNowSensorTypeText(uint8_t sensorType) {
     case SENSOR_JSY: return "JSY";
     case SENSOR_DS18B20: return "DS18B20";
     case SENSOR_TEMP_HUM: return "TEMP_HUM";
-    case SENSOR_BATTERY: return "BATTERY";
-    case SENSOR_SOLAR: return "SOLAR";
     case SENSOR_RELAY_STATUS: return "RELAY_STATUS";
     case SENSOR_ROUTER: return "ROUTER";
     case SENSOR_CUSTOM: return "CUSTOM";
@@ -371,7 +358,7 @@ inline const char *espNowActuatorTypeText(uint8_t actuatorType) {
 inline uint8_t espNowValueTypeFromKey(const char *key) {
   if (!key) return VALUE_UNKNOWN;
   if (strcmp(key, "GRID") == 0) return VALUE_GRID_POWER_W;
-  if (strcmp(key, "POWER") == 0 || strcmp(key, "BATP") == 0 || strcmp(key, "CH1_POWER") == 0 || strcmp(key, "CH2_POWER") == 0) return VALUE_POWER_W;
+  if (strcmp(key, "POWER") == 0 || strcmp(key, "CH1_POWER") == 0 || strcmp(key, "CH2_POWER") == 0) return VALUE_POWER_W;
   if (strcmp(key, "VOLT") == 0) return VALUE_VOLTAGE_V;
   if (strcmp(key, "CURR") == 0 || strcmp(key, "CH1_CURR") == 0 || strcmp(key, "CH2_CURR") == 0) return VALUE_CURRENT_A;
   if (strcmp(key, "PAPP") == 0 || strcmp(key, "SINSTS") == 0) return VALUE_APPARENT_POWER_VA;
@@ -380,9 +367,6 @@ inline uint8_t espNowValueTypeFromKey(const char *key) {
   if (strcmp(key, "TEMP") == 0) return VALUE_TEMPERATURE_C;
   if (strcmp(key, "HUM") == 0) return VALUE_HUMIDITY_PERCENT;
   if (strcmp(key, "ENERGY") == 0 || strcmp(key, "BASE") == 0 || strcmp(key, "CH1_EPOS") == 0 || strcmp(key, "CH1_ENEG") == 0 || strcmp(key, "CH2_EPOS") == 0 || strcmp(key, "CH2_ENEG") == 0 || strcmp(key, "CH1_ENERGY_POS") == 0 || strcmp(key, "CH1_ENERGY_NEG") == 0 || strcmp(key, "CH2_ENERGY_POS") == 0 || strcmp(key, "CH2_ENERGY_NEG") == 0) return VALUE_ENERGY_KWH;
-  if (strcmp(key, "BATV") == 0) return VALUE_BATTERY_VOLTAGE_V;
-  if (strcmp(key, "BATA") == 0) return VALUE_BATTERY_CURRENT_A;
-  if (strcmp(key, "SOC") == 0) return VALUE_BATTERY_SOC_PERCENT;
   if (strcmp(key, "RELAY") == 0 || strcmp(key, "STATE") == 0 || strcmp(key, "CH1_DIR") == 0 || strcmp(key, "CH2_DIR") == 0) return VALUE_STATE_BOOL;
   return VALUE_CUSTOM;
 }
