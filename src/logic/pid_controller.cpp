@@ -89,6 +89,7 @@ float PIDController::compute(JsonObject action, const SensorManager::PowerSample
   else if (!validPIDSettings(c)) failure = "INVALID_PID_CONFIG";
   else if (action.containsKey("maxOutputPowerW") &&
       (!isfinite(action["maxOutputPowerW"] | 0.0f) || (action["maxOutputPowerW"] | 0.0f) <= 0)) failure = "INVALID_PID_CONFIG";
+  const uint32_t previousSampleMs = i->pid.lastMeasurementMs;
   if (!failure && !stepPID(i->pid, c, sample.watts, sample.timestampMs, millis(), changed)) failure = "INVALID_OR_STALE_MEASUREMENT";
   if (failure) {
     if (i->status != failure) state.logEvent("WARNING", "PID_STOP", id + ": " + failure, "PIDController");
@@ -98,6 +99,14 @@ float PIDController::compute(JsonObject action, const SensorManager::PowerSample
     if (i->pid.lastMeasurementMs == sample.timestampMs) i->rawMeasuredW = sample.watts;
     i->status = fabsf(i->pid.previousError) <= c.deadbandW ? "DEADBAND" :
         (i->pid.saturated ? "SATURATION" : (i->pid.rampLimited ? "RAMP" : "ACTIVE"));
+  }
+  if (state.automateDebug && !failure &&
+      (changed || i->pid.lastMeasurementMs != previousSampleMs)) {
+    state.logAutomateDebug(i->pid.lastUpdateMs, "PID_CALCUL",
+        id + " " + sample.source + " mesure_ms=" + String(sample.timestampMs) +
+        " brut_W=" + String(sample.watts, 1) + " filtre_W=" + String(i->pid.measuredW, 1) +
+        " cible_W=" + String(c.setpointW, 1) + " demande_pct=" + String(i->pid.outputPercent, 2) +
+        " etat=" + i->status);
   }
   publish(*i);
   state.recordLoopPerf(PERF_PID, millis() - started);

@@ -201,6 +201,19 @@ struct RuntimeState {
   String eventMessages[32];
   String eventSources[32];
   uint32_t eventTimestamps[32] = {0};
+  uint64_t eventEpochMs[32] = {0};
+  bool automateDebug = false;
+  void logAutomateDebug(uint32_t timestampMs, const char *code, const String &message);
+  void automateDebugToJson(JsonArray out);
+  struct AutomateTrace {
+    uint32_t timestampMs = 0;
+    uint64_t epochMs = 0;
+    const char *code = nullptr;
+    String message;
+  };
+  static constexpr uint8_t automateTraceCapacity = 64;
+  AutomateTrace automateTrace[automateTraceCapacity];
+  uint8_t automateTraceHead = 0;
   uint8_t eventHead = 0;
 
   void begin(ConfigManager &config);

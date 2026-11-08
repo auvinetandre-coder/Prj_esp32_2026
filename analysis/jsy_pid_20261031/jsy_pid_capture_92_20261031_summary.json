@@ -1,0 +1,220 @@
+{
+  "meta": {
+    "host": "192.168.0.92",
+    "startedUtc": "2026-10-31T15:00:54.265Z",
+    "firmware": "20261030-01",
+    "littlefs": "20261030-02",
+    "sensors": [
+      {
+        "id": "espnow_c9ef54_2",
+        "type": "JSY-MK-194T",
+        "source": "espnow",
+        "enabled": true,
+        "channels": [
+          {
+            "id": "clamp1",
+            "name": "Pince 1",
+            "role": "production",
+            "measures": [
+              "current",
+              "power",
+              "pf",
+              "energyPos",
+              "energyNeg",
+              "direction"
+            ]
+          },
+          {
+            "id": "clamp2",
+            "name": "Pince 2",
+            "role": "grid",
+            "measures": [
+              "current",
+              "power",
+              "pf",
+              "energyPos",
+              "energyNeg",
+              "direction"
+            ]
+          }
+        ]
+      }
+    ],
+    "rules": [
+      {
+        "id": "rule_1793363425707",
+        "name": "Test",
+        "enabled": true,
+        "priority": 10,
+        "logic": "AND",
+        "conditions": [
+          {
+            "source": "JSY-MK-194T",
+            "measure": "jsyGridAvailable",
+            "operator": "==",
+            "value": true,
+            "unit": "",
+            "type": "boolean",
+            "id": "cond_1793363428697"
+          }
+        ],
+        "actions": [
+          {
+            "actuatorId": "ssr2",
+            "command": "setPowerFromSurplus",
+            "value": 0,
+            "regulation": "PID",
+            "maxOutputPowerW": 1750,
+            "gridSetpointW": 0,
+            "maxPercent": 100,
+            "pidSensorId": "grid",
+            "pidMeasurement": "gridPowerW",
+            "kp": 0,
+            "ki": 0.005,
+            "kd": 0,
+            "deadbandW": 30,
+            "pidEnabled": true,
+            "maxOutputRampPercentPerSecond": 5,
+            "maxOutputDropPercentPerSecond": 5,
+            "measurementFilterMs": 869.0148,
+            "derivativeFilterMs": 500,
+            "pidIntervalMs": 200,
+            "measurementTimeoutMs": 5000,
+            "requireProduction": false,
+            "pidSchema": 1,
+            "biasPercent": 0,
+            "pidResetToken": 0
+          }
+        ],
+        "elseActions": [
+          {
+            "actuatorId": "ssr2",
+            "command": "stop",
+            "value": 0
+          }
+        ]
+      }
+    ],
+    "actuators": [
+      {
+        "id": "ssr2",
+        "type": "SSR",
+        "mode": "BURST_FIRE",
+        "cycleMs": 200
+      }
+    ]
+  },
+  "rows": 160,
+  "errors": [],
+  "incoherentSnapshots": [
+    {
+      "wallMs": 1793458866472,
+      "t": 76270071,
+      "rawW": -488.4881,
+      "powerW": 1267.083
+    }
+  ],
+  "repeatedSnapshots": 59,
+  "observedSamples": 100,
+  "observedSampleIntervalsMs": {
+    "count": 99,
+    "mean": 396.2020202020202,
+    "min": 7,
+    "max": 841,
+    "std": 100.60875113030473,
+    "median": 403,
+    "p95": 434
+  },
+  "observedExportIntervalsMs": null,
+  "observedPIDAcquisitionIntervalsMs": {
+    "count": 81,
+    "mean": 484.34567901234567,
+    "min": 371,
+    "max": 858,
+    "std": 159.27561022389227,
+    "median": 406,
+    "p95": 814
+  },
+  "requestDurationMs": {
+    "count": 160,
+    "mean": 238.03125,
+    "min": 158,
+    "max": 542,
+    "std": 75.45714196441249,
+    "median": 204,
+    "p95": 377
+  },
+  "comparison": {
+    "rawW": {
+      "count": 95,
+      "mean": 105.58931263157899,
+      "min": -607.1343,
+      "max": 1528.286,
+      "std": 642.6184187047152,
+      "median": 2.5227,
+      "p95": 1333.033
+    },
+    "mean1sW": {
+      "count": 95,
+      "mean": 112.2658828421053,
+      "min": -606.0588319,
+      "max": 1427.870346,
+      "std": 474.6820915142426,
+      "median": 63.448174,
+      "p95": 925.1640796
+    },
+    "mean2sW": {
+      "count": 95,
+      "mean": 123.09470555631577,
+      "min": -576.5129073,
+      "max": 1230.9691819000002,
+      "std": 367.72834010763256,
+      "median": 64.18843329999997,
+      "p95": 803.5022539
+    },
+    "existingPIDW": {
+      "count": 95,
+      "mean": 136.4578253473684,
+      "min": -418.6383,
+      "max": 1317.285,
+      "std": 406.67028877452856,
+      "median": 94.12184,
+      "p95": 824.5335
+    },
+    "existingGlobalW": {
+      "count": 94,
+      "mean": 167.04445359574464,
+      "min": -463.6103,
+      "max": 1288.807,
+      "std": 404.779973756921,
+      "median": 77.0648,
+      "p95": 947.8859
+    },
+    "historicalPowerMinusRawW": {
+      "count": 95,
+      "mean": 10.347349473684211,
+      "min": 0,
+      "max": 982.9982,
+      "std": 100.32127524245276,
+      "median": 0,
+      "p95": 0
+    },
+    "commandPercent": {
+      "count": 95,
+      "mean": 4.628994968421053,
+      "min": 0,
+      "max": 21.17736,
+      "std": 4.737275219440579,
+      "median": 3.119967,
+      "p95": 14.69057
+    }
+  },
+  "limits": [
+    "Observed intervals may contain skipped acquisitions between HTTP snapshots.",
+    "Receiver time is sensor-slot reception time, not the per-key acquisition identity.",
+    "Source powerW is historical CH2_POWER, not necessarily raw meter watts.",
+    "Window means use causal zero-order hold of observed samples; no claim about internal JSY integration.",
+    "Statistics are per observed acquisition, not continuous-time energy metrology.",
+    "1000 ms gap limit is for offline comparison only; no firmware protection is changed."
+  ]
+}

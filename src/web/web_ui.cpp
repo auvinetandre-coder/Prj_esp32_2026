@@ -295,6 +295,7 @@ void WebUi::routes() {
     setNumber("gridPowerRawW", state.gridPowerRawW);
     setNumber("gridPowerFilteredW", state.gridPowerFilteredW);
     setNumber("gridPowerW", state.gridPowerW);
+    setNumber("gridGraphPowerW", gridPowerForGraph());
     setNumber("productionW", state.productionW);
     setNumber("injectionW", state.injectionW);
     setNumber("consumptionW", state.consumptionW);
@@ -454,6 +455,23 @@ void WebUi::routes() {
     JsonArray events = doc["events"].to<JsonArray>();
     state.eventsToJson(events);
     sendJson(doc);
+  });
+  server.on("/api/logs/automate", HTTP_GET, [this]() {
+    if (!requireAuth()) return;
+    DynamicJsonDocument doc(12288);
+    doc["enabled"] = state.automateDebug;
+    state.automateDebugToJson(doc["events"].to<JsonArray>());
+    sendJson(doc);
+  });
+  server.on("/api/logs/automate", HTTP_POST, [this]() {
+    if (!requireAuth()) return;
+    const String enabled = server.arg("enabled");
+    if (enabled != "true" && enabled != "false") {
+      server.send(400, "application/json", "{\"ok\":false}");
+      return;
+    }
+    state.automateDebug = enabled == "true";
+    server.send(200, "application/json", "{\"ok\":true}");
   });
   server.on("/api/logs/clear", HTTP_POST, [this]() {
     if (!requireAuth()) return;
@@ -706,6 +724,14 @@ void WebUi::appendActuatorMeasurements(JsonArray items) {
   }
 }
 
+float WebUi::gridPowerForGraph() {
+  const bool usesTic = state.gridPowerSource == "TIC" ||
+      (state.gridPowerSource == "AUTO" && state.ticAvailable && isfinite(state.ticGridPowerW));
+  if (state.simulationMode || usesTic) return state.gridPowerW;
+  const auto sample = sensors.gridPowerSample("grid", "gridPowerW", millis());
+  return sample.valid ? sample.watts : NAN;
+}
+
 void WebUi::sendStatusLite() {
   const uint32_t apiStateStartedMs = millis();
   sensors.refreshMqttProduction();
@@ -815,6 +841,7 @@ void WebUi::sendStatusLite() {
   }
   sensors.remoteSensorsToJson(out["remoteSensors"].to<JsonArray>());
   setNumber("gridPowerW", state.gridPowerW);
+  setNumber("gridGraphPowerW", gridPowerForGraph());
   setNumber("gridPowerRawW", state.gridPowerRawW);
   setNumber("gridPowerFilteredW", state.gridPowerFilteredW);
   out["gridPowerSource"] = system["router"]["gridPowerSource"] | state.gridPowerSource.c_str();

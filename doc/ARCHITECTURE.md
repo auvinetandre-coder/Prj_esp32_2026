@@ -1,12 +1,12 @@
 # ARCHITECTURE.md - Architecture RouteurSolaireESP32
 
-Relecture du 20 octobre 2026 : architecture retenue et exigences, distinctes d'une validation matérielle. L'[état courant](ETAT_DU_PROJET.md) et l'[audit](AUDIT_2026-10-20.md) décrivent les corrections présentes et les défauts ouverts. La sûreté des sorties et la conservation de configuration ne sont pas garanties sur tous les chemins.
+Relecture du 4 novembre 2026. Voir l'[état courant](ETAT_DU_PROJET.md) et l'[audit](AUDIT_2026-11-04.md).
 
 ## Chemin réellement exécuté
 
-Le main appelle SensorManager/Safety à 100 ms et RuleEngine/AutomateManager à 250 ms, sous réserve des blocages de la boucle coopérative. Le PID est appelé par les actions de régulation ; la branche Linky calcule par nouvelle lecture TIC. `SolarRouter` reste instancié mais sa boucle n'est pas appelée ; `EspNowNode` sert à l'exemple autonome.
+SensorManager et Safety sont planifiés à 100 ms, RuleEngine et AutomateManager à 250 ms, dans une boucle coopérative. Le PID positionnel commun calcule sur les nouveaux échantillons de la source retenue. EspNowNode sert à l'exemple autonome.
 
-Le manuel Web maintenu est implemente. La réception radio appelle directement le handler actionneur et doit encore être intégrée à l'arbitrage d'autorité. Les groupes imbriqués, variables utilisateur et décisions multi-actionneurs restent des évolutions. La production MQTT passe par SensorManager avec origine `MQTT`, validité et expiration.
+Les règles sélectionnent une décision par actionneur. L'automate applique la priorité OFF et tient compte de la commande distante active. Le callback radio appelle encore directement le handler actionneur. La production MQTT passe par SensorManager avec validité et expiration.
 
 ## Vue generale
 
@@ -82,7 +82,6 @@ Modules a respecter :
 - ActuatorManager
 - AutomateManager
 - RuleEngine
-- SolarRouter
 - PIDController
 - SafetyManager
 - SimulationManager
@@ -142,7 +141,7 @@ Il sert a centraliser les automatismes applicatifs non bloquants :
 
 - orchestration des sequences ;
 - decisions automatiques a partir de RuntimeState ;
-- coordination avec RuleEngine, SolarRouter et PIDController ;
+- coordination avec RuleEngine et PIDController ;
 - journalisation des actions automatiques ;
 - respect strict des interdictions SafetyManager.
 

@@ -2,14 +2,14 @@
 
 Modification du 21 octobre 2026 : [suppression des roles et de la redondance, migration et tests](SUPPRESSION_ROLES.md).
 
-Relecture du code et de la documentation : **20 octobre 2026**.
+Relecture du code et de la documentation le **4 novembre 2026**.
 
 Livraison du 3 novembre 2026 · [Mode SSR MULTI_SINUS, binaires et validation](MULTI_SINUS.md).
 
 ## Par où commencer
 
 1. [État du projet](ETAT_DU_PROJET.md) : fonctions présentes, limites et niveau de validation.
-2. [Audit du 20 octobre](AUDIT_2026-10-20.md) : anciens constats réévalués, preuves et tests exécutés.
+2. [Audit du 4 novembre](AUDIT_2026-11-04.md) · constats, corrections, doublons et contrôles.
 3. [Priorités](TODO_PRIORITES.md) : lots de correction et critères de réception.
 4. [Feuille de route](ROADMAP.md) : évolutions après stabilisation.
 
@@ -34,4 +34,4 @@ Livraison du 3 novembre 2026 · [Mode SSR MULTI_SINUS, binaires et validation](M
 - **À valider sur banc** : essai électrique, radio ou maintenance réelle encore nécessaire.
 - **Cible** : exigence ou évolution, pas une fonctionnalité acquise.
 
-Les audits datés conservent leurs résultats historiques. Le bilan courant et l'audit du 20 octobre priment pour le statut des défauts. Les tailles des anciens builds et les versions déclarées dans les sources ne prouvent ni la compilation du code courant ni la version installée sur un appareil.
+Les audits datés conservent leurs résultats historiques. Le bilan courant et l'audit du 4 novembre priment pour le statut des défauts. Les tailles des anciens builds et les versions déclarées dans les sources ne prouvent ni la compilation du code courant ni la version installée sur un appareil.

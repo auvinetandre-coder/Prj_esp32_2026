@@ -4,9 +4,9 @@ Ajout du 27 octobre 2026 : la carte Reseau conserve les W comme valeur principal
 
 Mise a jour du 21 octobre 2026 : roles et redondance supprimes du firmware, des configurations actives, des API et de la WebUI ; onglet Secours retire. Voir [le contrat actuel et la migration](SUPPRESSION_ROLES.md). Les observations datees du 20 octobre ci-dessous sont historiques pour ces points.
 
-## État de réalisation — 20 octobre 2026
+## Observations historiques — 20 octobre 2026
 
-Les sections suivantes sont des objectifs et critères d'acceptation. Le dashboard existe déjà en JavaScript natif avec SVG, Canvas, historique navigateur et réglages ; ne pas interpréter chaque objectif comme un élément absent ou validé. Références : [audit courant](AUDIT_2026-10-20.md), [audit historique dashboard](AUDIT_DASHBOARD_2026-10-19.md), [API](API.md).
+Les sections suivantes sont des objectifs et critères d'acceptation. Le dashboard existe déjà en JavaScript natif avec SVG, Canvas, historique navigateur et réglages ; ne pas interpréter chaque objectif comme un élément absent ou validé. Références : [audit courant](AUDIT_2026-11-04.md), [audit historique dashboard](AUDIT_DASHBOARD_2026-10-19.md), [API](API.md).
 
 Reproduits lors de cette relecture : secours d'erreur PID de signe opposé au firmware, mesure réseau absente affichée comme équilibre. `consumptionW` représente l'achat réseau et ne doit pas être présenté comme consommation totale Maison. Le rafraîchissement partiel ne reconstruit pas tout le bandeau supérieur. Source exacte, commande effective et puissance mesurée/estimée restent à expliciter.
 

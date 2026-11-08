@@ -1,8 +1,8 @@
 # OTA.md - Recovery/Main local
 
-## Statut de maintenance — 20 octobre 2026
+## Statut de maintenance — 4 novembre 2026
 
-Ce document décrit l'architecture retenue et les exigences. La préservation de `/config` reste un **objectif non garanti** par le code actuel : effacement complet de LittleFS lors de l'upload, backup NVS conditionnel/non actualisé après chaque fichier, restauration non transactionnelle et formatage implicite au montage dans le main. Les écritures factory n'ont pas d'authentification et l'image LittleFS tronquée n'est pas suffisamment validée. Voir l'[audit courant, lot B](AUDIT_2026-10-20.md#b--configuration-et-recovery-p1).
+Ce document décrit l'architecture retenue et les exigences. La préservation de `/config` reste un **objectif non garanti** par le code actuel : effacement complet de LittleFS lors de l'upload, backup NVS conditionnel/non actualisé après chaque fichier, restauration non transactionnelle et formatage implicite au montage dans le main. Les écritures factory n'ont pas d'authentification et l'image LittleFS tronquée n'est pas suffisamment validée. Voir l'[audit courant, constats A1 et A2](AUDIT_2026-11-04.md#corrections-proposées).
 
 La page `/recovery` du main est embarquée et ne dépend pas de LittleFS. `POST /api/system/recovery` demande explicitement le prochain boot factory ; le reboot normal sélectionne `ota_0`. En factory, les routes d'upload sont `/upload` pour le firmware et `/upload-fs` pour LittleFS. La présence de ces routes ne valide pas leur robustesse aux interruptions.
 
@@ -162,7 +162,6 @@ Le main contient l'application complete :
 - ActuatorManager ;
 - AutomateManager ;
 - RuleEngine ;
-- SolarRouter ;
 - PIDController ;
 - SafetyManager ;
 - SimulationManager ;

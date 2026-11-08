@@ -106,6 +106,29 @@ Les essais électriques et les mesures de cadence sur ESP32 restent à faire.
 
 La correction du calcul est comparée à la recherche F1ATB dans le test logiciel pour les 101 consignes entières. Les deux algorithmes sélectionnent les mêmes trames intermédiaires. Les commandes à 0 % et 100 % donnent les mêmes états permanents.
 
+## Journal AUTOMATE
+
+Dans **Diagnostic & Simulation**, activer **Debug AUTOMATE**, puis ouvrir
+le journal JSON après le phénomène à observer. Le journal est distinct
+des événements généraux et conserve les 64 dernières traces en RAM.
+Le debug est désactivé au démarrage.
+
+- `PID_CALCUL` contient l'instant du calcul, l'horodatage de réception
+  de la mesure utilisée, les watts bruts et filtrés, la consigne réseau,
+  la demande SSR et l'état du PID.
+- `SSR_TRAME` indique l'instant où le timer a appliqué une nouvelle
+  trame MULTI_SINUS, sa durée ON et sa durée totale.
+- `AUTOMATE_ETAT` signale les transitions d'état de l'automate.
+
+Les temps monotones en millisecondes utilisent l'horloge du routeur.
+Le champ `epochMs` s'ajoute lorsque l'heure NTP est disponible. Pour un
+JSY distant, l'heure de réception ESP-NOW donne un repère local.
+La fenêtre d'acquisition électrique du JSY reste à déterminer.
+
+## Courbe réseau JSY
+
+Le graphe réseau utilise les watts actifs signés du canal JSY configuré. La mesure doit être valide et récente. Le graphe laisse un trou lorsqu’elle expire. Le champ `gridGraphPowerW` des API d’état et de temps réel porte cette valeur. Les anciens points enregistrés peuvent encore contenir les pointes de l’estimation.
+
 ## Validation sur banc avant utilisation
 
 1. Hors secteur, observer les GPIO à l'analyseur logique. Vérifier les deux

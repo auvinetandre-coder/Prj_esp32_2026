@@ -17,6 +17,18 @@ var dashboardSettingsSaveTimer = null;
 var chartScaleCache = {};
 var historySampleIntervalMs = 5000;
 var historyMaxPoints = 360;
+var dashboardArchiveMs = 24 * 60 * 60 * 1000;
+var dashboardArchiveStepMs = 60000;
+var dashboardArchive = [];
+var dashboardArchiveDb;
+var dashboardArchiveStatus = "Chargement de l’historique…";
+var dashboardArchiveMinute = -1;
+var dashboardShowDay = false;
+var dashboardPrecisionMs = 500;
+var dashboardPrecisionEnabled = false;
+var dashboardPrecisionHistory = [];
+var dashboardRefreshInFlight = null;
+var dashboardStateTime = 0;
 var realtimeGraphEnabled = false;
 var realtimeGraphStepMs = Number(localStorage.getItem("realtimeGraphStepMs") || 300);
 var realtimeGraphTimer = null;
@@ -30,7 +42,6 @@ var lastSimulationModeSeen = null;
 var graphConfig = loadGraphConfig();
 var dashboardConfig = defaultDashboardConfig();
 var dashboardConfigLoaded = false;
-var pidGraphSelection = localStorage.getItem("pidGraphSelection") || "";
 var dashboardMetricKeys = loadDashboardList("dashboardMetrics", ["gridPowerW", "injectionW", "surplusW", "commandPercent"]);
 var dashboardChartKeys = loadDashboardList("dashboardCharts", ["injectionW", "commandPercent", "surplusW"]);
 var dashboardGraphDefaults = {
@@ -412,6 +423,93 @@ function saveDashboardHistorySoon(force) {
   saveStoredHistory(dashHistoryStorageKey, dashHistory);
 }
 
+function openDashboardArchive() {
+  return new Promise(function (resolve, reject) {
+    var request = indexedDB.open("dashboardMeasurements", 1);
+    request.onupgradeneeded = function () {
+      request.result.createObjectStore("minutes");
+    };
+    request.onsuccess = function () { resolve(request.result); };
+    request.onerror = request.onblocked = function () { reject(request.error); };
+  });
+}
+
+function dashboardArchiveStore(db) {
+  var store = db.transaction("minutes", "readwrite").objectStore("minutes");
+  store.delete(IDBKeyRange.upperBound(Math.floor((Date.now() - dashboardArchiveMs) / dashboardArchiveStepMs), true));
+  store.transaction.onerror = dashboardArchiveUnavailable;
+  return store;
+}
+
+function dashboardArchiveUnavailable() {
+  dashboardArchiveStatus = "Enregistrement local indisponible.";
+  updateDashboardArchiveStatus();
+}
+
+function updateDashboardArchiveStatus() {
+  var label = $("dashboardArchiveStatus");
+  if (label) label.textContent = dashboardArchiveStatus;
+}
+
+function loadDashboardArchive() {
+  dashboardArchiveDb = openDashboardArchive();
+  dashboardArchiveDb.then(function (db) {
+    var request = dashboardArchiveStore(db).getAll();
+    request.onsuccess = function () {
+      dashboardArchive = request.result;
+      dashboardArchiveStatus = "Historique local · une mesure par minute lorsque le dashboard reçoit des données.";
+      updateDashboardArchiveStatus();
+      if (dashboardShowDay) renderDashboardCanvases();
+    };
+  }).catch(dashboardArchiveUnavailable);
+}
+
+function archiveDashboardPoint(point) {
+  if (point.simulationMode) return;
+  var minute = Math.floor(point.t / dashboardArchiveStepMs);
+  if (minute === dashboardArchiveMinute) return;
+  dashboardArchiveMinute = minute;
+  dashboardArchiveDb.then(function (db) {
+    var store = dashboardArchiveStore(db);
+    store.put(point, minute);
+    store.transaction.oncomplete = function () {
+      dashboardArchive = dashboardArchive.filter(function (sample) {
+        return sample.t > point.t - dashboardArchiveMs && Math.floor(sample.t / dashboardArchiveStepMs) !== minute;
+      });
+      dashboardArchive.push(point);
+      dashboardArchive.sort(function (a, b) { return a.t - b.t; });
+      if (dashboardShowDay) renderDashboardCanvases();
+    };
+  }).catch(dashboardArchiveUnavailable);
+}
+
+function dashboardPlotHistory() {
+  var now = Date.now();
+  var span = dashboardShowDay ? dashboardArchiveMs : 15 * 60 * 1000;
+  var maxGap = dashboardShowDay ? 2 * dashboardArchiveStepMs : 3 * historySampleIntervalMs;
+  var source = dashboardShowDay ? dashboardArchive : dashHistory;
+  if (dashboardPrecisionEnabled) {
+    span = dashboardPrecisionMs * historyMaxPoints;
+    var pointsByTime = new Map();
+    dashHistory.concat(dashboardPrecisionHistory).forEach(function (point) {
+      if (point.t >= now - span && point.t <= now) pointsByTime.set(point.t, point);
+    });
+    source = Array.from(pointsByTime.values()).sort(function (a, b) { return a.t - b.t; });
+  }
+  var previous = null;
+  var history = [];
+  source.forEach(function (point) {
+    if (point.t < now - span || point.t > now) return;
+    var gapLimit = previous && previous.precision && point.precision ? 3 * dashboardPrecisionMs : maxGap;
+    if (previous && point.t - previous.t > gapLimit) {
+      history.push({t:(point.t + previous.t) / 2, gap:true});
+    }
+    history.push(point);
+    previous = point;
+  });
+  return history;
+}
+
 function activeDashboardDataKeyMap() {
   var keys = {};
   getAvailableDataSources(state).forEach(function (source) {
@@ -435,6 +533,7 @@ function pruneDashboardHistoryData() {
 function resetDashboardGraphBuffers() {
   graphData = [];
   dashHistory = [];
+  dashboardPrecisionHistory = [];
   chartScaleCache = {};
   lastHistorySampleMs = 0;
   saveStoredHistory(graphDataStorageKey, graphData);
@@ -1110,6 +1209,15 @@ function isUserEditingSettings() {
 
 function clearGraphData() {
   resetDashboardGraphBuffers();
+  dashboardArchiveMinute = -1;
+  dashboardArchiveDb.then(function (db) {
+    var store = dashboardArchiveStore(db);
+    store.clear();
+    store.transaction.oncomplete = function () {
+      dashboardArchive = [];
+      if (dashboardShowDay) renderDashboardCanvases();
+    };
+  }).catch(dashboardArchiveUnavailable);
   render();
 }
 
@@ -1152,11 +1260,17 @@ async function pollRealtime() {
   }
 }
 
+function networkGraphPower(data, legacyValue) {
+  var value = Object.prototype.hasOwnProperty.call(data, "gridGraphPowerW")
+    ? data.gridGraphPowerW : legacyValue;
+  return hasValue(value) ? powerOrNull(value) : null;
+}
+
 function handleRealtimeGraphPoint(data) {
   var now = Date.now();
   var point = {
     t: now,
-    gridPowerW: powerOrNull(data.gridPowerFilteredW != null ? data.gridPowerFilteredW : data.gridPowerW),
+    gridPowerW: networkGraphPower(data, data.gridPowerFilteredW != null ? data.gridPowerFilteredW : data.gridPowerW),
     gridPowerRawW: powerOrNull(data.gridPowerRawW),
     productionW: powerOrNull(data.productionW),
     injectionW: powerOrNull(data.injectionW),
@@ -1805,12 +1919,12 @@ function configuredOutputActuator() {
 
 function configuredActuatorsByUsage(usage) {
   return getActuators().filter(function (a) {
-    return actuatorUsage(a) === usage;
+    return usage === "routing" ? isOutputActuator(a) : actuatorUsage(a) === usage;
   });
 }
 
 function isOutputActuator(actuator) {
-  return actuatorUsage(actuator) === "routing";
+  return ["routing", "hot_water"].indexOf(actuatorUsage(actuator)) >= 0;
 }
 
 function actuatorUsage(actuator) {
@@ -1824,6 +1938,7 @@ function actuatorUsageLabel(value) {
     "":"aucun",
     routing:"routeur",
     home_heating:"chauffage maison",
+    hot_water:"chauffe-eau",
     auxiliary:"auxiliaire",
     diagnostic:"test / diagnostic"
   };
@@ -1831,7 +1946,7 @@ function actuatorUsageLabel(value) {
 }
 
 function actuatorUsageClass(value) {
-  if (value === "routing") return "warn";
+  if (value === "routing" || value === "hot_water") return "warn";
   if (value === "home_heating") return "info";
   if (value === "auxiliary") return "ok";
   if (value === "diagnostic") return "bad";
@@ -1839,7 +1954,7 @@ function actuatorUsageClass(value) {
 }
 
 function actuatorUsageSelect(selected) {
-  var items = [["","Aucun usage"],["routing","Routeur"],["home_heating","Chauffage maison"],["auxiliary","Auxiliaire"],["diagnostic","Test / diagnostic"]];
+  var items = [["","Aucun usage"],["routing","Routeur"],["home_heating","Chauffage maison"],["hot_water","Chauffe-eau"],["auxiliary","Auxiliaire"],["diagnostic","Test / diagnostic"]];
   return items.map(function (item) {
     return '<option value="' + esc(item[0]) + '" ' + (String(selected || "") === item[0] ? "selected" : "") + '>' + esc(item[1]) + '</option>';
   }).join("");
@@ -2370,12 +2485,6 @@ function dashboardValue(value, unit) {
   return hasValue(value) ? esc(fmt(Number(value))) + (unit ? ' <em>' + esc(unit) + '</em>' : '') : '--';
 }
 
-function signedDashboardValue(value, unit) {
-  if (!hasValue(value)) return '--';
-  var n = Number(value);
-  return esc((n > 0 ? "+" : "") + fmt(n)) + (unit ? ' <em>' + esc(unit) + '</em>' : '');
-}
-
 function ageLabel(ms) {
   if (!hasValue(ms) || Number(ms) === 4294967295) return "--";
   var seconds = Math.max(0, Math.round(Number(ms) / 1000));
@@ -2383,14 +2492,6 @@ function ageLabel(ms) {
   var minutes = Math.round(seconds / 60);
   if (minutes < 90) return minutes + " min";
   return Math.round(minutes / 60) + " h";
-}
-
-function gridBalanceInfo(value) {
-  if (!hasValue(value)) return {label:"Reseau", value:"--", cls:"muted", detail:"donnee non disponible", flow:"unknown"};
-  var grid = Number(value);
-  if (grid > 20) return {label:"ACHAT RESEAU", value:signedDashboardValue(grid, "W"), cls:"consume", detail:"appoint depuis reseau", flow:"buy"};
-  if (grid < -20) return {label:"INJECTION", value:signedDashboardValue(grid, "W"), cls:"solar", detail:"surplus vers reseau", flow:"inject"};
-  return {label:"EQUILIBRE", value:dashboardValue(0, "W"), cls:"ok", detail:"reseau proche de zero", flow:"neutral"};
 }
 
 function gridDerived(value) {
@@ -2411,34 +2512,6 @@ function gridDerivedForGraph(value) {
     buy:derived.buy > 20 ? derived.buy : null,
     injection:derived.injection > 20 ? derived.injection : null
   };
-}
-
-function productionInfo(value) {
-  if (!hasValue(value)) return {value:"--", cls:"muted", detail:"donnee non disponible"};
-  var n = Number(value);
-  return {value:dashboardValue(n, "W"), cls:n > 0 ? "solar" : "muted", detail:n > 0 ? "PV actif" : "production nulle"};
-}
-
-function pidExecutionInfo(p) {
-  var mode = String(p.mode || "").toUpperCase();
-  if (state.safetyTripped || state.safetyLevel === "CRITICAL") return "inactive : securite active";
-  if (mode === "OFF") return "inactive : mode OFF";
-  return p.enabled === false ? "inactive : PID desactive" : "selon les regles configurees";
-}
-
-function pidDiagnosticText(p) {
-  var e = stateEnergy();
-  var grid = Number(e.gridPowerW);
-  var output = Number(p.commandPercent || p.outputPercent || 0);
-  var deadband = Number(p.deadbandW || 30);
-  var mode = String(p.mode || "").toUpperCase();
-  if (state.safetyTripped || state.safetyLevel === "CRITICAL") return "PID inactif : securite active";
-  if (mode === "OFF") return "PID inactif : mode OFF";
-  if (!hasValue(e.gridPowerW)) return "PID inactif : source reseau absente";
-  if (grid > deadband && output <= 1) return "Pas de surplus : routeur a 0 %";
-  if (grid < -deadband && output > 1) return "PID actif : surplus absorbe";
-  if (Math.abs(Number(p.errorW || 0)) <= deadband) return "PID stable dans la deadband";
-  return "PID actif : regulation en cours";
 }
 
 function actuatorStateText() {
@@ -2649,11 +2722,13 @@ function getAvailableDataSources(sourceState) {
     {key:"deadbandW", label:"Deadband", unit:"W", currentValue:p.deadbandW}
   ]});
   var e = stateEnergy();
+  var graphPower = networkGraphPower(state, e.gridPowerW);
+  var graphGrid = gridDerivedForGraph(graphPower);
   sources.push({sourceType:"energy", id:"energy", name:"Energie calculee", origin:"SYSTEM", status:"ok", values:[
     {key:"productionW", label:"Production", unit:"W", currentValue:e.productionW},
-    {key:"gridPowerW", label:"Reseau", unit:"W", currentValue:e.gridPowerW},
-    {key:"gridBuyW", label:"Achat reseau", unit:"W", currentValue:gridDerivedForGraph(e.gridPowerW).buy},
-    {key:"gridInjectionW", label:"Injection reseau", unit:"W", currentValue:gridDerivedForGraph(e.gridPowerW).injection},
+    {key:"gridPowerW", label:"Reseau", unit:"W", currentValue:graphPower},
+    {key:"gridBuyW", label:"Achat reseau", unit:"W", currentValue:graphGrid.buy},
+    {key:"gridInjectionW", label:"Injection reseau", unit:"W", currentValue:graphGrid.injection},
     {key:"outputPowerW", label:"Puissance routeur", unit:"W", currentValue:e.outputPowerW},
     {key:"outputPowerPositiveW", label:"Puissance routeur positive", unit:"W", currentValue:hasValue(e.outputPowerW) ? Math.max(Number(e.outputPowerW), 0) : null},
     {key:"outputPercent", label:"Routeur", unit:"%", currentValue:e.outputPercent},
@@ -2749,25 +2824,6 @@ function helpIcon(text) {
   return '<button class="helpIcon" type="button" tabindex="0" aria-label="' + esc(text) + '">?</button><span class="helpBubble">' + esc(text) + '</span>';
 }
 
-function metricLabel(label, help) {
-  return '<span class="metricLabel">' + esc(label) + (help ? helpIcon(help) : '') + '</span>';
-}
-
-function energyIcon(kind, position) {
-  var paths = {
-    solar:'<circle cx="12" cy="12" r="4"/><path d="M12 1v3m0 16v3M1 12h3m16 0h3M4 4l2 2m12 12 2 2M4 20l2-2M18 6l2-2"/>',
-    grid:'<path d="M9 3h6l4 18M9 3 5 21M7 9h10M5 15h14M3 21h18M9 3l8 12M15 3 7 15"/>',
-    home:'<path d="m3 11 9-8 9 8M5 10v11h14V10M10 21v-7h4v7"/>',
-    output:'<path d="m14 2-9 12h6l-1 8 9-12h-6z"/>'
-  };
-  return '<svg class="energyIcon" ' + (position || '') + ' viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + (paths[kind] || paths.output) + '</svg>';
-}
-
-function energyHeroCard(label, value, unit, cls, detail, rawValue, help) {
-  var kind = label === "Production solaire" ? "solar" : "output";
-  return '<section class="cockpitMetric ' + esc(cls || "muted") + ' metric-' + kind + '">' + energyIcon(kind) + metricLabel(label, help) + '<strong>' + (rawValue ? value : dashboardValue(value, unit)) + '</strong><small>' + esc(detail || "") + '</small></section>';
-}
-
 function gridJsyApparentPowerVA() {
   var configMap = configSensorsById();
   var candidates = [];
@@ -2782,129 +2838,6 @@ function gridJsyApparentPowerVA() {
     });
   });
   return candidates.length === 1 ? candidates[0] : null;
-}
-
-function gridBalanceCard(e, p) {
-  var info = gridBalanceInfo(e.gridPowerW);
-  var g = gridDerived(e.gridPowerW);
-  var filtered = hasValue(state.pidMeasuredW) ? state.pidMeasuredW : (hasValue(state.gridPowerFilteredW) ? state.gridPowerFilteredW : null);
-  var source = p.source || state.gridPowerSource || "--";
-  var details = [
-    "etat : " + (info.flow === "buy" ? "achat" : (info.flow === "inject" ? "injection" : (info.flow === "neutral" ? "proche de zero" : "inconnu"))),
-    "achat " + (hasValue(g.buy) ? fmt(g.buy) + " W" : "--"),
-    "injection " + (hasValue(g.injection) ? fmt(g.injection) + " W" : "--"),
-    "source " + source
-  ];
-  if (hasValue(filtered)) details.push("filtre " + fmt(filtered) + " W");
-  var flowLabel = info.flow === "buy" ? "Achat au reseau" : (info.flow === "inject" ? "Injection vers le reseau" : (info.flow === "neutral" ? "Proche de l'equilibre" : "Mesure indisponible"));
-  var apparentVA = gridJsyApparentPowerVA();
-  var apparentLabel = apparentVA == null ? "Apparente JSY : indisponible" : "Apparente JSY : " + fmt(apparentVA) + " VA";
-  return '<section class="cockpitMetric metric-grid ' + esc(info.cls || "muted") + '">' + energyIcon("grid") +
-    metricLabel("Reseau", "Positif = achat, negatif = injection. " + details.join(" | ")) +
-    '<strong>' + info.value + '</strong><small>' + esc(flowLabel) + '</small><small title="Puissance apparente calculee U x I, toujours positive. A comparer au Linky en soutirage, au meme instant. La regulation utilise les W.">' + esc(apparentLabel) + '</small></section>';
-}
-
-function energyTopBand() {
-  var e = stateEnergy();
-  var p = pidState();
-  var pv = productionInfo(e.productionW);
-  var routerPowerW = hasValue(e.outputPowerW) ? e.outputPowerW : p.outputPowerW;
-  var powerDetail = state.outputPowerSource === "JSY" ? "mesurée par JSY · " + (state.outputPowerActuatorId || "") : "estimée · mesure JSY absente ou non associée";
-  return '<section class="energyTopBand">' +
-    gridBalanceCard(e, p) +
-    energyHeroCard("Production solaire", pv.value, "", pv.cls, pv.detail, true) +
-    energyHeroCard("Puissance routeur", routerPowerW, "W", Number(routerPowerW) > 5 ? "heat" : "muted", powerDetail, false, "Puissance instantanee estimee ou mesuree de la sortie routeur.") +
-  '</section>';
-}
-
-function flowElectrons(path, cls, count, duration) {
-  var html = '<g class="flowElectrons ' + cls + '" aria-hidden="true">';
-  // Keep the phase continuous when the dashboard rebuilds its live SVG.
-  var phase = (Date.now() / 1000) % duration;
-  for (var i = 0; i < count; i++) {
-    html += '<g><circle class="electronGlow" r="8"></circle><circle class="electronCore" r="3.5"></circle>' +
-      '<animateMotion path="' + path + '" dur="' + duration + 's" begin="-' + (phase + i * duration / count).toFixed(3) + 's" repeatCount="indefinite"></animateMotion></g>';
-  }
-  return html + '</g>';
-}
-
-function energyFlowSvg() {
-  var e = stateEnergy();
-  var grid = hasValue(e.gridPowerW) ? Number(e.gridPowerW) : NaN;
-  var p = pidState();
-  var outputPower = hasValue(e.outputPowerW) ? Number(e.outputPowerW) : (hasValue(p.outputPowerW) ? Number(p.outputPowerW) : null);
-  var inject = isFinite(grid) && grid < -20;
-  var buy = isFinite(grid) && grid > 20;
-  var outputActive = hasValue(outputPower) && outputPower > 5;
-  var productionActive = hasValue(e.productionW) && Number(e.productionW) > 1;
-  var gridCls = !isFinite(grid) ? "unknown" : (inject ? "inject" : (buy ? "buy" : "neutral"));
-  var heatCls = outputActive ? "heat" : "noHeat";
-  var solarCls = productionActive ? "pvActive" : "pvIdle";
-  var home = hasValue(e.consumptionW) ? e.consumptionW : null;
-  var gridLabel = hasValue(e.gridPowerW) ? (buy ? "+" : "") + fmt(e.gridPowerW) + " W " + (buy ? "achat" : (inject ? "injection" : "equilibre")) : "--";
-  var pvLabel = hasValue(e.productionW) ? fmt(e.productionW) + " W production" : "-- production";
-  var outputValueText = hasValue(outputPower) ? fmt(outputPower) + " W" : "-- W";
-  var outputCommandText = hasValue(p.commandPercent) ? "Cmd " + fmt(p.commandPercent) + " %" : "";
-  var outputLabel = hasValue(outputPower) ? fmt(outputPower) + " W sortie" : "-- W sortie";
-  var solarPath = "M130 82 C190 82 245 84 315 88";
-  var gridPath = buy ? "M590 88 C535 88 500 88 445 88" : "M445 88 C500 88 535 88 590 88";
-  var outputPath = "M380 130 C380 146 380 158 380 172";
-  return '<section class="energyFlowPanel">' +
-    '<div class="wideChartHead"><b>Schema energetique ' + helpIcon("Les boules lumineuses suivent le sens de l'energie. Au-dela de +20 W : reseau vers maison ; en dessous de -20 W : maison vers reseau. Entre les deux, la liaison reste discrete.") + '</b><span>' + esc(!isFinite(grid) ? "mesure reseau absente" : (inject ? "surplus vers reseau" : (buy ? "appoint reseau" : "equilibre"))) + '</span></div>' +
-    '<svg class="energyFlowSvg ' + esc(gridCls) + ' ' + esc(heatCls) + ' ' + esc(solarCls) + '" viewBox="0 0 760 270" role="img" aria-label="Flux energie">' +
-      '<defs><marker id="flowArrow" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0 0 L7 3.5 L0 7 Z"></path></marker>' +
-      '<marker id="flowArrowSolar" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0 0 L7 3.5 L0 7 Z"></path></marker>' +
-      '<marker id="flowArrowGrid" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0 0 L7 3.5 L0 7 Z"></path></marker>' +
-      '<marker id="flowArrowOutput" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0 0 L7 3.5 L0 7 Z"></path></marker></defs>' +
-      energyIcon("solar", 'x="84" y="18" width="24" height="24"') +
-      energyIcon("home", 'x="368" y="16" width="24" height="24"') +
-      energyIcon("grid", 'x="640" y="16" width="24" height="24"') +
-      energyIcon("output", 'x="283" y="196" width="24" height="24"') +
-      '<g class="flowNode sunNode"><circle cx="96" cy="82" r="34"></circle><text x="96" y="76">Soleil</text><text x="96" y="96">Production</text><text x="96" y="112">' + dashboardValue(e.productionW, "W").replace(/<[^>]+>/g, "") + '</text></g>' +
-      '<g class="flowNode homeNode"><rect x="315" y="48" width="130" height="82" rx="8"></rect><text x="380" y="82">Maison</text><text x="380" y="104">' + (home != null ? fmt(home) + " W" : "--") + '</text></g>' +
-      '<g class="flowNode gridNode"><rect x="590" y="48" width="124" height="82" rx="8"></rect><text x="652" y="82">Reseau</text><text x="652" y="104">' + (hasValue(e.gridPowerW) ? fmt(e.gridPowerW) + " W" : "--") + '</text></g>' +
-      '<g class="flowNode outputNode"><rect x="318" y="172" width="126" height="80" rx="8"></rect><text x="381" y="195">Sortie SSR</text><text x="381" y="214">' + esc(outputValueText) + '</text><text x="381" y="233">' + esc(outputCommandText) + '</text></g>' +
-      '<path class="flowLine solarLine" d="' + solarPath + '"></path>' +
-      '<path class="flowLine gridLine ' + (buy ? 'fromGrid' : 'toGrid') + '" d="' + gridPath + '"></path>' +
-      '<path class="flowLine outputLine" d="' + outputPath + '"></path>' +
-      (productionActive ? flowElectrons(solarPath, "solarElectrons", 4, 2.4) : "") +
-      (buy || inject ? flowElectrons(gridPath, buy ? "buyElectrons" : "solarElectrons", 3, 2) : "") +
-      (outputActive ? flowElectrons(outputPath, "outputElectrons", 1, 1) : "") +
-      '<text class="flowValue solarValue" x="205" y="68">' + esc(pvLabel) + '</text>' +
-      '<text class="flowValue gridValue" x="508" y="70">' + esc(gridLabel) + '</text>' +
-      '<text class="flowValue outputValue" x="396" y="156">' + esc(outputLabel) + '</text>' +
-    '</svg></section>';
-}
-
-function pidCockpitCard() {
-  var p = pidState();
-  var command = hasValue(p.commandPercent) ? Math.max(0, Math.min(100, Number(p.commandPercent))) : null;
-  var commandBar = hasValue(command) ? command : 0;
-  var error = hasValue(p.errorW) ? Number(p.errorW) : null;
-  var stable = error != null && Math.abs(error) <= Number(p.deadbandW || 30);
-  var status = pidStatusDisplay(p, commandBar, stable);
-  var mode = routerModeDisplay(p);
-  var cls = (mode === "SECURITE" || status === "SECURITY") ? "bad" : (status === "SATURATION" || commandBar >= 99 ? "warn" : (status === "STABLE" ? "ok" : "info"));
-  var title = "Routeur solaire / PID";
-  var source = activeMeasureSourceLabel(p);
-  var metrics =
-    blockMetric("Mode routeur", mode, "", mode === "SECURITE" ? "bad" : (mode === "OFF" ? "muted" : (mode === "MANUEL" ? "warn" : "ok")), "pilotage routeur") +
-    blockMetric("Source mesure", source || "--", "", "info", p.source || state.gridPowerSource || "--") +
-    blockMetric("Consigne reseau", p.targetGridW, "W", "info", "objectif") +
-    blockMetric("Deadband", p.deadbandW, "W", "muted", "zone neutre") +
-    blockMetric("Erreur PID", p.errorW, "W", hasValue(p.errorW) ? (Number(p.errorW) > 0 ? "consume" : "solar") : "muted", hasValue(p.errorW) ? (Number(p.errorW) > 0 ? "achat" : "injection") : "absente") +
-    blockMetric("Sortie PID", p.outputPercent, "%", hasValue(p.outputPercent) && Number(p.outputPercent) > 0 ? "ok" : "muted", "calcul") +
-    blockMetric("Commande appliquee", p.commandPercent, "%", hasValue(command) && command > 0 ? "heat" : "muted", "sortie reelle") +
-    blockMetric("Puissance routeur", p.outputPowerW, "W", hasValue(p.outputPowerW) && Number(p.outputPowerW) > 0 ? "heat" : "muted", state.outputPowerSource === "JSY" ? "mesurée JSY" : "estimée") +
-    blockMetric("Etat PID", status, "", cls, stable ? "dans la deadband" : pidExecutionInfo(p));
-  return '<section class="pidCockpit ' + esc(cls) + '">' +
-    '<div class="wideChartHead"><b>' + esc(title) + ' ' + helpIcon("Resume la regulation: mode, source de mesure, erreur, sortie PID, commande appliquee et etat.") + '</b><span class="' + esc(cls) + '">' + esc(status) + '</span></div>' +
-    '<div class="pidModeLine"><strong>' + esc(mode) + '</strong><span>source ' + esc(source || "--") + '</span></div>' +
-    '<div class="pidExecutionLine"><span>' + esc("Execution PID") + '</span><b>' + esc(pidExecutionInfo(p)) + '</b></div>' +
-    '<div class="pidAppliedCommand"><span>Commande appliquee</span><strong>' + (hasValue(command) ? esc(fmt(command)) + ' %' : 'Inconnue') + '</strong></div>' +
-    '<div class="pidCommandBar"><i style="width:' + commandBar + '%"></i></div>' +
-    '<p class="pidDiagnostic">' + esc(pidDiagnosticText(p)) + '</p>' +
-    '<details id="dashboardPidDetails" class="dashboardDetails"><summary>Mesures et parametres PID</summary><div class="pidGrid">' + metrics + '</div></details></section>';
 }
 
 function normalizeSensorValues(values) {
@@ -3157,7 +3090,7 @@ function configuredCanvasChartCard(graph, index) {
   }).join("");
   var signedPower = (effective.series || []).some(function (s) { return s.valueKey === "gridPowerW"; }) && (effective.series || []).every(function (s) { return s.unit === "W"; });
   var hint = signedPower ? '<p class="energyChartHint">Une seule courbe : rouge = achat au-dessus de zero, vert = injection en dessous.</p>' : '';
-  return '<section class="canvasChartCard" data-graph-index="' + index + '"><div class="wideChartHead"><b>' + esc(effective.title || "Graphe") + '</b><span>' + esc(status) + '</span><button class="miniButton" onclick="openDashboardGraphConfig(' + index + ')">Configurer</button></div><div class="energyChartLegend">' + legend + '</div>' + hint + '<canvas id="dashGraph_' + index + '" height="220" aria-label="' + esc(effective.title || "Historique") + '"></canvas></section>';
+  return '<section class="canvasChartCard" data-graph-index="' + index + '"><div class="wideChartHead"><b>' + esc(effective.title || "Graphe") + '</b><span>' + esc(status) + '</span><button class="miniButton" onclick="openDashboardGraphConfig(' + index + ')">Configurer</button></div><div class="energyChartLegend">' + legend + '</div><p id="dashGraphLive_' + index + '" class="energyChartHint"></p>' + hint + '<canvas id="dashGraph_' + index + '" height="220" aria-label="' + esc(effective.title || "Historique") + '"></canvas></section>';
 }
 
 function dashboardVisibleConfiguredGraphs() {
@@ -3222,135 +3155,43 @@ function temperatureGraphSeries() {
   });
 }
 
-function pidGraphContexts() {
-  var result = [];
-  var actuators = (cache.actuators || {}).actuators || [];
-  (((cache.rules || {}).rules) || []).slice(0, 24).forEach(function (rule, ruleIndex) {
-    [rule.actions || rule.then || [], rule.elseActions || rule.else || []].forEach(function (actions, branch) {
-      actions.forEach(function (action, index) {
-        var command = action.command;
-        var proportional = String(action.regulation || "PID").toUpperCase() === "PROPORTIONAL";
-        if (!((command === "setPowerFromSurplus" || command === "setActuatorPercentFromSurplus") && !proportional)) return;
-        var actuatorId = action.actuatorId || "";
-        var actuator = actuators.filter(function (a) { return a.id === actuatorId; })[0];
-        result.push({
-          id:(rule.id || String(ruleIndex)) + (branch ? ":else:" : ":then:") + index + ":" + actuatorId,
-          label:(rule.name || rule.id || "Scenario") + " / " + (branch ? "SINON" : "ALORS") + " → " + (actuator ? actuator.name || actuator.id : actuatorId || "Sortie non affectee"),
-          enabled:!!rule.enabled
-        });
-      });
-    });
-  });
-  return result;
-}
-
-function selectedPidSnapshot() {
-  var selected = selectedPidGraphContext();
-  return (state.pids || []).find(function (p) { return p.contextId === selected; }) || (state.pid || {});
-}
-
-function selectedPidGraphContext() {
-  return pidGraphSelection || (state.pid || {}).contextId || "";
-}
-
-function selectPidGraph(value) {
-  pidGraphSelection = value;
-  localStorage.setItem("pidGraphSelection", value);
-  updatePidGraphPanel();
-  renderDashboardCanvases();
-}
-
-function pidGraphPanel() {
-  return '<section class="canvasChartCard pidTrendPanel">' +
-    '<div class="pidTrendHeader"><div><span class="pidTrendEyebrow">REGULATION</span><h2>Le PID en action</h2><p>Suivre l\'ecart a la cible et la reponse de la sortie.</p></div>' +
-    '<label class="pidTrendSelector">Scenario / actionneur<select id="pidGraphSelect" onchange="selectPidGraph(this.value)"></select></label></div>' +
-    '<div class="pidTrendLive"><span id="pidGraphStatus" class="pidTrendStatus">En attente</span><span id="pidGraphContextLabel"></span></div>' +
-    '<div class="pidTrendMetrics"><div><small>Ecart a la consigne</small><strong id="pidGraphError">--</strong></div><div><small>Sortie PID</small><strong id="pidGraphOutput">--</strong></div><div><small>Commande retenue</small><strong id="pidGraphCommand">--</strong></div><div><small>Cible reseau</small><strong id="pidGraphTarget">--</strong></div></div>' +
-    '<div class="pidTrendPlot"><div class="pidTrendPlotLabel"><b>Ecart <small>W</small></b><span>Consigne − mesure · bande grise = tolerance</span></div><canvas id="pidErrorDedicated" height="170" aria-label="Ecart PID en watts"></canvas></div>' +
-    '<div class="pidTrendPlot"><div class="pidTrendPlotLabel"><b>Reponse <small>%</small></b><span><i class="pidLegendCalculated"></i>Sortie PID <i class="pidLegendCommand"></i>Commande retenue</span></div><canvas id="pidOutputDedicated" height="170" aria-label="Sortie PID et commande en pourcentage"></canvas></div>' +
-    '<p class="pidTrendFootnote">Le choix change uniquement la visualisation. Les periodes inactives restent vides.</p></section>';
-}
-
-function updatePidGraphPanel() {
-  var select = $("pidGraphSelect");
-  if (!select) return;
-  var contexts = pidGraphContexts();
-  var choices = '<option value="">Suivre le PID actif</option>' + contexts.map(function (item) {
-    return '<option value="' + esc(item.id) + '">' + esc(item.label + (item.enabled ? "" : " (desactive)")) + '</option>';
-  }).join("");
-  if (pidGraphSelection && !contexts.some(function (item) { return item.id === pidGraphSelection; })) choices += '<option value="' + esc(pidGraphSelection) + '">Selection indisponible</option>';
-  if (select.innerHTML !== choices) select.innerHTML = choices;
-  select.value = pidGraphSelection;
-  var p = state.pid || {};
-  var selected = selectedPidGraphContext();
-  var context = contexts.filter(function (item) { return item.id === selected; })[0];
-  p = selectedPidSnapshot();
-  var active = p.active === true && p.contextId === selected;
-  var statusLabel = {DEADBAND:"Dans la tolerance", INJECTION:"Regulation active", CONSUMPTION:"Regulation active", LINKY_HOLD_10S:"Attente mesure Linky", NO_SOLAR_PRODUCTION:"Pas de production solaire"};
-  var fault = active && /INVALID|UNAVAILABLE|SAFETY/.test(p.status || "");
-  $("pidGraphStatus").textContent = active ? "● " + (statusLabel[p.status] || p.status || "Actif") : "○ En attente";
-  $("pidGraphStatus").className = "pidTrendStatus" + (fault ? " fault" : (active ? " active" : ""));
-  $("pidGraphContextLabel").textContent = context ? context.label : (!objectHasOwn(p, "contextId") ? "Identification PID indisponible : mettre a jour le firmware" : (contexts.length ? "Aucune regulation PID active" : "Aucun scenario PID configure"));
-  [["pidGraphError", p.errorW, " W"], ["pidGraphOutput", p.outputPercent, " %"], ["pidGraphCommand", p.commandPercent, " %"], ["pidGraphTarget", p.targetGridW, " W"]].forEach(function (metric) {
-    $(metric[0]).textContent = active && hasValue(metric[1]) ? fmt(metric[1]) + metric[2] : "--";
-  });
-}
-
-function drawSelectedPidChart(canvasId, output) {
-  var canvas = $(canvasId);
-  if (!canvas) return;
-  var width = Math.max(280, Math.floor(canvas.getBoundingClientRect().width || 600));
-  var height = 170;
-  var dpr = window.devicePixelRatio || 1;
-  canvas.width = Math.floor(width * dpr);
-  canvas.height = height * dpr;
-  var ctx = canvas.getContext("2d");
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.fillStyle = "#10151c";
-  ctx.fillRect(0, 0, width, height);
-  var history = selectedPidGraphHistory();
-  var series = output ? [
-    {key:"output", color:"#38bdf8", sourceSeries:{valueKey:"outputPercent"}},
-    {key:"command", color:"#fbbf24", sourceSeries:{valueKey:"commandPercent"}}
-  ] : [{key:"error", color:"#a78bfa", sourceSeries:{valueKey:"errorW"}}];
-  var values = [];
-  series.forEach(function (s) { history.forEach(function (point) {
-    var value = point.data[s.key];
-    if (isPlausibleChartValue(s.sourceSeries, value)) values.push(value);
-  }); });
-  if (values.length < 2) {
-    ctx.fillStyle = "#9ca3af";
-    ctx.font = "12px system-ui, sans-serif";
-    ctx.fillText("En attente de mesures pour ce PID…", 16, 36);
-    return;
-  }
-  drawLineChartWithValues(ctx, width, height, history, series, values, output ? {min:0, max:100, includeZero:true, exactScale:true} : {includeZero:true, exactScale:true, deadband:finiteOrNull(state.deadbandW)});
-}
-
-function selectedPidGraphHistory() {
-  var selected = selectedPidGraphContext();
-  return dashHistory.slice(-180).map(function (point) {
-    var instance = (point.pids || []).find(function(p) { return p.contextId === selected; });
-    if (instance) return {t:point.t, data:{error:instance.active ? instance.errorW : null, output:instance.active ? instance.outputPercent : null, command:instance.active ? instance.commandPercent : null}};
-    var valid = !!selected && point.pidContextId === selected && point.pidContextActive === true;
-    return {t:point.t, data:{error:valid ? point.pidContextErrorW : null, output:valid ? point.pidOutputPercent : null, command:valid ? point.commandPercent : null}};
-  });
-}
-
 function modernDashboardGraphs() {
   var graphs = dashboardVisibleConfiguredGraphs().map(function (item) {
     return configuredCanvasChartCard(item.graph, item.index);
   }).join("");
-  return '<section class="cockpitCharts dashboardEnergyCharts">' + graphs + '</section>' +
-    '<section id="dashboardGraphEditor"></section>' + pidGraphPanel();
+  return '<div class="toolbar"><label>Période des graphes <select onchange="selectDashboardPeriod(this.value)">' +
+    '<option value="live">15 min</option><option value="precision"' + (dashboardPrecisionEnabled ? ' selected' : '') + '>Précision · 500 ms (3 min)</option>' +
+    '<option value="day"' + (dashboardShowDay ? ' selected' : '') + '>24 h</option>' +
+    '</select></label><small id="dashboardArchiveStatus">' + esc(dashboardArchiveStatus) + '</small></div>' +
+    '<section class="cockpitCharts dashboardEnergyCharts">' + graphs + '</section>' +
+    '<section id="dashboardGraphEditor"></section>';
+}
+
+function selectDashboardPeriod(value) {
+  dashboardShowDay = value === "day";
+  dashboardPrecisionEnabled = value === "precision";
+  scheduleDashboardRefresh();
+  renderDashboardCanvases();
 }
 
 function renderDashboardCanvases() {
   if (page !== "dashboard") return;
-  updatePidGraphPanel();
-  drawSelectedPidChart("pidErrorDedicated", false);
-  drawSelectedPidChart("pidOutputDedicated", true);
+  var liveValues = new Map();
+  getAvailableDataSources(state).forEach(function (source) {
+    (source.values || []).forEach(function (value) {
+      liveValues.set(dataSourceKey(source.sourceType, source.id || source.sensorId, value.key), value.currentValue);
+    });
+  });
   dashboardVisibleConfiguredGraphs().forEach(function (item) {
+    var label = $("dashGraphLive_" + item.index);
+    if (label && item.effective.enabled && dashboardStateTime && item.effective.series.length) {
+      var values = item.effective.series.map(function (series) {
+        var value = liveValues.get(seriesSourceKey(series));
+        return (series.label || series.valueKey) + ' ' +
+          (isPlausibleChartValue(series, value) ? fmt(value) + ' ' + (series.unit || '') : '--');
+      });
+      label.textContent = "Actuel à " + dashboardClockLabel(dashboardStateTime, false) + " · " + values.join(" · ");
+    }
     drawConfiguredGraph("dashGraph_" + item.index, item.effective);
   });
 }
@@ -3518,7 +3359,7 @@ function drawSourceChart(canvasId, series, options) {
   ctx.clearRect(0, 0, width, height);
   ctx.fillStyle = "#101115";
   ctx.fillRect(0, 0, width, height);
-  var history = dashHistory.slice(-180);
+  var history = dashboardPlotHistory();
   if (history.length < 2 || !series.length) {
     ctx.fillStyle = "#9ca3af";
     ctx.fillText(series.length ? "historique en cours..." : "aucune serie configuree", 14, 24);
@@ -3605,7 +3446,9 @@ function drawLineChartWithValues(ctx, width, height, history, series, values, op
   var span = max - min;
   if (!(options && options.min != null)) min -= span * 0.12;
   if (!(options && options.max != null)) max += span * 0.12;
-  function xAt(i) { return pad.l + (history.length <= 1 ? 0 : i * plotW / (history.length - 1)); }
+  var start = history[0].t;
+  var duration = Math.max(1, history[history.length - 1].t - start);
+  function xAt(i) { return pad.l + (history[i].t - start) * plotW / duration; }
   function yAt(v) { return pad.t + plotH - ((v - min) * plotH / (max - min)); }
   if (options && options.energyBalance && min < 0 && max > 0) {
     var zeroY = yAt(0);
@@ -3688,21 +3531,42 @@ function drawLineChartWithValues(ctx, width, height, history, series, values, op
   ctx.fillText(fmt(max), 6, pad.t + 10);
   ctx.fillText(fmt(min), 6, height - pad.b);
   ctx.fillStyle = "#8b95a5";
-  ctx.fillText(historyTimeLabel(history[0]), pad.l, height - 7);
-  var endLabel = historyTimeLabel(history[history.length - 1]);
-  ctx.fillText(endLabel, width - pad.r - ctx.measureText(endLabel).width, height - 7);
+  var tickCount = width >= 520 ? 5 : 3;
+  for (var tick = 0; tick < tickCount; tick++) {
+    var fraction = tick / (tickCount - 1);
+    var label = dashboardClockLabel(start + duration * fraction, dashboardShowDay);
+    ctx.fillText(label, pad.l + fraction * (plotW - ctx.measureText(label).width), height - 7);
+  }
+}
+
+function dashboardClockLabel(timestamp, short) {
+  var options = {hour:"2-digit", minute:"2-digit"};
+  if (!short) {
+    options.second = "2-digit";
+    if (dashboardPrecisionEnabled) options.fractionalSecondDigits = 3;
+  }
+  return new Date(timestamp).toLocaleTimeString("fr-FR", options);
 }
 
 function showEnergyCanvasTooltip(event) {
   var canvas = event.target;
   var card = canvas.closest(".canvasChartCard[data-graph-index]");
   var graph = card && dashboardConfig.graphs[Number(card.getAttribute("data-graph-index"))];
-  var history = dashHistory.slice(-180);
+  var history = dashboardPlotHistory();
   if (!graph || graph.enabled === false || !history.length) { hideChartTooltip(); return; }
   var rect = canvas.getBoundingClientRect();
   var fraction = Math.max(0, Math.min(1, (event.clientX - rect.left - 44) / Math.max(1, rect.width - 56)));
-  var point = history[Math.round(fraction * (history.length - 1))];
-  var html = '<b>' + esc(historyTimeLabel(point)) + '</b>';
+  var target = history[0].t + fraction * (history[history.length - 1].t - history[0].t);
+  var point = history.reduce(function (nearest, sample) {
+    return Math.abs(sample.t - target) < Math.abs(nearest.t - target) ? sample : nearest;
+  });
+  var sampleMs = point.precision ? dashboardPrecisionMs : (dashboardShowDay ? dashboardArchiveStepMs : historySampleIntervalMs);
+  if (point.gap || Math.abs(point.t - target) > sampleMs) {
+    hideChartTooltip();
+    return;
+  }
+  var html = '<b>' + esc(new Date(point.t).toLocaleDateString("fr-FR") + ' ' + dashboardClockLabel(point.t, false)) + '</b>';
+  if (dashboardPrecisionEnabled) html += '<span>Pas de relevé · ' + (point.precision ? '500 ms' : '5 s') + '</span>';
   (effectiveDashboardGraph(graph).series || []).forEach(function (s) {
     var value = point.data && point.data[seriesSourceKey(s)];
     html += '<span>' + esc(s.label || s.valueKey) + ' : <strong>' + (isPlausibleChartValue(s, value) ? esc(fmt(value)) + ' ' + esc(s.unit || '') : '--') + '</strong></span>';
@@ -4024,14 +3888,33 @@ function updateDocumentTitle() {
 async function loadStatus() {
   var previousSimulationMode = lastSimulationModeSeen;
   state = await api(page === "diagnostic" ? "/api/diagnostic" : "/api/status-lite");
+  dashboardStateTime = Date.now();
   if (previousSimulationMode === true && state.simulationMode === false) resetDashboardGraphBuffers();
   lastSimulationModeSeen = !!state.simulationMode;
   updateDocumentTitle();
 }
 
-async function refresh() {
+async function refresh(graphsOnly) {
+  while (dashboardRefreshInFlight) await dashboardRefreshInFlight;
+  dashboardRefreshInFlight = refreshDashboardState(graphsOnly);
+  try {
+    await dashboardRefreshInFlight;
+  } finally {
+    dashboardRefreshInFlight = null;
+  }
+}
+
+async function refreshDashboardState(graphsOnly) {
   try {
     await loadStatus();
+    if (page === "dashboard" && dashboardPrecisionEnabled) {
+      dashboardPrecisionHistory.push({t:dashboardStateTime, precision:true, data:dashboardMeasurementData()});
+      if (dashboardPrecisionHistory.length > historyMaxPoints) dashboardPrecisionHistory.shift();
+    }
+    if (graphsOnly) {
+      renderDashboardCanvases();
+      return;
+    }
     if (page === "dashboard" && !dashboardConfigLoaded) {
       await loadDashboardConfig();
     }
@@ -4070,22 +3953,129 @@ async function refresh() {
     }
     render();
   } catch (error) {
+    if (graphsOnly) return;
     $("app").innerHTML = '<h1>Erreur API</h1><div class="banner">' + esc(error.message) + '</div><p><a href="/">Accueil</a> <a href="/api/status-lite">Tester status-lite</a> <a href="/lite">Interface Lite embarquee</a></p>';
   }
 }
 
+function energyIcon(kind, x, y) {
+  var paths = {
+    grid:'<path d="M12 5v17m-4 0h8M7 7h10M5 3v4m14-4v4M1 4q2 3 4 0m0 0q7 5 14 0m0 0q2 3 4 0"/>',
+    home:'<path d="m2 11 10-9 10 9M5 9v12h14V9M9 21v-7h5v7m1-15V3h3v5"/>',
+    radiator:'<path d="M3 7v11m6-11v11m6-11v11m6-11v11M3 9h18M3 16h18M5 18v3m14-3v3M8 4V2m4 2V2m4 2V2"/>',
+    tank:'<path d="M7 4q5-4 10 0v14q-5 4-10 0zM10 20v2m4-2v2m-2-15c-1 2-3 4-3 5a3 3 0 0 0 6 0c0-1-2-3-3-5z"/>'
+  };
+  return '<g class="synopticIcon icon-' + kind + '" transform="translate(' + x + ' ' + y + ') scale(1.25)" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + paths[kind] + '</g>';
+}
+
+function flowElectrons(path, cls, count, duration) {
+  var html = '<g class="flowElectrons ' + cls + '" aria-hidden="true">';
+  // Keep the phase continuous when the dashboard rebuilds its live SVG.
+  var phase = (Date.now() / 1000) % duration;
+  for (var i = 0; i < count; i++) {
+    html += '<g><circle class="electronGlow" r="8"></circle><circle class="electronCore" r="3.5"></circle>' +
+      '<animateMotion path="' + path + '" dur="' + duration + 's" begin="-' + (phase + i * duration / count).toFixed(3) + 's" repeatCount="indefinite"></animateMotion></g>';
+  }
+  return html + '</g>';
+}
+
+function dashboardSsrNodes() {
+  var devices = actuatorConfigList().filter(function (cfg) {
+    return cfg && cfg.id && String(cfg.type).toUpperCase() === "SSR";
+  });
+  var runtimeById = new Map(actuatorRuntimeList().map(function (item) { return [String(item.id), item]; }));
+  if (!devices.length) return {height:170, markup:'<text x="380" y="154">Aucun SSR configuré</text>'};
+  var lastY = 202 + Math.floor((devices.length - 1) / 2) * 96;
+  var rows = Math.ceil(devices.length / 2);
+  var markup = devices.map(function (cfg, index) {
+    var row = Math.floor(index / 2);
+    var x = index % 2 ? 416 : 56;
+    var y = 168 + row * 96;
+    var center = x + 144;
+    var runtime = runtimeById.get(String(cfg.id));
+    var status = cfg.enabled === false ? "Désactivé" : actuatorRuntimeStatus(runtime).label;
+    var available = cfg.enabled !== false && runtime && !runtime.timedOut && runtime.remoteStateAvailable !== false;
+    var detail = available ? 'Cmd ' + actuatorValueText(runtime.commandPercent, "%") +
+      ' · Sortie ' + actuatorValueText(runtime.outputPercent, "%") : status;
+    var output = available ? Math.max(0, Math.min(100, Number(runtime.outputPercent) || 0)) : 0;
+    var offset = devices.length === 1 ? 0 : 6 + (rows - row - 1) * Math.min(8, 26 / rows);
+    var startX = 380 + (index % 2 ? offset : -offset);
+    var path = "M" + startX + " 130 V" + (y + 34) + " H" + (index % 2 ? x : x + 288);
+    var link = '<path class="ssrFlowBranch" d="' + path + '"></path>';
+    if (output > 0) {
+      var fraction = output / 100;
+      var color = "rgb(255," + Math.round(220 * (1 - fraction)) + ",0)";
+      var duration = 4 / (1 + 7 * fraction);
+      link = '<g class="ssrFlowActive" style="color:' + color + '">' + link +
+        flowElectrons(path, "ssrFlowElectrons", 1, duration) + '</g>';
+    }
+    var name = String(cfg.name || cfg.id);
+    var icon = {home_heating:"radiator", hot_water:"tank", water_heater:"tank"}[actuatorUsage(cfg)];
+    var labelLimit = icon ? 23 : 28;
+    var label = name.length > labelLimit ? name.slice(0, labelLimit - 1) + "…" : name;
+    if (icon) center += 14;
+    return link +
+      '<g class="flowNode outputNode"><title>' + esc(name + ' · ' + (cfg.mode || '--') + ' · ' + status) + '</title>' +
+      '<rect x="' + x + '" y="' + y + '" width="288" height="68" rx="8"></rect>' +
+      (icon ? energyIcon(icon, x + 13, y + 19) : '') +
+      '<text x="' + center + '" y="' + (y + 26) + '">' + esc(label) + '</text>' +
+      '<text x="' + center + '" y="' + (y + 48) + '">' + esc(detail) + '</text></g>';
+  }).join("");
+  return {height:lastY + 52, markup:markup};
+}
+
+function energyFlowSvg() {
+  var e = stateEnergy();
+  var grid = hasValue(e.gridPowerW) ? Number(e.gridPowerW) : NaN;
+  var inject = isFinite(grid) && grid < -20;
+  var buy = isFinite(grid) && grid > 20;
+  var productionW = hasValue(e.productionW) ? Number(e.productionW) : 0;
+  var productionActive = productionW > 1;
+  var sunlight = Math.max(0, Math.min(1, productionW / 1000));
+  var sunColor = "rgb(" + Math.round(128 + 127 * sunlight) + "," +
+    Math.round(128 + 83 * sunlight) + "," + Math.round(128 - 74 * sunlight) + ")";
+  var gridCls = !isFinite(grid) ? "unknown" : (inject ? "inject" : (buy ? "buy" : "neutral"));
+  var solarCls = productionActive ? "pvActive" : "pvIdle";
+  var home = hasValue(e.consumptionW) ? e.consumptionW : null;
+  var gridLabel = hasValue(e.gridPowerW) ? (buy ? "+" : "") + fmt(e.gridPowerW) + " W " + (buy ? "achat" : (inject ? "injection" : "equilibre")) : "--";
+  var pvLabel = hasValue(e.productionW) ? fmt(e.productionW) + " W production" : "-- production";
+  var solarPath = "M130 82 C190 82 245 84 315 88";
+  var gridPath = buy ? "M590 88 C535 88 500 88 445 88" : "M445 88 C500 88 535 88 590 88";
+  var ssr = dashboardSsrNodes();
+  var apparentVA = gridJsyApparentPowerVA();
+  return '<section class="energyFlowPanel">' +
+    '<div class="wideChartHead"><b>Synoptique ' + helpIcon("Les boules lumineuses suivent le sens de l'energie. Au-dela de +20 W : reseau vers maison ; en dessous de -20 W : maison vers reseau. Entre les deux, la liaison reste discrete.") + '</b><span>' + esc(!isFinite(grid) ? "mesure reseau absente" : (inject ? "surplus vers reseau" : (buy ? "appoint reseau" : "equilibre"))) + '</span></div>' +
+    '<svg class="energyFlowSvg ' + esc(gridCls) + ' ' + esc(solarCls) + '" viewBox="0 0 760 ' + ssr.height + '" role="img" aria-label="Flux energie">' +
+      '<defs><marker id="flowArrow" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0 0 L7 3.5 L0 7 Z"></path></marker>' +
+      '<marker id="flowArrowSolar" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0 0 L7 3.5 L0 7 Z"></path></marker>' +
+      '<marker id="flowArrowGrid" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0 0 L7 3.5 L0 7 Z"></path></marker>' +
+      '<marker id="flowArrowOutput" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0 0 L7 3.5 L0 7 Z"></path></marker></defs>' +
+      '<g class="sunNode" transform="translate(96 82)" color="' + sunColor + '"><title>Soleil</title>' +
+      '<circle r="24" fill="currentColor" opacity=".14"></circle><circle r="19" fill="currentColor"></circle>' +
+      '<path d="M-12 -5 Q-8 -13 0 -13" fill="none" stroke="#fff" stroke-opacity=".45" stroke-width="3" stroke-linecap="round"></path>' +
+      '<path d="M0 -27 V-34 M0 27 V34 M-27 0 H-34 M27 0 H34 M-19 -19 L-24 -24 M19 -19 L24 -24 M-19 19 L-24 24 M19 19 L24 24" stroke="currentColor" stroke-width="3" stroke-linecap="round"></path></g>' +
+      '<g class="flowNode homeNode"><rect x="315" y="48" width="130" height="82" rx="8"></rect>' +
+      energyIcon("home", 326, 73) + '<text x="395" y="82">Maison</text><text x="395" y="104">' + (home != null ? fmt(home) + " W" : "--") + '</text></g>' +
+      '<g class="flowNode gridNode"><title>' + esc(apparentVA == null ? "Apparente JSY : indisponible" : "Apparente JSY : " + fmt(apparentVA) + " VA") + '</title>' +
+      '<rect x="590" y="48" width="124" height="82" rx="8"></rect>' + energyIcon("grid", 599, 73) +
+      '<text x="668" y="82">Réseau</text><text x="668" y="104">' + (hasValue(e.gridPowerW) ? fmt(e.gridPowerW) + " W" : "--") + '</text></g>' +
+      '<path class="flowLine solarLine" d="' + solarPath + '"></path>' +
+      '<path class="flowLine gridLine ' + (buy ? 'fromGrid' : 'toGrid') + '" d="' + gridPath + '"></path>' +
+      (productionActive ? flowElectrons(solarPath, "solarElectrons", 4, 2.4) : "") +
+      (buy || inject ? flowElectrons(gridPath, buy ? "buyElectrons" : "solarElectrons", 3, 2) : "") +
+      '<text class="flowValue solarValue" x="205" y="68">' + esc(pvLabel) + '</text>' +
+      '<text class="flowValue gridValue" x="508" y="70">' + esc(gridLabel) + '</text>' +
+      ssr.markup +
+    '</svg></section>';
+}
+
 function updateDashboardLiveSections() {
-  var energy = $("dashboardLiveEnergy");
   var main = $("dashboardLiveMain");
   var bottom = $("dashboardLiveBottom");
-  if (!energy || !main || !bottom) return false;
-  var pidDetails = $("dashboardPidDetails");
-  var pidDetailsOpen = pidDetails && pidDetails.open;
+  if (!main || !bottom) return false;
   var header = $("dashboardLiveHeader");
   if (header) header.innerHTML = dashboardHeader();
-  energy.innerHTML = energyTopBand();
-  main.innerHTML = energyFlowSvg() + pidCockpitCard();
-  if (pidDetailsOpen) $("dashboardPidDetails").open = true;
+  main.innerHTML = energyFlowSvg();
   bottom.innerHTML = activeSensorsPanel() + systemHealthPanel();
   requestChartUpdate();
   renderDashboardCanvases();
@@ -4093,30 +4083,29 @@ function updateDashboardLiveSections() {
   return true;
 }
 
-function recordDashboardHistory() {
-  var now = Date.now();
-  if (dashHistory.length && now - lastHistorySampleMs < historySampleIntervalMs) return;
-  lastHistorySampleMs = now;
-  pruneDashboardHistoryData();
+function dashboardMeasurementData() {
   var data = {};
-  var energy = stateEnergy();
-  var graphGrid = gridDerivedForGraph(energy.gridPowerW);
   getAvailableDataSources(state).forEach(function (source) {
     (source.values || []).forEach(function (value) {
       data[dataSourceKey(source.sourceType, source.id || source.sensorId, value.key)] = sanitizeHistoryValue(value, value.currentValue);
     });
   });
-  data[dataSourceKey("energy", "energy", "gridBuyW")] = graphGrid.buy;
-  data[dataSourceKey("energy", "energy", "gridInjectionW")] = graphGrid.injection;
-  dashHistory.push({
+  return data;
+}
+
+function recordDashboardHistory() {
+  var now = Date.now();
+  if (dashHistory.length && now - lastHistorySampleMs < historySampleIntervalMs) return;
+  lastHistorySampleMs = now;
+  pruneDashboardHistoryData();
+  var energy = stateEnergy();
+  var graphPower = networkGraphPower(state, energy.gridPowerW);
+  var graphGrid = gridDerivedForGraph(graphPower);
+  var point = {
     t: now,
     schemaVersion: dashboardHistorySchemaVersion,
-    pids:(state.pids || []).map(function(p) { return Object.assign({}, p); }),
-    pidContextId:(state.pid || {}).contextId || "",
-    pidContextActive:(state.pid || {}).active === true,
-    pidContextErrorW:finiteOrNull((state.pid || {}).errorW),
-    data: data,
-    gridPowerW: sanitizeHistoryValue({key:"gridPowerW"}, energy.gridPowerW),
+    data: dashboardMeasurementData(),
+    gridPowerW: sanitizeHistoryValue({key:"gridPowerW"}, graphPower),
     gridBuyW: graphGrid.buy,
     gridInjectionW: graphGrid.injection,
     productionW: sanitizeHistoryValue({key:"productionW"}, energy.productionW),
@@ -4136,7 +4125,9 @@ function recordDashboardHistory() {
     robotDynPowerPct: sanitizeHistoryValue({key:"robotDynPowerPct"}, state.robotDynPowerPct),
     heapFree: Number(state.heapFree) || 0,
     simulationMode: !!state.simulationMode
-  });
+  };
+  dashHistory.push(point);
+  archiveDashboardPoint(point);
   while (dashHistory.length > historyMaxPoints) dashHistory.shift();
   saveDashboardHistorySoon(true);
 }
@@ -4159,8 +4150,7 @@ function dashboard() {
   stopGraphPolling();
   return '<div id="dashboardLiveHeader">' + dashboardHeader() + '</div>' +
     '<div class="cockpitDashboard">' +
-      '<div id="dashboardLiveEnergy">' + energyTopBand() + '</div>' +
-      '<section id="dashboardLiveMain" class="cockpitMainGrid">' + energyFlowSvg() + pidCockpitCard() + '</section>' +
+      '<section id="dashboardLiveMain">' + energyFlowSvg() + '</section>' +
       modernDashboardGraphs() +
       '<details class="dashboardDetails"><summary>Capteurs et sante du systeme</summary><section id="dashboardLiveBottom" class="cockpitBottomGrid">' + activeSensorsPanel() + systemHealthPanel() + '</section></details>' +
       '</div>';
@@ -7042,9 +7032,12 @@ function diagnosticPage() {
       actuatorStates +
       '<p class="muted">En simulation, les sorties 230 V restent forcees OFF.</p>' +
     '</section>' +
-    '</div></div><h2>Evenements</h2><p><button onclick="clearLogs()">Reset logs</button></p><table><tr><th>Heure</th><th>Niveau</th><th>Code</th><th>Message</th></tr>' +
+    '</div></div><h2>Evenements</h2><p><button onclick="clearLogs()">Reset logs</button> ' +
+    '<button onclick="toggleAutomateDebug()">Debug AUTOMATE ' + (state.automateDebug ? "actif · Désactiver" : "inactif · Activer") + '</button> ' +
+    '<a href="/api/logs/automate" target="_blank" rel="noopener">Ouvrir le journal AUTOMATE (JSON)</a></p>' +
+    '<table><tr><th>Heure</th><th>Niveau</th><th>Source</th><th>Code</th><th>Message</th></tr>' +
     events.map(function (event) {
-      return '<tr><td>' + esc(timeFromUptimeMs(event.timestampMs)) + '</td><td>' + esc(event.level) + '</td><td>' + esc(event.code) + '</td><td>' + esc(event.message) + '</td></tr>';
+      return '<tr><td>' + esc(event.epochMs ? new Date(event.epochMs).toLocaleTimeString("fr-FR", {hour:"2-digit", minute:"2-digit", second:"2-digit", fractionalSecondDigits:3}) : timeFromUptimeMs(event.timestampMs)) + '</td><td>' + esc(event.level) + '</td><td>' + esc(event.source || "") + '</td><td>' + esc(event.code) + '</td><td>' + esc(event.message) + '</td></tr>';
     }).join("") + '</table>';
 }
 
@@ -7289,6 +7282,15 @@ function simulationControlsHtml() {
     '</div><p class="muted">La simulation se coupe automatiquement apres 5 minutes et ne reste pas active apres reboot. Les sorties 230 V restent OFF.</p>';
 }
 
+async function toggleAutomateDebug() {
+  var response = await fetch("/api/logs/automate", {
+    method: "POST",
+    body: new URLSearchParams({enabled: String(!state.automateDebug)})
+  });
+  if (!response.ok) return alert("Debug AUTOMATE indisponible (" + response.status + ").");
+  await refresh();
+}
+
 async function clearLogs() {
   await fetch("/api/logs/clear", {method:"POST"});
   await refresh();
@@ -7369,14 +7371,22 @@ if (firstButton) firstButton.classList.add("active");
 function scheduleDashboardRefresh() {
   if (dashboardRefreshTimer) clearInterval(dashboardRefreshTimer);
   dashboardRefreshTimer = null;
-  if (dashboardRefreshMs > 0) {
+  if (page === "dashboard" && dashboardPrecisionEnabled) {
+    var graphsOnly = true;
     dashboardRefreshTimer = setInterval(function () {
-      if (page === "dashboard" || page === "system") refresh();
+      if (dashboardRefreshInFlight) return;
+      refresh(graphsOnly);
+      graphsOnly = !graphsOnly;
+    }, dashboardPrecisionMs);
+  } else if (dashboardRefreshMs > 0) {
+    dashboardRefreshTimer = setInterval(function () {
+      if (!dashboardRefreshInFlight && (page === "dashboard" || page === "system")) refresh();
     }, dashboardRefreshMs);
   }
   refreshLabelPatch();
 }
 
+loadDashboardArchive();
 render();
 setInterval(pollActuatorRuntime, 1000);
 scheduleDashboardRefresh();

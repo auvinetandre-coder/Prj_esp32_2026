@@ -257,6 +257,10 @@ void AutomateManager::transitionTo(AutomateState next, const String &reason, uin
   state.automateState = stateName(currentState);
   state.automateReason = reason;
   state.automateLastTransitionMs = now;
+  if (state.automateDebug) {
+    state.logAutomateDebug(now, "AUTOMATE_ETAT",
+        state.previousAutomateState + " -> " + state.automateState + " " + reason);
+  }
   state.addLog(String("Automate ") + state.previousAutomateState + " -> " + state.automateState + " : " + reason);
 }
 

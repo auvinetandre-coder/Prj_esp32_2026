@@ -44,6 +44,7 @@ private:
   void sendConfig(const char *name);
   void saveConfig(const char *name, const char *path);
   void sendStatusLite();
+  float gridPowerForGraph();
   void appendActuatorMeasurements(JsonArray items);
   void sendSystemInfo();
   void appendJsonNumber(String &out, float value, uint8_t decimals = 1);

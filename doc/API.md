@@ -4,7 +4,7 @@ Evolution du 21 octobre 2026 : voir [Routage generique](ROUTAGE_GENERIQUE.md) po
 
 Mise a jour du 21 octobre 2026 : roles et redondance supprimes du firmware, des configurations actives, des API et de la WebUI ; onglet Secours retire. Voir [le contrat actuel et la migration](SUPPRESSION_ROLES.md). Les observations datees du 20 octobre ci-dessous sont historiques pour ces points.
 
-Relecture du 20 octobre 2026 : `/api/state` et `/api/status-lite` appellent `sendStatusLite()` dans `src/web/web_ui.cpp`. Les champs historiques à plat coexistent avec `energy`, `pid`, `sensors`, `actuators`, `automate`, `mqttProduction`, `systemHealth` et `performance` ; les préserver. Les exemples sont partiels ; les sections « recommandée » et maintenance expriment aussi des cibles, pas un schéma garanti. Voir le [bilan](ETAT_DU_PROJET.md), l'[audit courant](AUDIT_2026-10-20.md) et les [routes ESP-NOW](ESP_NOW.md#api-présentes-dans-le-main).
+Relecture du 20 octobre 2026 : `/api/state` et `/api/status-lite` appellent `sendStatusLite()` dans `src/web/web_ui.cpp`. Les champs historiques à plat coexistent avec `energy`, `pid`, `sensors`, `actuators`, `automate`, `mqttProduction`, `systemHealth` et `performance` ; les préserver. Les exemples sont partiels ; les sections « recommandée » et maintenance expriment aussi des cibles, pas un schéma garanti. Voir le [bilan](ETAT_DU_PROJET.md), l'[audit courant](AUDIT_2026-11-04.md) et les [routes ESP-NOW](ESP_NOW.md#api-présentes-dans-le-main).
 
 ## Authentification et validité
 
@@ -12,7 +12,7 @@ Les routes de configuration/commande du main suivent `requireAuth()` et `system.
 
 Les nombres non finis sont convertis en `null` dans les champs numériques construits par `sendStatusLite()`. Le client doit différencier `null`, zéro et absence de propriété. `pidEnabled` existe à plat ; `pid.enabled` n'est pas rempli actuellement. La commande et `outputPowerW` ne sont pas une preuve électrique d'exécution ; vérifier la source et le caractère estimé/mesuré.
 
-`consumptionW` est la partie positive de la puissance réseau, donc l'achat, et non la consommation totale du logement. L'erreur PID firmware vaut `consigne - mesure`. En AUTO, la sélection privilégie la TIC disponible puis le JSY ; le libellé API est encore inféré par type et ne garantit pas l'identifiant exact en présence de plusieurs compteurs identiques.
+`consumptionW` est la partie positive de la puissance réseau, donc l'achat, et non la consommation totale du logement. La convention et la sélection effective de mesure du PID sont documentées dans [PID unique](PID_UNIQUE.md).
 
 ## Objectif
 
@@ -213,6 +213,6 @@ La commande `setPowerFromLinky` publie sa cible effective +100 W dans `gridSetpo
 ## Limites du contrat à corriger
 
 - Certaines erreurs de sauvegarde produisent encore HTTP 200 avec `ok:false`. Le statut HTTP seul ne suffit pas à conclure au succès.
-- Le chemin manuel historique et les règles mélangent encore watts et pourcentages : ne pas considérer `setPowerWatts` validé de bout en bout.
-- Le mode système OFF n'a pas encore une priorité globale sur toutes les commandes ; le maintien manuel OFF d'une cible est un mécanisme distinct.
-- Le contrôle local du 20 octobre trouve 33 chemins littéraux dans les 61 routes ; il ne vérifie ni méthodes, ni réponses, ni paramètres, ni chemins construits dynamiquement.
+- Les tests locaux vérifient la conversion watts/pourcentage jusqu'à la consigne finale. L'exécution physique reste à vérifier sur banc.
+- Le mode système OFF est prioritaire dans l'arbitrage. Le OFF manuel d'une cible agit sur cette cible.
+- Les 33 chemins API littéraux relevés dans `app.js` sont enregistrés dans le Main. Ce contrôle statique couvre les chemins.

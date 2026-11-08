@@ -1,0 +1,157 @@
+{
+  "meta": {
+    "host": "192.168.0.90",
+    "startedUtc": "2026-10-31T15:02:33.637Z",
+    "firmware": "20261030-01",
+    "littlefs": "20261030-01",
+    "sensors": [
+      {
+        "id": "jsy_reseau",
+        "type": "JSY-MK-194T",
+        "source": "local",
+        "enabled": true,
+        "readIntervalMs": 350,
+        "timeoutMs": 300,
+        "espNowExportIntervalMs": 200,
+        "espNowSendOnChange": true,
+        "espNowMinDelta": 5,
+        "channels": [
+          {
+            "id": "clamp1",
+            "name": "Pince 1",
+            "role": "load",
+            "measures": [
+              "current",
+              "power",
+              "pf",
+              "energyPos",
+              "energyNeg",
+              "direction"
+            ],
+            "actuatorId": ""
+          },
+          {
+            "id": "clamp2",
+            "name": "Pince 2",
+            "role": "grid",
+            "measures": [
+              "current",
+              "power",
+              "pf",
+              "energyPos",
+              "energyNeg",
+              "direction"
+            ],
+            "actuatorId": ""
+          }
+        ]
+      }
+    ],
+    "rules": [],
+    "actuators": [
+      {
+        "id": "espnow_826268_ssr2",
+        "type": "SSR",
+        "mode": "BURST_FIRE",
+        "maxPowerW": 0
+      }
+    ]
+  },
+  "rows": 175,
+  "errors": [],
+  "repeatedSnapshots": 81,
+  "observedSamples": 94,
+  "observedSampleIntervalsMs": {
+    "count": 93,
+    "mean": 426.16129032258067,
+    "min": 228,
+    "max": 892,
+    "std": 88.33188763141324,
+    "median": 415,
+    "p95": 549
+  },
+  "observedExportIntervalsMs": {
+    "count": 91,
+    "mean": 434.2197802197802,
+    "min": 178,
+    "max": 988,
+    "std": 124.35360802374463,
+    "median": 420,
+    "p95": 599
+  },
+  "observedPIDAcquisitionIntervalsMs": null,
+  "requestDurationMs": {
+    "count": 175,
+    "mean": 173.50285714285715,
+    "min": 91,
+    "max": 1056,
+    "std": 99.48001230890347,
+    "median": 140,
+    "p95": 327
+  },
+  "comparison": {
+    "rawW": {
+      "count": 89,
+      "mean": -106.44292471910114,
+      "min": -973.8632,
+      "max": 750.1651,
+      "std": 303.580245097817,
+      "median": -132.0336,
+      "p95": 494.9137
+    },
+    "mean1sW": {
+      "count": 89,
+      "mean": -104.09959147977528,
+      "min": -552.4883989,
+      "max": 419.4313336000001,
+      "std": 220.62505975211076,
+      "median": -126.2699132,
+      "p95": 326.154745
+    },
+    "mean2sW": {
+      "count": 89,
+      "mean": -98.25658215674159,
+      "min": -419.9249352,
+      "max": 227.16935245000002,
+      "std": 171.6241733523918,
+      "median": -122.6668132,
+      "p95": 156.56968285000002
+    },
+    "existingPIDW": null,
+    "existingGlobalW": {
+      "count": 89,
+      "mean": -103.73096942696628,
+      "min": -509.4225,
+      "max": 479.8952,
+      "std": 210.92961839338867,
+      "median": -125.5721,
+      "p95": 266.9427
+    },
+    "historicalPowerMinusRawW": {
+      "count": 89,
+      "mean": 0,
+      "min": 0,
+      "max": 0,
+      "std": 0,
+      "median": 0,
+      "p95": 0
+    },
+    "commandPercent": {
+      "count": 89,
+      "mean": 0,
+      "min": 0,
+      "max": 0,
+      "std": 0,
+      "median": 0,
+      "p95": 0
+    }
+  },
+  "limits": [
+    "Observed intervals may contain skipped acquisitions between HTTP snapshots.",
+    "Receiver time is sensor-slot reception time, not the per-key acquisition identity.",
+    "Source powerW is historical CH2_POWER, not necessarily raw meter watts.",
+    "Window means use causal zero-order hold of observed samples; no claim about internal JSY integration.",
+    "Statistics are per observed acquisition, not continuous-time energy metrology.",
+    "1000 ms gap limit is for offline comparison only; no firmware protection is changed."
+  ]
+}

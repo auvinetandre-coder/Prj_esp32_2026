@@ -6,7 +6,7 @@ Le mode électrique SSR `MULTI_SINUS` applique la consigne retenue par l’arbit
 
 Le PID est désormais positionnel et commun à JSY/TIC, avec une instance par sortie et un arbitrage par actionneur. Les réglages sont dans chaque action ; les anciennes commandes Linky sont migrées à l'import. Voir [PID_UNIQUE.md](PID_UNIQUE.md) pour le fonctionnement, la migration et les essais. Les sections datées ci-dessous décrivent les versions antérieures.
 
-## État courant — 20 octobre 2026
+## Historique — 20 octobre 2026
 
 Ce document mêle cadrage cible et historique d'implémentation. Le statut courant est celui du [bilan](ETAT_DU_PROJET.md), de l'[audit](AUDIT_2026-10-20.md) et des [priorités](TODO_PRIORITES.md).
 
@@ -56,7 +56,7 @@ Toutes les decisions finales passent par AutomateManager.
 
 ```text
 RuleEngine propose.
-SolarRouter propose.
+Les règles proposent les actions par cible.
 PIDController calcule.
 WebUi demande.
 SafetyManager protege.
@@ -68,7 +68,6 @@ Aucune commande actionneur ne doit etre appliquee directement par :
 
 - RuleEngine ;
 - PIDController ;
-- SolarRouter ;
 - WebUi ;
 - EspNowManager.
 
@@ -144,7 +143,6 @@ Mode normal de routage solaire.
 
 La commande est issue de :
 
-- SolarRouter ;
 - PIDController.
 
 AutomateManager valide ou refuse cette commande avant transmission a ActuatorManager.
@@ -170,7 +168,6 @@ Exemples :
 
 - temperature equipement trop elevee ;
 - capteur critique perdu ;
-- double MASTER detecte ;
 - defaut actionneur ;
 - incoherence dangereuse.
 
@@ -203,7 +200,7 @@ Exemples :
 
 ## Priorites d'arbitrage
 
-### Routage solaire - objectif 100 W Linky
+### Historique du routage Linky avant le PID commun
 
 Nouvelle commande de regle `setPowerFromLinky`, libelle WebUI
 `Routage solaire — objectif 100 W Linky`. Elle s'utilise dans ALORS sur le SSR
@@ -470,7 +467,6 @@ Sources principales :
 
 - RuntimeState ;
 - SafetyManager ;
-- SolarRouter ;
 - PIDController ;
 - RuleEngine ;
 - RedundancyManager ;
@@ -566,9 +562,9 @@ RuntimeState -> expose la raison
 
 ---
 
-## Lien avec PIDController et SolarRouter
+## Lien avec PIDController
 
-PIDController et SolarRouter ne doivent plus etre vus comme decideurs finaux.
+PIDController calcule la demande pour l'action retenue par l'automate.
 
 Ils produisent une proposition :
 
@@ -670,7 +666,7 @@ Exemples :
 ```text
 SI automate = AUTO_ROUTING
 SI securite active
-SI role = MASTER
+SI mode systeme = AUTO
 SI role = BACKUP
 SI Wi-Fi connecte
 SI ESP-NOW perdu

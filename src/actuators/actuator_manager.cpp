@@ -726,6 +726,11 @@ bool ActuatorManager::updateTimedSsr(Actuator *channel, bool demiSinus) {
     gpio_ll_set_level(&GPIO, channel->gpio, !channel->activeHigh);
   }
   portENTER_CRITICAL(&ssrMux);
+  const bool traceFrame = state.automateDebug && !ssr.demiSinus &&
+                          ssr.frameAppliedMs != ssr.frameLoggedMs;
+  const uint32_t frameMs = ssr.frameAppliedMs;
+  const SsrFrame appliedFrame = ssr.frame;
+  ssr.frameLoggedMs = frameMs;
   if (!ssrTimingFault && revision == ssrRevision[index]) {
     ssr.pin = channel->gpio;
     ssr.activeHigh = channel->activeHigh;
@@ -742,6 +747,11 @@ bool ActuatorManager::updateTimedSsr(Actuator *channel, bool demiSinus) {
   }
   const bool on = ssr.on && !ssrTimingFault && revision == ssrRevision[index];
   portEXIT_CRITICAL(&ssrMux);
+  if (traceFrame) {
+    state.logAutomateDebug(frameMs, "SSR_TRAME",
+        String(channel->id) + " ON_ms=" + String(appliedFrame.on * 10) +
+        " total_ms=" + String(appliedFrame.total * 10));
+  }
   return on;
 }
 
@@ -782,6 +792,10 @@ void IRAM_ATTR ActuatorManager::onSsrTick(void *context) {
       ssr.halfWave.phase = false;
       ssr.halfWave.lastOnPhase = false;
       continue;
+    }
+    if (!ssr.demiSinus && (ssr.step == 0 || ssr.requested.total == 1) &&
+        (ssr.frame.on != ssr.requested.on || ssr.frame.total != ssr.requested.total)) {
+      ssr.frameAppliedMs = uint32_t(now / 1000);
     }
     const bool on = ssr.demiSinus ? ssrHalfWaveAdvance(ssr.halfWave, ssr.halfWavePercent)
                                  : ssrAdvance(ssr.frame, ssr.requested, ssr.step);

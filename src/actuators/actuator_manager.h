@@ -67,6 +67,8 @@ private:
     uint8_t step = 0;
     SsrFrame frame{0, 1};
     SsrFrame requested{0, 1};
+    uint32_t frameAppliedMs = 0;
+    uint32_t frameLoggedMs = 0;
     SsrHalfWave halfWave;
     bool demiSinus = false;
     uint8_t halfWavePercent = 0;

@@ -2,11 +2,11 @@
 
 Installation d'un nouvel ESP32 : [procedure par phases 00 a 04](doc/INSTALLATION_PAR_PHASES.md), avec les lanceurs numerotes a la racine.
 
-Firmware Arduino IDE pour ESP32 permettant de realiser un routeur solaire photovoltaique local, modulaire, distribue et redondant.
+Firmware Arduino IDE pour ESP32 permettant de realiser un routeur solaire photovoltaique local, modulaire et distribue.
 
 Le projet garde un firmware commun pour tous les ESP32. Chaque module fonctionne selon ses capteurs, actionneurs et regles configures dans LittleFS, sans selection de role ni redondance.
 
-État du code et limites : [bilan du 18 octobre 2026](doc/ETAT_DU_PROJET.md), [audit détaillé](doc/AUDIT_2026-10-18.md) et [référence ESP-NOW](doc/ESP_NOW.md). Plusieurs défauts de sécurité restent ouverts ; les fonctionnalités décrites ne constituent pas une validation matérielle.
+Voir le [bilan du 4 novembre 2026](doc/ETAT_DU_PROJET.md), l'[audit détaillé](doc/AUDIT_2026-11-04.md) et la [référence ESP-NOW](doc/ESP_NOW.md).
 
 ## Avertissement securite 230 V
 
@@ -98,9 +98,8 @@ Au boot :
 9. Initialisation capteurs.
 10. Connexion WiFi ou AP fallback.
 11. Initialisation ESP-NOW.
-12. Initialisation redondance.
-13. Demarrage interface Web.
-14. Boucle principale non bloquante avec `millis()`.
+12. Démarrage de la WebUI, de MQTT, de la logique et de l'affichage.
+13. Boucle coopérative cadencée avec `millis()`.
 
 ## Configuration des ESP32
 
@@ -309,46 +308,9 @@ GET /api/realtime
 
 L'historique rapide reste cote navigateur. Il n'est pas stocke dans LittleFS et ne provoque pas d'ecriture flash.
 
-## Regulation PID
+## Régulation PID
 
-Le pilotage charge utilise un controleur PID separe du gestionnaire de capteurs.
-
-Principe :
-
-- `SensorManager` selectionne la source reseau JSY/TIC/AUTO.
-- la puissance brute est stockee dans `gridPowerRawW`.
-- un filtre alpha produit `gridPowerFilteredW`.
-- `PIDController` lit uniquement cette puissance filtree.
-- la sortie PID devient une commande 0 a 100 % pour SSR1.
-- `ActuatorManager` applique la commande aux sorties physiques.
-- `SafetyManager` reste prioritaire et force la commande a 0 % en cas de defaut critique.
-
-Parametres principaux dans `system.json` :
-
-```json
-{
-  "router": {
-    "pidEnabled": true,
-    "gridSetpointW": 0,
-    "deadbandW": 30,
-    "alphaFilter": 0.25,
-    "maxOutputRampPercentPerSecond": 5,
-    "outputMaxPowerW": 1500,
-    "jsyReadIntervalMs": 100,
-    "kp": 0.02,
-    "ki": 0.002,
-    "kd": 0.0
-  }
-}
-```
-
-Cadences principales :
-
-- JSY : 80 a 100 ms si configure
-- SensorManager : 100 ms
-- Regles et AutomateManager : 250 ms ; le PID est calcule lorsqu'une action de regulation le demande, sans tache autonome de 100 ms
-- SafetyManager : 100 ms
-- ActuatorManager : appele a chaque boucle, pilotage non bloquant
+L'action `setPowerFromSurplus` avec le réglage PID pilote la sortie choisie dans une règle. Elle utilise le PID positionnel commun et la source de mesure sélectionnée pour cette action. Le calcul traite les nouveaux échantillons et le chemin de régulation coupe la demande si la mesure est invalide ou périmée. Safety reste prioritaire. Voir [réglages, migration et diagnostic PID](doc/PID_UNIQUE.md).
 
 ## Source puissance reseau
 
@@ -663,7 +625,7 @@ Les anciennes sorties LED de simulation ont ete supprimees. La simulation reste 
 
 Le projet contient un gestionnaire integre au main et une brique autonome d'exemple :
 
-- `EspNowManager` : gestionnaire du main, traitant le protocole generique v4 et le format historique de redondance/commandes.
+- `EspNowManager` : gestionnaire du main, traitant le protocole generique v4 et le format historique des commandes et de la télémétrie.
 - `EspNowNode` : brique autonome pour producteurs/consommateurs, utilisee par l'exemple ; elle n'est pas instanciee dans le main.
 
 La reference du fonctionnement actuel, des limites et des tests est [doc/ESP_NOW.md](doc/ESP_NOW.md).
@@ -1122,10 +1084,7 @@ ESP32 Dev Module
 RouteurSolaire Recovery/Main (factory 1.06MB / main 1.88MB / LittleFS 1MB)
 ```
 
-5. Compiler.
-6. Televerser.
-
-Cette methode met a jour le firmware, mais pas les fichiers Web LittleFS.
+5. Compiler et récupérer le binaire principal pour la factory recovery.
 
 ### Methode 2 : script de compilation
 
@@ -1194,10 +1153,9 @@ La page propose aussi un bouton **Passer en recovery**. Ce bouton synchronise le
 
 ## Televersement firmware
 
-### Depuis Arduino IDE
+### Depuis la factory recovery
 
-1. Selectionner le port COM.
-2. Cliquer Televerser.
+Pour un ESP déjà installé, suivre le passage explicite en factory et envoyer le firmware principal vers `ota_0`. La [procédure par phases](doc/INSTALLATION_PAR_PHASES.md) décrit l'installation initiale et le parcours de maintenance.
 
 Le firmware seul ne met pas a jour l'interface Web LittleFS.
 
@@ -1319,7 +1277,7 @@ Procedure firmware via recovery :
 
 Procedure LittleFS via recovery :
 
-1. Generer l'image LittleFS avec `Televerser_LittleFS_COM3.bat` ou `Televerser_LittleFS_COM4.bat`.
+1. Générer l'image avec `03_Generer_Firmware_et_LittleFS.bat` et exporter séparément les cinq JSON de `/config`.
 2. Passer en recovery.
 3. Ouvrir `http://192.168.4.1` ou l'IP locale affichee par la recovery.
 4. Choisir le fichier LittleFS `.bin`.
@@ -1332,40 +1290,11 @@ L'ecriture LittleFS remplace toute la partition `spiffs`. Les fichiers `/config/
 
 Ne pas couper l'alimentation pendant une mise a jour firmware ou LittleFS.
 
-## Resume des methodes de mise a jour
+## Résumé des méthodes de mise à jour
 
-Firmware uniquement :
+Pour une carte déjà configurée, exporter les cinq JSON, générer les images avec la phase 03 et installer depuis la factory recovery avec la phase 04. Le remplacement de LittleFS touche toute la partition. Comparer les configurations après restauration. Voir la [procédure par phases](doc/INSTALLATION_PAR_PHASES.md) et les [limites de préservation](doc/OTA.md).
 
-```text
-Arduino IDE > Televerser
-ou
-Televerser_Firmware_COM3.bat / Televerser_Firmware_COM4.bat
-ou
-upload firmware depuis la recovery avec build/ota/RouteurSolaireESP32_firmware.bin
-```
-
-Interface Web uniquement :
-
-```text
-Televerser_LittleFS_COM3.bat / Televerser_LittleFS_COM4.bat
-ou
-upload LittleFS depuis la recovery avec build/ota/RouteurSolaireESP32_littlefs.bin
-```
-
-Firmware + interface Web :
-
-```text
-1. Televerser le firmware
-2. Televerser LittleFS
-3. Redemarrer l'ESP32
-4. Ouvrir /app
-```
-
-Regle pratique :
-
-- modification `.ino`, `.cpp`, `.h` : televerser le firmware
-- modification `data/www/*` : televerser LittleFS
-- modification des deux : televerser firmware puis LittleFS
+Les écritures USB directes servent à l'installation et à la maintenance sur banc. Vérifier la table de partitions de la carte avant de les utiliser.
 
 ## Premiere configuration
 
@@ -1433,7 +1362,6 @@ Page Diagnostic & Simulation :
 - LittleFS
 - WiFi
 - ESP-NOW
-- redondance
 - JSY
 - TIC
 - DS18B20
@@ -1514,16 +1442,6 @@ OLED SSD1309 SPI:
 
 Respecter strictement la separation basse tension / secteur.
 
-## Etat actuel
+## État actuel
 
-Dernieres compilations realisees avec succes. Le firmware occupe environ 90% de l'espace programme d'un ESP32 avec partition standard 1.3 Mo application.
-
-Points restant a tester sur materiel reel :
-
-- JSY deux pinces
-- TIC historique/standard
-- DS18B20 avec adresses reelles
-- SSR reels
-- RobotDyn reel
-- ESP-NOW multi-modules
-- comportement Safety sur defaut reel
+Le PID positionnel est commun aux sources de mesure. Les mises à jour passent par la factory recovery. Consulter le [bilan courant](doc/ETAT_DU_PROJET.md) et l'[audit](doc/AUDIT_2026-11-04.md) pour les limites et les résultats des tests.

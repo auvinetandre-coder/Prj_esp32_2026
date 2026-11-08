@@ -1,6 +1,35 @@
 #include "runtime_state.h"
 #include "../config/config_manager.h"
 #include <WiFi.h>
+#include <sys/time.h>
+
+static uint64_t eventEpochAt(bool synced, uint32_t timestampMs) {
+  if (!synced) return 0;
+  timeval now{};
+  gettimeofday(&now, nullptr);
+  return uint64_t(now.tv_sec) * 1000 + now.tv_usec / 1000 - uint32_t(millis() - timestampMs);
+}
+
+void RuntimeState::logAutomateDebug(uint32_t timestampMs, const char *code, const String &message) {
+  auto &entry = automateTrace[automateTraceHead];
+  entry.timestampMs = timestampMs;
+  entry.epochMs = eventEpochAt(ntpSynced, timestampMs);
+  entry.code = code;
+  entry.message = message;
+  automateTraceHead = (automateTraceHead + 1) % automateTraceCapacity;
+}
+
+void RuntimeState::automateDebugToJson(JsonArray out) {
+  for (uint8_t i = 0; i < automateTraceCapacity; ++i) {
+    const auto &entry = automateTrace[(automateTraceHead + i) % automateTraceCapacity];
+    if (!entry.code) continue;
+    JsonObject item = out.add<JsonObject>();
+    item["timestampMs"] = entry.timestampMs;
+    if (entry.epochMs) item["epochMs"] = entry.epochMs;
+    item["code"] = entry.code;
+    item["message"] = entry.message;
+  }
+}
 
 void RuntimeState::begin(ConfigManager &config) {
   JsonObject device = config.device();
@@ -36,6 +65,7 @@ void RuntimeState::addLog(const String &line) {
 
 void RuntimeState::logEvent(const String &level, const String &code, const String &message, const String &source) {
   eventTimestamps[eventHead] = millis();
+  eventEpochMs[eventHead] = eventEpochAt(ntpSynced, eventTimestamps[eventHead]);
   eventLevels[eventHead] = level;
   eventCodes[eventHead] = code;
   eventMessages[eventHead] = message;
@@ -58,6 +88,8 @@ void RuntimeState::clearEvents() {
     eventSources[i] = "";
   }
   eventHead = 0;
+  for (auto &entry : automateTrace) entry = AutomateTrace{};
+  automateTraceHead = 0;
 }
 
 void RuntimeState::eventsToJson(JsonArray out) {
@@ -66,6 +98,7 @@ void RuntimeState::eventsToJson(JsonArray out) {
     if (!eventTimestamps[idx] && !eventCodes[idx].length()) continue;
     JsonObject ev = out.add<JsonObject>();
     ev["timestampMs"] = eventTimestamps[idx];
+    if (eventEpochMs[idx]) ev["epochMs"] = eventEpochMs[idx];
     ev["level"] = eventLevels[idx];
     ev["code"] = eventCodes[idx];
     ev["message"] = eventMessages[idx];
@@ -227,6 +260,7 @@ void RuntimeState::toJson(JsonObject out, bool includeLogs) {
   }
   JsonArray events = out["events"].to<JsonArray>();
   eventsToJson(events);
+  out["automateDebug"] = automateDebug;
 }
 
 void RuntimeState::performanceToJson(JsonObject out) {

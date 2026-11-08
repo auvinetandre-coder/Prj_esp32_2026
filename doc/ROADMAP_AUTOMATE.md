@@ -1,10 +1,8 @@
 # Feuille de route AutomateManager / RuleEngine
 
-## Statut — 20 octobre 2026
+## Statut — 4 novembre 2026
 
-Feuille de route spécialisée, subordonnée aux [priorités globales](TODO_PRIORITES.md). AutomateManager, son état API, l'éditeur de règles, le manuel Web maintenu et l'action Linky existent. Les rubriques suivantes restent un cadrage : « préparer/supporter » ne signifie ni absence totale de code ni fonction validée. État courant et limites dans [AUTOMATE_RULEENGINE.md](AUTOMATE_RULEENGINE.md) et l'[audit](AUDIT_2026-10-20.md).
-
-Avant les groupes imbriqués/variables/calendrier : fiabiliser OFF et commandes radio, produire des décisions par actionneur, distinguer watts/pourcentages, éviter les écritures `setMode` périodiques et définir une heure valide commune. `SolarRouter` n'est pas appelé dans la boucle active ; `errorDetected()` reste un stub retournant `false`.
+Le PID commun, les décisions par actionneur, la priorité système OFF et les commandes radio partagées sont présents. Les [priorités automate](TODO_PRIORITES_AUTOMATE.md) et l'[audit](AUDIT_2026-11-04.md) priment sur le cadrage historique qui suit.
 
 ## P1 - Stabilisation Recovery/Main
 

@@ -6,9 +6,9 @@ le bootloader et la selection factory, pour une carte neuve ou effacee.
 
 ## Relecture et portée — 20 octobre 2026
 
-Les chemins et scripts ci-dessous sont des outils présents ; leur présence n'est pas un résultat de compilation ou de flash. Aucun build ni téléversement relancé pour cette mise à jour documentaire. Versions déclarées des sources : firmware `20261020-06`, WebUI/LittleFS `20261020-01` ; version installée non vérifiée. Les mesures du 18 octobre restent historiques.
+Marqueurs de sources Main et LittleFS au 4 novembre 2026 · `20261103-05`. La version installée reste à relever sur la carte. Les mesures d'anciens builds sont historiques. Voir les contrôles du [nouvel audit](AUDIT_2026-11-04.md#vérifications).
 
-Pour une mise à jour utilisateur, conserver le passage explicite en factory recovery. Les scripts `Televerser_*_COM3/COM4.bat` écrivent directement par USB : ils relèvent de l'installation/maintenance et contournent les contrôles factory. Un transfert d'image LittleFS remplace la partition entière, y compris `/config`, pas seulement les fichiers Web ; sa sauvegarde/restauration actuelle reste conditionnelle. Voir [OTA.md](OTA.md) et l'[audit courant](AUDIT_2026-10-20.md).
+Pour une mise à jour utilisateur, conserver le passage explicite en factory recovery. Les scripts `Televerser_*_COM3/COM4.bat` écrivent directement par USB : ils relèvent de l'installation/maintenance et contournent les contrôles factory. Un transfert d'image LittleFS remplace la partition entière, y compris `/config`, pas seulement les fichiers Web ; sa sauvegarde/restauration actuelle reste conditionnelle. Voir [OTA.md](OTA.md) et l'[audit courant](AUDIT_2026-11-04.md).
 
 Points d'outillage ouverts : `Detect_Arduino_Tools.bat` garde une variable `ARDUINO_CLI` déjà définie à un chemin invalide, empêchant son repli PATH. Les scripts habituels de compilation génèrent `build_info.h` ; les scripts de packaging/LittleFS peuvent modifier les marqueurs de version. Ne pas les lancer pour une simple vérification documentaire. `build_release.bat` et `publish_release.bat` existent ; leur vocabulaire/URLs GitHub historiques ne réintroduisent pas de téléchargement automatique par l'ESP.
 
@@ -24,7 +24,7 @@ Get-ChildItem tools/test_*.js | ForEach-Object {
 }
 ```
 
-Les sept scripts passent lors de la relecture. Ils exercent des fonctions UI et des blocs C++ traduits en JavaScript, pas le firmware compilé. Plusieurs tests sont encore non suivis par Git. Les anciens scripts locaux de `build_audit/` sont ignorés : le contrôle statique signale toujours `/lite`, et le smoke dashboard doit retirer aussi le nouveau démarrage du polling pour fonctionner avec son DOM simulé. Résultats et limites dans l'[audit](AUDIT_2026-10-20.md#contrôles-exécutés).
+Les 24 scripts `tools/test_*.js` passent au 4 novembre. Ils couvrent des fonctions WebUI et des blocs C++ extraits ou simulés. Le test de `/lite` vérifie le script embarqué. Les contrôles ne remplacent pas une compilation ni un essai ESP32.
 
 Ce fichier est le point de reference rapide pour eviter de rechercher a chaque fois la configuration Arduino, le schema de partitions, les scripts, les noms de fichiers et les emplacements.
 

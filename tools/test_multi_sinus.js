@@ -102,6 +102,7 @@ const runIsr = vm.runInThisContext("(manager, now, write) => {" + isrBody
   .replace("const uint32_t elapsed = uint32_t(now - manager.ssrLastTickUs)", "const elapsed = now - manager.ssrLastTickUs")
   .replace("elapsed / 10000 - 1", "Math.floor(elapsed / 10000) - 1")
   .replace("auto &ssr :", "const ssr of")
+  .replace("uint32_t(now / 1000)", "Math.floor(now / 1000)")
   .replace("const bool on =", "const on =")
   .replace("ssrHalfWaveAdvance(ssr.halfWave, ssr.halfWavePercent)", "manager.halfWaveAdvance(ssr.halfWave, ssr.halfWavePercent)")
   .replace("ssrAdvance(ssr.frame, ssr.requested, ssr.step)", "manager.advance(ssr.frame, ssr.requested, ssr)")

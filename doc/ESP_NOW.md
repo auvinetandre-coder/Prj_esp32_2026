@@ -2,7 +2,7 @@
 
 Mise a jour du 21 octobre 2026 : roles et redondance supprimes du firmware, des configurations actives, des API et de la WebUI ; onglet Secours retire. Voir [le contrat actuel et la migration](SUPPRESSION_ROLES.md). Les observations datees du 20 octobre ci-dessous sont historiques pour ces points.
 
-Relecture du 20 octobre 2026. Les sections d'état décrivent le code et ses limites ; principes/workflows restent des exigences ou cibles. Voir le [bilan](ETAT_DU_PROJET.md) et l'[audit courant](AUDIT_2026-10-20.md). Le test de présence de nœud passe localement ; il ne valide ni le TTL, ni les heartbeats MASTER/BACKUP, ni la radio réelle.
+Relecture du 4 novembre 2026. Le [bilan](ETAT_DU_PROJET.md) et l'[audit](AUDIT_2026-11-04.md) donnent l'état actuel et les essais radio à réaliser.
 
 ## Objectif
 
@@ -371,16 +371,9 @@ Les capteurs sont aussi exposés dans `/api/state` (alias `/api/status-lite`) et
 
 ### Défauts prioritaires ouverts
 
-Ces scénarios sont déduits du code, sans validation radio sur matériel pendant cette relecture.
+Le bail d'une commande distante est calculé à la réception. Le contrôle partagé utilise un jeton de session et tient compte du manuel, du mode OFF et de Safety. La simulation bloque les ordres radio non nuls. Les tests locaux couvrent ces chemins.
 
-- **TTL** : `acceptActuatorCommand()` soustrait le timestamp de l'émetteur au `millis()` du récepteur. Les boots ne sont pas synchronisés : une commande fraîche peut être refusée. Définir une expiration fondée sur la réception locale et une politique contre les commandes retardées/rejouées.
-- **Arbitrage** : une commande distante reçue peut être écrasée par le cycle suivant de l'automate local. La propriété et la durée de validité d'une commande doivent être explicites.
-- **Simulation** : l'envoi de commandes actionneurs distantes n'est pas inhibé ; un nœud resté en réel peut appliquer une commande simulée.
-- **Capteurs historiques** : aligner les écritures directes dans RuntimeState sur les contrôles SensorManager en préservant la compatibilité.
-- **Callbacks** : réception, chaînes, logs et états partagés sont traités dans le callback radio. Une file bornée vers la loop et la maîtrise de la concurrence restent à étudier avant d'augmenter les cadences.
-- **Âges** : la correction de `updateDiscoveredNodeLoss()` ne couvre pas `isNodeOk()` ni tous les rendus JSON, qui conservent des gardes `now >= lastSeenMs`. Tester le rebouclage d'horloge et les réceptions concurrentes sur ces chemins aussi.
-
-Le OFF local à l'entrée simulation est maintenant présent ; la simulation distante reste ouverte. Voir la réévaluation des constats 1, 5, 6 et 7 dans l'[audit courant](AUDIT_2026-10-20.md). La redondance a ete retiree le 21 octobre 2026.
+Les pairs utilisent une autorisation par MAC et un checksum additif. Le traitement historique doit borner les chaînes reçues, passer par SensorManager pour les mesures et maîtriser la concurrence entre callback et boucle. Vérifier également les autres calculs d'âge au rebouclage et sous réception concurrente. Voir le [constat A5](AUDIT_2026-11-04.md#corrections-proposées).
 
 ## Validation sur banc
 
