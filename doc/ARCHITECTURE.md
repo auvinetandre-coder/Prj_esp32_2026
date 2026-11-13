@@ -84,7 +84,6 @@ Modules a respecter :
 - RuleEngine
 - PIDController
 - SafetyManager
-- SimulationManager
 - EspNowManager
 - EspNowNode
 - MqttManager
@@ -159,11 +158,10 @@ Il ne doit jamais etre charge dans le recovery.
 6. capteurs ;
 7. Wi-Fi ;
 8. ESP-NOW ;
-9. redondance ;
-10. WebUI ;
-11. AutomateManager / regles / routage ;
-12. supervision ;
-13. boucle cooperative instrumentee ; certains chemins reseau restent bloquants.
+9. WebUI ;
+10. AutomateManager / regles / routage ;
+11. supervision ;
+12. boucle cooperative instrumentee ; certains chemins reseau restent bloquants.
 
 ---
 

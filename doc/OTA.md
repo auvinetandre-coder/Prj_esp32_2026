@@ -164,9 +164,7 @@ Le main contient l'application complete :
 - RuleEngine ;
 - PIDController ;
 - SafetyManager ;
-- SimulationManager ;
 - EspNowManager ;
-- RedundancyManager ;
 - MqttManager si active ;
 - WebUi ;
 - BootManager ;

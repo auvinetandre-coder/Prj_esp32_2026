@@ -1,6 +1,7 @@
 #include "../config/legacy_config_migration.h"
 #include "rule_engine.h"
 #include "../config/pid_config_migration.h"
+#include "../diagnostics/serial_capture.h"
 
 // Catalogue serveur des sources et mesures autorisees pour les conditions.
 // Toute condition sauvegardee en JSON doit correspondre a une entree de cette table.
@@ -72,7 +73,6 @@ static const RuleEngine::MeasureDef RULE_MEASURES[] = {
   {"DS18B20_BOTTOM", "temperatureC", RuleEngine::MEASURE_NUMBER, "C", ""},
   {"DS18B20_BOTTOM", "available", RuleEngine::MEASURE_BOOL, "", ""},
   {"DS18B20_BOTTOM", "lastValidReadAgeMs", RuleEngine::MEASURE_NUMBER, "ms", ""},
-  {"Systeme", "simulationMode", RuleEngine::MEASURE_BOOL, "", ""},
   {"Systeme", "wifiStatus", RuleEngine::MEASURE_ENUM, "", "CONNECTED,AP_FALLBACK,DISCONNECTED"},
   {"Systeme", "uptimeMs", RuleEngine::MEASURE_NUMBER, "ms", ""},
   {"Systeme", "freeHeap", RuleEngine::MEASURE_NUMBER, "B", ""},
@@ -594,7 +594,6 @@ float RuleEngine::numericMeasureValue(const String &source, const String &measur
     if (measure == "available") return isnan(state.productionW) ? 0 : 1;
   }
   if (source == "Systeme") {
-    if (measure == "simulationMode") return state.simulationMode ? 1 : 0;
     if (measure == "uptimeMs") return millis();
     if (measure == "freeHeap") return ESP.getFreeHeap();
   }

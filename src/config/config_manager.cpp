@@ -5,6 +5,7 @@
 #include <Preferences.h>
 #include "../build_info.h"
 #include "../communication/espnow_protocol.h"
+#include "../diagnostics/serial_capture.h"
 
 static const char *DEVICE_PATH = "/config/device.json";
 static const char *SYSTEM_PATH = "/config/system.json";
@@ -105,7 +106,7 @@ static bool copyLittleFsFile(const char *from, const char *to) {
 // Targeted migration: never remove sensor/actuator usage fields named "role".
 static bool removeRetiredSettings(const char *path, JsonObject root) {
   const char *deviceKeys[] = {"role", "redundancyRole", "functionalRole"};
-  const char *systemKeys[] = {"heartbeatIntervalMs", "takeoverTimeoutMs", "redundancy", "redundancyRole", "functionalRole", "role"};
+  const char *systemKeys[] = {"heartbeatIntervalMs", "takeoverTimeoutMs", "redundancy", "redundancyRole", "functionalRole", "role", "simulationMode", "simulation"};
   bool changed = false;
   if (strcmp(path, DEVICE_PATH) == 0) {
     for (const char *key : deviceKeys) {
@@ -1237,12 +1238,6 @@ void ConfigManager::defaultSystem() {
   root["fallbackApSsid"] = DEFAULT_AP_SSID;
   root["fallbackApPassword"] = DEFAULT_AP_PASSWORD;
   root["fallbackIp"] = "192.168.4.1";
-  root["simulationMode"] = false;
-  JsonObject simulation = root["simulation"].to<JsonObject>();
-  simulation["enabled"] = false;
-  simulation["mode"] = "manual";
-  simulation["scenario"] = "normal";
-  simulation["randomUpdateIntervalMs"] = 2000;
   JsonObject safety = root["safety"].to<JsonObject>();
   safety["enabled"] = true;
   safety["blockOnMissingDs18b20"] = true;

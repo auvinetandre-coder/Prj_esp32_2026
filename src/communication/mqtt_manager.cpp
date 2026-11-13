@@ -118,12 +118,18 @@ bool MqttManager::connect() {
   String password = cfg["password"] | "";
 
   bool ok = false;
+  const uint32_t connectStartedMs = millis();
+  ++state.mqttConnectAttempts;
   if (user.length()) {
     ok = mqtt.connect(clientId.c_str(), user.c_str(), password.c_str(), availabilityTopic.c_str(), 0, retain, "offline");
   } else {
     ok = mqtt.connect(clientId.c_str(), availabilityTopic.c_str(), 0, retain, "offline");
   }
 
+  state.mqttLastConnectMs = millis() - connectStartedMs;
+  if (state.mqttLastConnectMs > state.mqttMaxConnectMs) state.mqttMaxConnectMs = state.mqttLastConnectMs;
+  state.mqttLastConnectResult = mqtt.state();
+  if (!ok) ++state.mqttConnectFailures;
   state.mqttConnected = ok;
   state.mqttStatus = ok ? "MQTT_CONNECTED" : String("MQTT_ERROR_") + mqtt.state();
   if (!ok) state.logEvent("WARNING", "MQTT_CONNECT_FAIL", state.mqttStatus, "MqttManager");
@@ -144,7 +150,6 @@ void MqttManager::publishStateJson() {
   doc["moduleName"] = state.moduleName;
   doc["safetyLevel"] = state.safetyLevel;
   doc["safetyReason"] = state.safetyReason;
-  doc["simulation"] = state.simulationMode;
   doc["wifiRssi"] = state.rssi;
   doc["uptimeMs"] = millis();
   doc["gridPowerW"] = state.gridPowerW;
@@ -185,7 +190,6 @@ void MqttManager::publishIndividual() {
   publishNumber(topicPath("ssr2PowerPct"), state.ssr2PowerPct);
   publishNumber(topicPath("robotDynPowerPct"), state.robotDynPowerPct);
   publishText(topicPath("safetyLevel"), state.safetyLevel);
-  publishText(topicPath("simulation"), state.simulationMode ? "1" : "0");
   for (uint8_t i = 0; i < 3; i++) {
     publishNumber(topicPath(String("ds18b20/sonde") + String(i + 1) + "/temperatureC"), state.ds18b20Temps[i]);
     publishText(topicPath(String("ds18b20/sonde") + String(i + 1) + "/available"), state.ds18b20Available[i] ? "1" : "0");

@@ -17,7 +17,6 @@ enum LoopPerfModule : uint8_t {
   PERF_WIFI,
   PERF_STATUS_LED,
   PERF_DISPLAY,
-  PERF_SIMULATION,
   PERF_COUNT
 };
 
@@ -39,6 +38,24 @@ struct RuntimeState {
   String wifiSsid = "";
   int32_t rssi = 0;
   bool wifiConnected = false;
+  volatile uint32_t wifiDisconnectCount = 0;
+  volatile uint32_t wifiLastDisconnectReason = 0;
+  volatile uint32_t wifiLastDisconnectMs = 0;
+  volatile uint32_t espNowRawRxCount = 0;
+  volatile uint32_t espNowTxSuccessCount = 0;
+  volatile uint32_t espNowTxFailureCount = 0;
+  uint32_t espNowDiscoveryAttempts = 0;
+  uint32_t espNowDiscoveryFailures = 0;
+  int32_t espNowDiscoveryResult = 0;
+  uint32_t mqttConnectAttempts = 0;
+  uint32_t mqttConnectFailures = 0;
+  uint32_t mqttLastConnectMs = 0;
+  uint32_t mqttMaxConnectMs = 0;
+  int32_t mqttLastConnectResult = 0;
+  bool connectivityWifiExpected = false;
+  uint16_t connectivityPeerCount = 0;
+  uint32_t connectivityWifiDownMs = 0;
+  uint32_t connectivityRadioSilentMs = 0;
   bool ntpEnabled = true;
   bool ntpSynced = false;
   String ntpStatus = "NTP_WAIT_WIFI";
@@ -138,7 +155,6 @@ struct RuntimeState {
   String activeRule = "";
   bool manualCommandPending = false;
   bool manualCommandPersistent = false;
-  bool manualCommandSimulationMode = false;
   String manualCommandActuatorId = "";
   String manualCommand = "setPower";
   float manualCommandPercent = 0.0f;
@@ -156,10 +172,6 @@ struct RuntimeState {
   String pidStatus = "IDLE";
   String pidContextId;
   String systemMode = "AUTO";
-  bool simulationMode = false;
-  String simulationType = "manual";
-  String simulationScenario = "normal";
-  uint32_t simulationRemainingMs = 0;
   bool mqttEnabled = false;
   bool mqttConnected = false;
   String mqttStatus = "MQTT_DISABLED";
@@ -190,39 +202,13 @@ struct RuntimeState {
     {"safety.loop", 0, 0, 0},
     {"wifi.loop", 0, 0, 0},
     {"statusLed.loop", 0, 0, 0},
-    {"display.loop", 0, 0, 0},
-    {"simulation.loop", 0, 0, 0}
+    {"display.loop", 0, 0, 0}
   };
-
-  String logs[24];
-  uint8_t logHead = 0;
-  String eventLevels[32];
-  String eventCodes[32];
-  String eventMessages[32];
-  String eventSources[32];
-  uint32_t eventTimestamps[32] = {0};
-  uint64_t eventEpochMs[32] = {0};
-  bool automateDebug = false;
-  void logAutomateDebug(uint32_t timestampMs, const char *code, const String &message);
-  void automateDebugToJson(JsonArray out);
-  struct AutomateTrace {
-    uint32_t timestampMs = 0;
-    uint64_t epochMs = 0;
-    const char *code = nullptr;
-    String message;
-  };
-  static constexpr uint8_t automateTraceCapacity = 64;
-  AutomateTrace automateTrace[automateTraceCapacity];
-  uint8_t automateTraceHead = 0;
-  uint8_t eventHead = 0;
 
   void begin(ConfigManager &config);
   void addLog(const String &line);
   void logEvent(const String &level, const String &code, const String &message, const String &source);
-  void clearEvents();
-  void eventsToJson(JsonArray out);
   void toJson(JsonObject out);
-  void toJson(JsonObject out, bool includeLogs);
   void performanceToJson(JsonObject out);
   void recordLoopPerf(LoopPerfModule module, uint32_t elapsedMs);
 };

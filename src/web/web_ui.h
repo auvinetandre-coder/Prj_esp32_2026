@@ -10,16 +10,16 @@
 #include "../actuators/actuator_manager.h"
 #include "../logic/rule_engine.h"
 #include "../safety/safety_manager.h"
-#include "../simulation/simulation_manager.h"
 #include "../status/status_led.h"
+#include "../diagnostics/serial_debug.h"
 
 class WebUi {
 public:
   WebUi(ConfigManager &config, RuntimeState &state, SolarWiFiManager &wifi, EspNowManager &espnow,
         SensorManager &sensors, ActuatorManager &actuators, RuleEngine &rules, SafetyManager &safety,
-        SimulationManager &simulation, StatusLed &statusLed)
+        StatusLed &statusLed, SerialDebug &serialDebug)
       : config(config), state(state), wifi(wifi), espnow(espnow),
-        sensors(sensors), actuators(actuators), rules(rules), safety(safety), simulation(simulation), statusLed(statusLed), server(80) {}
+        sensors(sensors), actuators(actuators), rules(rules), safety(safety), statusLed(statusLed), serialDebug(serialDebug), server(80) {}
   void begin();
   void loop();
 
@@ -32,11 +32,13 @@ private:
   ActuatorManager &actuators;
   RuleEngine &rules;
   SafetyManager &safety;
-  SimulationManager &simulation;
   StatusLed &statusLed;
+  SerialDebug &serialDebug;
   WebServer server;
 
   void routes();
+  void consoleRoutes();
+  bool authorizeConsole();
   bool authEnabled();
   bool isAuthenticated();
   bool requireAuth();

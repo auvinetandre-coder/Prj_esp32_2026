@@ -104,7 +104,7 @@ PIDController (cible/plafond), RuntimeState/AutomateManager (cible de commande),
 WebUi (mesures de charge), app.js/index.html et marqueurs de version. Aucun fichier
 de /config ni aucune installation sur ESP n'est modifie par cette livraison.
 
-Tests : tools/test_jsy_roles.js execute le resolveur C++ apres adaptation des types
+Tests : tools/tests/test_jsy_roles.js execute le resolveur C++ apres adaptation des types
 Arduino en JavaScript (pas une execution du firmware sur ESP). Il couvre inversion,
 association, watts bruts distincts du secours, zero, absence, ambiguite, capteur
 desactive, perte/stale par voie, discovery et conservation des champs dans l'editeur.

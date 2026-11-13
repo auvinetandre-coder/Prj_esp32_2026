@@ -1,4 +1,5 @@
 #include "linky_tic_manager.h"
+#include "../diagnostics/serial_capture.h"
 
 static const uint16_t TIC_MAX_LINE_LENGTH = 192;
 

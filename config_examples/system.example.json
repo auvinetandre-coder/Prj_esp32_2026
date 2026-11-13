@@ -5,7 +5,6 @@
   "fallbackApSsid": "RouteurSolaire_Config",
   "fallbackApPassword": "routeur1234",
   "fallbackIp": "192.168.4.1",
-  "simulationMode": false,
   "wifi": {
     "ssid": "",
     "password": "",
@@ -16,12 +15,6 @@
     "enabled": true,
     "username": "admin",
     "password": "routeur1234"
-  },
-  "simulation": {
-    "enabled": false,
-    "mode": "manual",
-    "scenario": "normal",
-    "randomUpdateIntervalMs": 2000
   },
   "mqtt": {
     "enabled": false,

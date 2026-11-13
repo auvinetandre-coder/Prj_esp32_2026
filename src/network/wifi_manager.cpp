@@ -1,6 +1,7 @@
 #include "wifi_manager.h"
 #include <Preferences.h>
 #include <time.h>
+#include "../diagnostics/serial_capture.h"
 
 static const char *DEFAULT_AP_SSID = "RouteurSolaire_Config";
 static const char *DEFAULT_AP_PASSWORD = "routeur1234";
@@ -24,6 +25,13 @@ static bool syncRecoveryWifiCredentials(const String &ssid, const String &passwo
 }
 
 void SolarWiFiManager::begin() {
+  beginDiagnosticsPersistence();
+  if (!diagnosticEventsRegistered) {
+    diagnosticEventsRegistered = true;
+    WiFi.onEvent([this](WiFiEvent_t event, WiFiEventInfo_t info) {
+      recordDiagnosticEvent(event, info);
+    });
+  }
   JsonObject sys = config.system();
   const char *modernSsid = sys["wifi"]["ssid"] | "";
   const char *legacySsid = sys["wifiSsid"] | "";
@@ -86,6 +94,8 @@ void SolarWiFiManager::begin() {
 
 void SolarWiFiManager::loop() {
   const uint32_t now = millis();
+  sampleDiagnostics(now);
+  persistDiagnostics(now);
   if (now - lastStatusMs < 2000) return;
   lastStatusMs = now;
   if (state.networkMode == "STATION" || state.networkMode == "AP_STA") {

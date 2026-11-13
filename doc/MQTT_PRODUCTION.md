@@ -6,7 +6,7 @@ La mesure reseau et le PID ne changent pas de source.
 
 Relecture du 20 octobre 2026 : cette réception ne remplace pas la mesure réseau. L'action récente `setPowerFromLinky` utilise toutefois une production finie strictement positive comme autorisation de chauffe ; si la production MQTT est activée, son indisponibilité/expiration interdit cette action. L'indépendance des sources ne signifie donc pas absence d'effet sur cette régulation. Voir [AUTOMATE_RULEENGINE.md](AUTOMATE_RULEENGINE.md) et l'[audit courant](AUDIT_2026-10-20.md).
 
-Le test local `tools/test_mqtt_production.js` passe pour la configuration WebUI ; `tools/test_linky_routing.js` vérifie les gardes de production dans un modèle logiciel. Aucun échange broker/Jeedom, contrôle de données cloud ou essai ESP n'a été exécuté pendant cette relecture documentaire. Les mentions de scénario Jeedom configuré ci-dessous décrivent le contexte antérieur, pas un état vérifié aujourd'hui.
+Le test local `tools/tests/test_mqtt_production.js` passe pour la configuration WebUI ; `tools/tests/test_linky_routing.js` vérifie les gardes de production dans un modèle logiciel. Aucun échange broker/Jeedom, contrôle de données cloud ou essai ESP n'a été exécuté pendant cette relecture documentaire. Les mentions de scénario Jeedom configuré ci-dessous décrivent le contexte antérieur, pas un état vérifié aujourd'hui.
 
 ## Configuration
 
@@ -67,9 +67,9 @@ et la reception, `src/sensors/sensor_manager.*` pour la validation et le capteur
 valeurs par defaut, `RouteurSolaireESP32.ino` pour l'injection de SensorManager,
 `src/web/web_ui.cpp` pour l'API, `data/www/app.js` pour les reglages,
 `data/www/index.html` pour le rafraichissement du cache JavaScript et
-`tools/test_mqtt_production.js` pour les tests de sauvegarde WebUI.
+`tools/tests/test_mqtt_production.js` pour les tests de sauvegarde WebUI.
 
-- `node --check data/www/app.js` et `node tools/test_mqtt_production.js`.
+- `node --check data/www/app.js` et `node tools/tests/test_mqtt_production.js`.
 - Compiler le main pour le schema de partitions existant.
 - Sur banc : activer la reception, lancer le scenario Jeedom et comparer la
   puissance AC a la production affichee par l'ESP et a `sensors[]`.

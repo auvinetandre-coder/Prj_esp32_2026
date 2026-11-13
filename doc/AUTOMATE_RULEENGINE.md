@@ -276,7 +276,7 @@ Le maintien ne contourne pas l'arbitrage manuel ni SafetyManager.
 La correction associee des fausses pertes de noeud est decrite dans ESP_NOW.md.
 Fichiers de cette etape : `src/logic/pid_controller.cpp`,
 `src/communication/espnow_manager.cpp`, `src/build_info.h`,
-`tools/test_linky_routing.js`, `tools/test_espnow_node_liveness.js` et ces docs.
+`tools/tests/test_linky_routing.js`, `tools/tests/test_espnow_node_liveness.js` et ces docs.
 Firmware seul a mettre a jour ; WebUI LittleFS `20261020-01` compatible.
 
 Evolution `20261020-05` : les releves en lecture seule montraient environ
@@ -295,7 +295,7 @@ le maintien de 10 s lors d'une vraie absence et les securites sont preserves.
 Le nouveau champ est optionnel, modifiable dans le JSON avance de `system`,
 expose dans `/api/state` et ne provoque aucune migration de `/config`.
 Fichiers : `src/logic/pid_controller.cpp`, `src/web/web_ui.cpp`,
-`tools/test_linky_routing.js`, `src/build_info.h` et ce document.
+`tools/tests/test_linky_routing.js`, `src/build_info.h` et ce document.
 Tests : forte consommation, rampe descendante personnalisee, configuration
 invalide, montee inchangee et absence de corrections repetees sur un doublon,
 en plus des modeles de feedback retarde et des coupures deja verifies.
@@ -325,7 +325,7 @@ La deadband, la rampe de descente configurable, le maintien de 10 s et toutes
 les coupures restent applicables. Le PID JSY/surplus historique est conserve.
 
 Fichiers modifies pour -06 : `src/logic/pid_controller.cpp`,
-`src/logic/pid_controller.h`, `tools/test_linky_routing.js`, `src/build_info.h`
+`src/logic/pid_controller.h`, `tools/tests/test_linky_routing.js`, `src/build_info.h`
 et ce document. Le test reproduit le plateau 1148 W observe et interdit la
 chute repetee jusqu'a zero. Un modele supplementaire simule 5 s de retard,
 des mesures physiques maintenues 5 s et retransmises chaque seconde, puis
@@ -355,8 +355,8 @@ identiques. Supprimer une regle dans la WebUI puis cliquer sur Sauvegarder.
 L'automate coupe egalement l'ancien actionneur de regle lorsqu'elle cesse
 de fournir la commande retenue, ou lorsque sa cible change.
 
-Validation locale : `node tools/test_linky_routing.js`,
-`node tools/test_manual_actuator.js`, `node tools/test_ssr_nan.js` et compilation.
+Validation locale : `node tools/tests/test_linky_routing.js`,
+`node tools/tests/test_manual_actuator.js`, `node tools/tests/test_ssr_nan.js` et compilation.
 Les tests Node traduisent les corps C++ et executent les fonctions WebUI ; ils
 ne remplacent pas un essai sur ESP. Sur banc : production positive / Linky 0,
 100, puis 400 ; production 0, expiree, puis retour ; perte TIC ; mode OFF ;
@@ -371,8 +371,8 @@ les regles vides ; `src/logic/automate_manager.*` pour liberer l'ancienne sortie
 commande ; `src/runtime/runtime_state.h` et `src/web/web_ui.cpp` pour la cible
 PID effective ; `src/sensors/linky_tic_manager.cpp` pour les champs TIC standard ;
 `data/www/app.js` et `data/www/index.html` pour le choix de la
-commande et son cache ; `tools/test_linky_routing.js`,
-`tools/test_manual_actuator.js`, `tools/test_ssr_nan.js` pour la verification.
+commande et son cache ; `tools/tests/test_linky_routing.js`,
+`tools/tests/test_manual_actuator.js`, `tools/tests/test_ssr_nan.js` pour la verification.
 
 ### Commande manuelle maintenue
 
@@ -398,7 +398,7 @@ L'API historique `/api/actuator/command` reste compatible. Le parametre optionne
 ponctuelle, y compris les commandes MQTT. Le runtime expose `manualOverride`,
 `manualPercent` et la source `MANUAL`.
 
-Verification : `node tools/test_manual_actuator.js`, compilation, puis sur ESP
+Verification : `node tools/tests/test_manual_actuator.js`, compilation, puis sur ESP
 maintien au-dela de 5 secondes et apres fermeture de la page, OFF sans reprise
 par les regles, AUTO, desactivation et interruption par securite.
 
@@ -418,7 +418,7 @@ En cas d'erreur de lecture runtime, les cellules affichent des donnees indisponi
 Les watts affiches sont estimes a partir du pourcentage et de la puissance maximale
 configuree ; ils ne constituent pas une mesure de consommation.
 
-Verification locale : `node tools/test_ssr_nan.js`, puis compilation ESP32.
+Verification locale : `node tools/tests/test_ssr_nan.js`, puis compilation ESP32.
 Le test Node execute les corps arithmetiques C++ traduits mecaniquement en JS
 et les fonctions reelles de l'interface ; il ne remplace pas un essai materiel.
 Sur ESP : verifier la perte puis le retour du capteur reseau, l'absence de `nan%`,

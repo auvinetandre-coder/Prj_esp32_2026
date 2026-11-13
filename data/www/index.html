@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Routeur solaire</title>
-  <link rel="stylesheet" href="/www/style.css?v=20261106-13">
+  <link rel="stylesheet" href="/www/style.css?v=20261111-04">
 </head>
 <body>
   <nav>
@@ -13,7 +13,7 @@
     <button data-page="sensors">Capteurs</button>
     <button data-page="actuators">Actionneurs</button>
     <button data-page="logic">Automate</button>
-    <button data-page="diagnostic">Diagnostic & Simulation</button>
+    <button data-page="diagnostic">Diagnostic</button>
     <button data-page="system">Systeme</button>
     <button data-page="mqtt">MQTT</button>
     <button data-page="espnow">ESP-NOW</button>
@@ -39,7 +39,8 @@
       }
     });
   </script>
-  <script src="/www/app.js?v=20261106-13"></script>
+  <script src="/www/serial_console.js?v=20261111-04"></script>
+  <script src="/www/app.js?v=20261111-04"></script>
   <script>
     setTimeout(function () {
       var app = document.getElementById('app');

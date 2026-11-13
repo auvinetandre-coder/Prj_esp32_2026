@@ -12,7 +12,7 @@ n'emettent pas de commande.
 
 ## Validation locale
 
-`tools/test_shared_actuator_control.js` execute les corps de production de
+`tools/tests/test_shared_actuator_control.js` execute les corps de production de
 `requestSharedControl`, `handleEspNowActuatorCommand`, `observeSharedControl`
 et l'expiration dans deux contextes representant le pilote et le SSR physique.
 Les adaptateurs Arduino/JSON et la livraison radio sont simules. Le controleur
@@ -34,9 +34,9 @@ Les adaptateurs Arduino/JSON et la livraison radio sont simules. Le controleur
 | Reconnexion avec ancien jeton | Reprise manuelle refusee |
 | Intention MANUEL perdue sur la radio | Renouvellements refuses, pilote annule sans activation |
 
-`tools/test_espnow_actuator_state.js` verifie le mapping MAC/ID, la reception
+`tools/tests/test_espnow_actuator_state.js` verifie le mapping MAC/ID, la reception
 d'etat, son expiration, la projection API, le diagnostic actualise et les
-curseurs des panneaux. `tools/test_manual_actuator.js` couvre le maintien
+curseurs des panneaux. `tools/tests/test_manual_actuator.js` couvre le maintien
 manuel, l'annulation des anciennes requetes et OFF/AUTO pendant une reponse lente.
 
 ## Essais materiels a realiser

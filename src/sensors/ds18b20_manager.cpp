@@ -1,4 +1,5 @@
 #include "ds18b20_manager.h"
+#include "../diagnostics/serial_capture.h"
 
 void DS18B20Manager::begin() {
   configureBusFromConfig();

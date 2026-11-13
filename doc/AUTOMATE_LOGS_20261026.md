@@ -39,7 +39,7 @@ src/logic/rule_engine.h et .cpp : suivi de branche et limitation des logs seulem
 src/web/web_ui.cpp : reinitialisation apres sauvegarde reussie des regles.
 data/www/app.js : aide des deux commandes mise a jour.
 data/www/index.html : cache v51. Marqueurs et images version 20261026-04.
-tools/test_scenario_logs.js : tests de regression executant les corps C++ traduits
+tools/tests/test_scenario_logs.js : tests de regression executant les corps C++ traduits
 en JavaScript, sans pretendre executer le firmware sur materiel.
 
 ## Validation et essais a faire

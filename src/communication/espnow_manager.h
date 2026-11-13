@@ -64,11 +64,18 @@ struct EspNowActuatorState {
   bool outputOn = false;
   bool enabled = false;
   bool safetyLocked = false;
-  bool simulated = false;
+  bool legacyOutputInhibited = false; // Historical peer inhibition bit, wire layout unchanged.
   char source[24]{};
   uint32_t receivedMs = 0;
   char controlMode[8]{};
   uint32_t controlToken = 0;
+};
+
+struct EspNowPeerDiagnostic {
+  char mac[18]{};
+  bool registered = false, seen = false;
+  uint8_t channel = 0, interfaceId = 0;
+  uint32_t ageMs = UINT32_MAX;
 };
 
 class EspNowManager {
@@ -111,6 +118,8 @@ public:
   void sendSensorDiagnostic(uint8_t sensorId);
   bool isNodeKnown(const String &mac);
   bool isNodeOk(const String &mac, uint32_t maxAgeMs = 30000UL);
+  uint32_t configuredPeerSilenceMs(uint16_t &peerCount, uint32_t &signature);
+  bool peerDiagnostic(uint8_t index, EspNowPeerDiagnostic &out);
 
 private:
   static const uint8_t MAX_EXPORT_RUNTIME_SLOTS = 12;

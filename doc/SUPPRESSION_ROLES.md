@@ -64,7 +64,7 @@ ni la radio reelle ni la robustesse de LittleFS face a une coupure electrique.
 - config_examples/device.example.json et system.example.json : exemples nettoyes.
 - src/build_info.h et data/www/littlefs_version.txt : versions 20261021-01.
 - README.md, ARCHITECTURE.md et notices documentaires : nouveau fonctionnement.
-- tools/test_role_removal.js : migration, preservation des reglages, API et rendu.
+- tools/tests/test_role_removal.js : migration, preservation des reglages, API et rendu.
 
 ## Verification locale
 
@@ -73,7 +73,7 @@ Compilation finale ESP32 reussie (core 3.3.12, partition Recovery/Main) :
 statique sur 327 680 (21 %). Firmware 20261021-01, marqueur verifie dans le binaire.
 Sortie : build/ota/RouteurSolaireESP32_firmware_20261021-01.bin. Aucun flash realise.
 
-Syntaxe JavaScript valide. Les huit scripts tools/test_*.js passent.
+Syntaxe JavaScript valide. Les huit scripts tools/tests/test_*.js passent.
 Le nouveau test execute le corps de nettoyage C++ adapte en JavaScript et rend
 le dashboard INIT/OK/CRITICAL, les parametres, ESP-NOW et Systeme avec des donnees
 historiques. Il ne constitue pas un test du firmware sur appareil.

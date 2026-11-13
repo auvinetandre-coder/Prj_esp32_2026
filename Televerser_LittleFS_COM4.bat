@@ -1,3 +1,3 @@
 @echo off
-cd /d "%~dp0"
-call ".\tools\Televerser_LittleFS_COM4.bat"
+call "%~dp0tools\Televerser_LittleFS.bat" COM4 115200
+exit /b %errorlevel%

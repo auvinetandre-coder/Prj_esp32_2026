@@ -73,7 +73,7 @@ Une mise a jour LittleFS n'est pas necessaire pour ce correctif firmware.
 
 Livraison firmware `20261031-01` compilee avec le core ESP32 3.3.12 :
 1 499 268 octets de programme sur 1 966 080 (76 %), 80 632 octets de RAM
-statique (24 %). Les 23 scripts `tools/test_*.js` passent ; le test de selection
+statique (24 %). Les 23 scripts `tools/tests/test_*.js` passent ; le test de selection
 JSY couvre aussi zero, valeurs invalides, absence de watts bruts, pinces,
 expiration, perte radio et horloge de callback. Binaire et SHA-256 dans
 `build/ota/release_20261031-01.json`. Aucun televersement realise.
@@ -104,7 +104,7 @@ Les champs scalaires historiques et `pid` restent présents et décrivent le der
 
 ## Validation
 
-Les tests `tools/test_positional_pid.js`, `test_pid_migration.js`, `test_pid_arbitration.js` et `test_pid_sampling.js` exécutent les fonctions de production après adaptation syntaxique C++ vers JavaScript.
+Les tests `tools/tests/test_positional_pid.js`, `test_pid_migration.js`, `test_pid_arbitration.js` et `test_pid_sampling.js` exécutent les fonctions de production après adaptation syntaxique C++ vers JavaScript.
 Ils couvrent signe, temps réel, répétitions, expirations, NaN, saturation, rampes, transition, sorties indépendantes, arbitrage, migration et acquisitions radio.
 Ils complètent la compilation ESP32 et les régressions existantes ; ils ne valident pas les équipements.
 

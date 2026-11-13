@@ -13,3 +13,15 @@ Les identifiants renvoient à l'[audit du code](AUDIT_2026-11-04.md). Chaque lot
 | 7 | Tri des doublons après validation. | Contrôler les références, conserver le test du JavaScript embarqué, mesurer la taille et préserver les contrats d'usage. |
 
 Les tests existants couvrent déjà le PID commun, l'arbitrage par sortie, la priorité OFF, les commandes ESP-NOW à bail local, les migrations, la simulation et la syntaxe de `/lite`. Les résultats sur matériel restent à établir. Les extensions sont répertoriées dans la [feuille de route](ROADMAP.md).
+
+## Réception de l'automate et des règles
+
+Critères spécifiques consolidés le 11 novembre 2026 depuis la liste automate, sans nouvelle validation :
+
+- Sur banc, vérifier l'arrêt global et le relâchement de chaque cible depuis règles, WebUI, MQTT et ESP-NOW : perte de liaison, suppression de règle et transition simulation/réel.
+- Mesurer le coût de validation et la limite par règle du constat A9, ainsi que les temps de boucle sous charge. Tester NTP absent, changement de fuseau et reprise de la source.
+- Comparer les commandes effectivement acceptées à leur restitution dans l'API et les graphes.
+- Examiner RECOVERY_REQUEST : la route Web coupe les sorties et demande directement la factory via BootManager.
+- Rattacher la réaffectation des sorties et la persistance aux lots A3 et A2 ci-dessus.
+
+Références : [PID unique](PID_UNIQUE.md), [automate et règles](AUTOMATE_RULEENGINE.md). Les résultats de tests antérieurs restent datés ; cette consolidation ne les réexécute pas.

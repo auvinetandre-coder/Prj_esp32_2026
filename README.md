@@ -1,5 +1,7 @@
 # RouteurSolaireESP32
 
+Recovery sur carte neuve : `02_Installer_Recovery.bat`. Remplacement de la Recovery seule sur carte deja installee : `02b_Mettre_A_Jour_Recovery_Seule.bat` (port et image `.bin` demandes ; table controlee, ancienne factory sauvegardee). Voir [les deux parcours](doc/INSTALLATION_PAR_PHASES.md#remplacer-uniquement-la-recovery-sur-un-esp-deja-installe).
+
 Installation d'un nouvel ESP32 : [procedure par phases 00 a 04](doc/INSTALLATION_PAR_PHASES.md), avec les lanceurs numerotes a la racine.
 
 Firmware Arduino IDE pour ESP32 permettant de realiser un routeur solaire photovoltaique local, modulaire et distribue.
@@ -26,6 +28,8 @@ Les securites logicielles du firmware ne remplacent jamais les securites materie
 - Continuer a fonctionner sans WiFi maison grace au point d'acces local.
 - Publier et recevoir des donnees MQTT vers Jeedom si l'option est activee.
 
+Voir [les outils et les commandes de test](tools/README.md) pour le classement du dossier tools.
+
 ## Architecture
 
 ```text
@@ -47,8 +51,10 @@ RouteurSolaireESP32/
 |   `-- rules.example.json
 |-- tools/
 |   |-- Compiler_RouteurSolaireESP32.bat
-|   |-- Televerser_LittleFS_COM3.bat
-|   `-- Effacer_Flash_ESP32.bat
+|   |-- Televerser_LittleFS.bat
+|   |-- Installation_ESP32.ps1
+|   |-- Recovery_Seule.ps1
+|   `-- tests/
 `-- src/
     |-- actuators/
     |-- communication/
@@ -59,7 +65,6 @@ RouteurSolaireESP32/
     |-- runtime/
     |-- safety/
     |-- sensors/
-    |-- simulation/
     |-- status/
     `-- web/
 ```
@@ -74,13 +79,12 @@ Modules principaux :
 - `ActuatorManager` : SSR, RobotDyn, relais, PWM, sorties digitales.
 - `RuleEngine` : moteur de regles SI / ALORS.
 - `SafetyManager` : securites globales.
-- `SimulationManager` : simulation sans capteurs ni charge 230 V.
 - `EspNowManager` : communication ESP-NOW.
 - `EspNowNode` : brique ESP-NOW generique pour decouverte et trames capteurs multi-noeuds.
 - `MqttManager` : publication et reception MQTT pour Jeedom.
 - `WebUi` : API REST et interface Web.
 - `RuntimeState` : etat global.
-- `Logger` : logs et evenements.
+- `Logger` : messages du journal série.
 - `StatusLed` : LED GPIO2.
 
 ## Demarrage firmware
@@ -92,7 +96,7 @@ Au boot :
 3. Coupure de toutes les sorties.
 4. Initialisation LittleFS.
 5. Chargement ou creation des JSON de configuration.
-6. Simulation forcee OFF au reboot.
+6. Initialisation des sorties en etat sur.
 7. Initialisation actionneurs.
 8. Initialisation securites.
 9. Initialisation capteurs.
@@ -142,7 +146,7 @@ Pages :
 - Capteurs
 - Actionneurs
 - Logique
-- Diagnostic & Simulation
+- Diagnostic
 - Systeme
 - MQTT
 - Parametres
@@ -171,7 +175,6 @@ API utiles :
 - `/api/rules`
 - `/api/system`
 - `/api/device`
-- `/api/simulation`
 - `/fs`
 
 ### Login Web
@@ -231,7 +234,7 @@ routeurSolaire/command
 routeurSolaire/actuator/+/set
 ```
 
-`routeurSolaire/state` publie un JSON global avec les mesures importantes : puissance reseau, injection, surplus, consommation, tension, courant, securite, simulation, temperatures DS18B20 et commandes actionneurs.
+`routeurSolaire/state` publie un JSON global avec les mesures importantes : puissance reseau, injection, surplus, consommation, tension, courant, securite, temperatures DS18B20 et commandes actionneurs.
 
 Si les topics individuels sont actives, le firmware publie aussi des valeurs simples utiles pour Jeedom :
 
@@ -273,7 +276,6 @@ Le dashboard affiche :
 - nom du module
 - WiFi, IP, RSSI
 - etat securite
-- etat simulation
 - source puissance reseau
 - puissance reseau
 - injection
@@ -582,44 +584,9 @@ Modes Safety disponibles dans les parametres :
 
 Le mode `off` est reserve aux tests sans charge 230 V.
 
-## Simulation
+## Simulation retiree
 
-Le mode simulation permet de tester le firmware sans capteurs physiques et sans activer les sorties 230 V.
-
-Simule :
-
-- JSY-MK-194T
-- TIC Linky
-- DS18B20
-- commandes SSR1, SSR2, RobotDyn
-
-Modes :
-
-- `manual`
-- `random`
-- `scenario`
-
-Scenarios :
-
-- `normal`
-- `production_low`
-- `injection_medium`
-- `injection_high`
-- `temperature_near_limit`
-- `temperature_overheat`
-- `critical_sensor_lost`
-- `jsy_lost`
-
-Securites simulation :
-
-- aucune sortie 230 V reelle n'est activee en simulation
-- les commandes sont calculees et visibles dans l'interface
-- la simulation est forcee OFF au reboot
-- la simulation s'arrete automatiquement apres 5 minutes
-- le dashboard affiche le temps restant
-- en sortie de simulation, les sorties sont forcees OFF pendant au moins 2 secondes
-
-Les anciennes sorties LED de simulation ont ete supprimees. La simulation reste visible dans l'interface Web et sur l'ecran OLED.
+La simulation locale est supprimee sur demande utilisateur le 11 novembre 2026. Elle sera reconcue dans un chantier separe. Voir [Systeme et Diagnostic](doc/SYSTEME_DIAGNOSTIC.md).
 
 ## ESP-NOW
 
@@ -929,7 +896,7 @@ Les autres profils suivent la meme logique :
 - `JSY-MK-194T` : `VOLT`, `CURR`, `POWER`, `GRID`, `PF`, `FREQ`, `ENERGY` si disponible ;
 - `DS18B20` : `TEMP` ; le role envoye par la source indique comment `TEMP` est utilisee ;
 
-Il reste possible de choisir une seule valeur distante en remplacant `ALL` par une cle precise comme `GRID`, `TEMP`, `VOLT` ou `POWER`. L'option `Debug trames ESP-NOW` est commune a tous les profils : elle ajoute dans les evenements une ligne decodee avec la sequence, le type et toutes les valeurs de chaque trame recue depuis la MAC configuree.
+Il reste possible de choisir une seule valeur distante en remplacant `ALL` par une cle precise comme `GRID`, `TEMP`, `VOLT` ou `POWER`. L'option `Debug trames ESP-NOW` est commune a tous les profils. Elle ajoute au journal série une ligne decodee avec la sequence, le type et toutes les valeurs de chaque trame recue depuis la MAC configuree.
 
 Important : seules les trames provenant d'un peer autorise sont appliquees. Cette separation evite qu'un ESP inconnu ou mal configure puisse modifier directement `state.gridPowerW` ou les variables utilisees par la regulation.
 
@@ -1309,7 +1276,6 @@ Les écritures USB directes servent à l'installation et à la maintenance sur b
    - WiFi
    - source puissance reseau JSY/TIC/AUTO
    - Safety
-   - simulation
 8. Aller dans Capteurs.
 9. Scanner DS18B20.
 10. Associer les adresses aux sondes.
@@ -1323,18 +1289,12 @@ Les écritures USB directes servent à l'installation et à la maintenance sur b
 
 ## Procedure de test recommandee
 
-Sans 230 V :
+Sur banc basse tension, sorties de puissance deconnectees :
 
-1. Boot ESP32.
-2. Verifier le port serie 115200.
-3. Verifier WiFi/AP.
-4. Ouvrir `/app`.
-5. Activer simulation.
-6. Tester `gridPowerW = -800`.
-7. Verifier injection/surplus.
-8. Verifier commande SSR calculee.
-9. Verifier arret automatique simulation apres 5 minutes.
-10. Verifier simulation OFF apres reboot.
+1. Demarrer et verifier les sorties OFF, le port serie et WiFi/AP.
+2. Ouvrir Systeme : versions, partitions et acces reseau.
+3. Ouvrir Diagnostic : securite, fraicheur des capteurs et console.
+4. Verifier perte/retour de mesure, arret systeme OFF et refus des anciennes regles de simulation.
 
 Avec capteurs :
 
@@ -1346,14 +1306,14 @@ Avec capteurs :
 
 Avec sorties :
 
-1. Tester LED de simulation.
+1. Verifier le niveau OFF au demarrage et les protections, sur banc adapte.
 2. Tester SSR sans charge 230 V.
 3. Tester SSR avec charge resistive adaptee.
 4. Tester RobotDyn en dernier.
 
 ## Diagnostic
 
-Page Diagnostic & Simulation :
+Page Diagnostic :
 
 - securite
 - raison dernier defaut
@@ -1366,9 +1326,9 @@ Page Diagnostic & Simulation :
 - TIC
 - DS18B20
 - actionneurs
-- evenements systeme
+- console série Web
 
-Evenements typiques :
+Messages typiques du journal série :
 
 - `BOOT`
 - `CONFIG_LOADED`
@@ -1378,7 +1338,6 @@ Evenements typiques :
 - `TIC_TIMEOUT`
 - `DS18B20_MISSING`
 - `SAFETY_TRIGGERED`
-- `SIMULATION_TIMEOUT`
 - `ACTUATOR_FORCED_OFF`
 - `CONFIG_CHANGED`
 
@@ -1386,8 +1345,8 @@ Evenements typiques :
 
 1. Ne pas forcer une sortie 230 V.
 2. Lire la bannierre rouge/orange.
-3. Aller dans Diagnostic & Simulation.
-4. Verifier les evenements.
+3. Aller dans Diagnostic.
+4. Consulter la console série.
 5. Verifier JSY/TIC/DS18B20.
 6. Verifier la configuration Safety.
 7. Corriger la cause.

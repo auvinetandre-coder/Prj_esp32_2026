@@ -1,5 +1,9 @@
 Evolution du 21 octobre 2026 : voir [Routage generique](ROUTAGE_GENERIQUE.md) pour les nouveaux champs et la migration.
 
+Depuis 20261111-03, `GET /api/diagnostic/wifi` (authentifie) expose la capture Wi-Fi, la derniere connexion connue, l’historique de 32 evenements et son statut de sauvegarde LittleFS. Le POST console utilise maintenant le moteur USB commun. Voir [le contrat et les limites de persistance](WIFI_DIAGNOSTIC.md).
+
+Mise a jour du 11 novembre 2026 : suppression explicite des routes `/api/simulation*`, des champs runtime de simulation, du topic MQTT de simulation et de la condition `Systeme.simulationMode`. Voir [le perimetre et la migration](SYSTEME_DIAGNOSTIC.md). Les autres routes restent conservees.
+
 # API.md - Contrat API RouteurSolaireESP32
 
 Mise a jour du 21 octobre 2026 : roles et redondance supprimes du firmware, des configurations actives, des API et de la WebUI ; onglet Secours retire. Voir [le contrat actuel et la migration](SUPPRESSION_ROLES.md). Les observations datees du 20 octobre ci-dessous sont historiques pour ces points.
@@ -13,6 +17,8 @@ Les routes de configuration/commande du main suivent `requireAuth()` et `system.
 Les nombres non finis sont convertis en `null` dans les champs numériques construits par `sendStatusLite()`. Le client doit différencier `null`, zéro et absence de propriété. `pidEnabled` existe à plat ; `pid.enabled` n'est pas rempli actuellement. La commande et `outputPowerW` ne sont pas une preuve électrique d'exécution ; vérifier la source et le caractère estimé/mesuré.
 
 `consumptionW` est la partie positive de la puissance réseau, donc l'achat, et non la consommation totale du logement. La convention et la sélection effective de mesure du PID sont documentées dans [PID unique](PID_UNIQUE.md).
+
+Depuis 20261110-02, le journal historique du bloc Événements est retiré. Les routes /api/logs/export, /api/logs/clear et /api/logs/automate ainsi que les champs events, logs et automateDebug du diagnostic sont supprimés. La console série Web possède ses propres routes documentées dans [le guide de la console](CONSOLE_SERIE_WEB.md).
 
 ## Objectif
 

@@ -429,54 +429,6 @@ main {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
-.systemSummaryBand {
-  display: grid;
-  grid-template-columns: repeat(7, minmax(0, 1fr));
-  gap: 10px;
-  margin: 12px 0 14px;
-}
-
-.systemSummaryCard {
-  min-height: 58px;
-  padding: 10px;
-  border: 1px solid #26272b;
-  border-radius: 8px;
-  background: #15161a;
-  box-sizing: border-box;
-}
-
-.systemSummaryCard span {
-  display: block;
-  color: #9ca3af;
-  font-size: 10px;
-  font-weight: 750;
-}
-
-.systemSummaryCard b {
-  display: block;
-  margin-top: 6px;
-  color: #f9fafb;
-  font-size: 14px;
-  line-height: 1.1;
-  overflow-wrap: anywhere;
-}
-
-.systemSummaryCard.ok {
-  border-color: rgba(34,197,94,.38);
-}
-
-.systemSummaryCard.ok b { color: #22c55e; }
-.systemSummaryCard.info b { color: #74c7f0; }
-.systemSummaryCard.warn b { color: #ff9800; }
-.systemSummaryCard.bad b { color: #ff6b7a; }
-
-.systemAlertStrip {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin: 0 0 14px;
-}
-
 .systemMainGrid {
   margin-bottom: 14px;
 }
@@ -2575,14 +2527,6 @@ main {
 .curveDot.tempCurve2 { background: #06b6d4; }
 .curveDot.tempCurve3 { background: #f472b6; }
 
-.sim {
-  margin: 10px 0;
-  padding: 10px;
-  border-radius: 8px;
-  background: #2a1b08;
-  border: 1px solid #ff9800;
-}
-
 input, select {
   width: 100%;
   box-sizing: border-box;
@@ -3581,7 +3525,6 @@ td, th {
   .dashBlockGrid,
   .blockMetricGrid,
   .blockMetricGrid.three,
-  .systemSummaryBand,
   .blockStates,
   .statusBadges,
   .statusMiniGrid {
@@ -3894,3 +3837,26 @@ td, th {
 .pidGainControl { grid-column: 1 / -1; display: grid; gap: 6px; }
 .pidGainControl .sliderRow { display: grid; grid-template-columns: minmax(0, 1fr) 100px; align-items: center; gap: 12px; }
 .pidGainControl input[type="range"] { width: 100%; min-width: 0; accent-color: #38bdf8; }
+
+.serialConsole { margin: 16px 0; min-width: 0; }
+.serialConsole pre {
+  min-height: 10rem;
+  max-height: min(44vh, 26rem);
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  padding: 12px;
+  background: #0c151d;
+  color: #e4eef5;
+  border: 1px solid var(--border, #334155);
+  border-radius: 8px;
+  font: 0.85rem/1.5 ui-monospace, Consolas, monospace;
+}
+.serialConsoleForm { display: flex; flex-wrap: wrap; gap: 8px; }
+.serialConsoleForm input { flex: 1 1 12rem; min-width: 0; }
+
+/* Poste de pilotage : systeme et diagnostic */
+.workbenchHeader{display:flex;justify-content:space-between;align-items:center;gap:16px;margin:8px 0 22px;padding:20px;border:1px solid var(--border,#374151);border-radius:16px;background:linear-gradient(120deg,#16334788,#24304455)}
+.workbenchHeader h1{margin:6px 0}.workbenchHeader p{margin:4px 0;color:var(--muted,#9ca3af)}.workbenchEyebrow{font-size:11px;letter-spacing:.14em;color:#7dd3fc}.workbenchMaintenance{margin-top:20px;border-top:3px solid #f59e0b}.workbenchConsole{margin-top:22px}.tableScroll{overflow-x:auto}button:focus-visible,a:focus-visible,summary:focus-visible{outline:3px solid #7dd3fc;outline-offset:3px}@media(max-width:650px){.workbenchHeader{align-items:flex-start;flex-direction:column;padding:14px}.workbenchMaintenance .toolbar{align-items:stretch;flex-direction:column}}
+
+.wifiHistory{max-height:360px;overflow:auto}.wifiHistory th{position:sticky;top:0;background:#1f2937}

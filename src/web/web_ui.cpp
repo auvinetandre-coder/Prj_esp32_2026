@@ -10,6 +10,7 @@
 #include <time.h>
 #include "../build_info.h"
 #include "../boot/boot_manager.h"
+#include "../diagnostics/serial_capture.h"
 
 static const char *ROUTEUR_ACTIVE_FIRMWARE_MARKER = ROUTEUR_FIRMWARE_MARKER;
 static const char *RECOVERY_NVS_NAMESPACE = "recovery";
@@ -188,6 +189,12 @@ bool WebUi::requireAuth() {
 }
 
 void WebUi::routes() {
+  consoleRoutes();
+  server.on("/www/serial_console.js", HTTP_GET, [this]() {
+    if (!streamLittleFsFile("/www/serial_console.js", "application/javascript; charset=utf-8")) {
+      server.send(404, "text/plain", "Console serie absente de LittleFS");
+    }
+  });
   server.on("/", HTTP_GET, [this]() {
     if (!requireAuth()) return;
     server.sendHeader("Location", "/app", true);
@@ -230,7 +237,7 @@ void WebUi::routes() {
   server.on("/api/status", HTTP_GET, [this]() {
     DynamicJsonDocument doc(6144);
     JsonObject out = doc.to<JsonObject>();
-    state.toJson(out, false);
+    state.toJson(out);
     JsonObject device = config.device();
     JsonObject system = config.system();
     const char *deviceName = device["deviceName"] | device["name"] | state.moduleName.c_str();
@@ -245,8 +252,6 @@ void WebUi::routes() {
     out["uptimeMs"] = nowMs;
     time_t nowEpoch = time(nullptr);
     out["currentEpochMs"] = nowEpoch > 1600000000 ? static_cast<uint64_t>(nowEpoch) * 1000ULL + (nowMs % 1000UL) : 0;
-    out["simulationMode"] = state.simulationMode;
-    out["simulationType"] = system["simulation"]["mode"] | state.simulationType.c_str();
     out["gridPowerSource"] = system["router"]["gridPowerSource"] | state.gridPowerSource.c_str();
     sendJson(doc);
   });
@@ -328,7 +333,7 @@ void WebUi::routes() {
   server.on("/api/diagnostic", HTTP_GET, [this]() {
     DynamicJsonDocument doc(8192);
     JsonObject out = doc.to<JsonObject>();
-    state.toJson(out, true);
+    state.toJson(out);
     JsonObject device = config.device();
     JsonObject system = config.system();
     const char *deviceName = device["deviceName"] | device["name"] | state.moduleName.c_str();
@@ -338,9 +343,13 @@ void WebUi::routes() {
     out["firmwareVersion"] = ROUTEUR_FIRMWARE_VERSION;
     out["littleFsVersion"] = readLittleFsTextFile("/www/littlefs_version.txt");
     out["buildTimestamp"] = ROUTEUR_BUILD_TIMESTAMP;
-    out["simulationMode"] = state.simulationMode;
-    out["simulationType"] = system["simulation"]["mode"] | state.simulationType.c_str();
     out["gridPowerSource"] = system["router"]["gridPowerSource"] | state.gridPowerSource.c_str();
+    sendJson(doc);
+  });
+  server.on("/api/diagnostic/wifi", HTTP_GET, [this]() {
+    if (!requireAuth()) return;
+    DynamicJsonDocument doc(12288);
+    wifi.diagnosticsToJson(doc.to<JsonObject>());
     sendJson(doc);
   });
   server.on("/api/system-info", HTTP_GET, [this]() { sendSystemInfo(); });
@@ -366,7 +375,7 @@ void WebUi::routes() {
       file.close();
       return;
     }
-    server.send(200, "text/markdown", F("# RouteurSolaireESP32\n\nREADME embarque non trouve dans LittleFS.\n\nPour l'afficher completement depuis l'ESP32, placer README.md dans le dossier data puis televerser les donnees LittleFS.\n\nSections principales : presentation, capteurs, actionneurs, interface Web, securites, simulation, cablage, installation Arduino IDE, diagnostic et avertissement 230 V.\n"));
+    server.send(200, "text/markdown", F("# RouteurSolaireESP32\n\nREADME embarque non trouve dans LittleFS.\n\nPour l'afficher completement depuis l'ESP32, placer README.md dans le dossier data puis televerser les donnees LittleFS.\n\nSections principales : presentation, capteurs, actionneurs, interface Web, securites, cablage, installation Arduino IDE, diagnostic et avertissement 230 V.\n"));
   });
   server.on("/api/device", HTTP_POST, [this]() { saveConfig("device", "/config/device.json"); });
   server.on("/api/system", HTTP_POST, [this]() { saveConfig("system", "/config/system.json"); });
@@ -429,7 +438,6 @@ void WebUi::routes() {
       return;
     }
     state.manualCommandPersistent = controlMode == "manual";
-    state.manualCommandSimulationMode = state.simulationMode;
     state.manualCommandActuatorId = id;
     state.manualCommand = command.length() ? command : "setPower";
     state.manualCommandPercent = value;
@@ -449,127 +457,6 @@ void WebUi::routes() {
     statusLed.identify(millis(), 120000UL);
     state.logEvent("INFO", "IDENTIFY", "Clignotement LEDs diagnostic pendant 120 s", "WebUi");
     server.send(200, "application/json", "{\"ok\":true,\"durationMs\":120000}");
-  });
-  server.on("/api/logs/export", HTTP_GET, [this]() {
-    DynamicJsonDocument doc(8192);
-    JsonArray events = doc["events"].to<JsonArray>();
-    state.eventsToJson(events);
-    sendJson(doc);
-  });
-  server.on("/api/logs/automate", HTTP_GET, [this]() {
-    if (!requireAuth()) return;
-    DynamicJsonDocument doc(12288);
-    doc["enabled"] = state.automateDebug;
-    state.automateDebugToJson(doc["events"].to<JsonArray>());
-    sendJson(doc);
-  });
-  server.on("/api/logs/automate", HTTP_POST, [this]() {
-    if (!requireAuth()) return;
-    const String enabled = server.arg("enabled");
-    if (enabled != "true" && enabled != "false") {
-      server.send(400, "application/json", "{\"ok\":false}");
-      return;
-    }
-    state.automateDebug = enabled == "true";
-    server.send(200, "application/json", "{\"ok\":true}");
-  });
-  server.on("/api/logs/clear", HTTP_POST, [this]() {
-    if (!requireAuth()) return;
-    state.clearEvents();
-    state.logEvent("INFO", "CONFIG_CHANGED", "Logs effaces depuis l interface Web", "WebUi");
-    server.send(200, "application/json", "{\"ok\":true}");
-  });
-  server.on("/api/simulation", HTTP_GET, [this]() {
-    DynamicJsonDocument doc(4096);
-    simulation.toJson(doc.to<JsonObject>());
-    sendJson(doc);
-  });
-  server.on("/api/simulation/start", HTTP_POST, [this]() {
-    if (!requireAuth()) return;
-    simulation.enable();
-    server.send(200, "application/json", "{\"ok\":true}");
-  });
-  server.on("/api/simulation/stop", HTTP_POST, [this]() {
-    if (!requireAuth()) return;
-    state.manualAllOffPending = true;
-    state.manualCommandSource = "WEB";
-    state.manualCommandReason = "Arret simulation depuis WebUi";
-    state.logEvent("INFO", "MANUAL_ALLOFF_REQUEST", state.manualCommandReason, "WebUi");
-    simulation.disable();
-    server.send(200, "application/json", "{\"ok\":true}");
-  });
-  server.on("/api/simulation/enable", HTTP_POST, [this]() {
-    if (!requireAuth()) return;
-    simulation.enable();
-    server.send(200, "application/json", "{\"ok\":true}");
-  });
-  server.on("/api/simulation/disable", HTTP_POST, [this]() {
-    if (!requireAuth()) return;
-    state.manualAllOffPending = true;
-    state.manualCommandSource = "WEB";
-    state.manualCommandReason = "Desactivation simulation depuis WebUi";
-    state.logEvent("INFO", "MANUAL_ALLOFF_REQUEST", state.manualCommandReason, "WebUi");
-    simulation.disable();
-    server.send(200, "application/json", "{\"ok\":true}");
-  });
-  server.on("/api/simulation/mode", HTTP_POST, [this]() {
-    if (!requireAuth()) return;
-    simulation.setMode(server.arg("mode").length() ? server.arg("mode") : server.arg("plain"));
-    server.send(200, "application/json", "{\"ok\":true}");
-  });
-  server.on("/api/simulation/scenario", HTTP_POST, [this]() {
-    if (!requireAuth()) return;
-    simulation.setScenario(server.arg("scenario").length() ? server.arg("scenario") : server.arg("plain"));
-    server.send(200, "application/json", "{\"ok\":true}");
-  });
-  server.on("/api/simulation/randomize", HTTP_POST, [this]() {
-    if (!requireAuth()) return;
-    simulation.enable();
-    simulation.setMode("random");
-    simulation.randomize();
-    server.send(200, "application/json", "{\"ok\":true}");
-  });
-  server.on("/api/simulation/values", HTTP_POST, [this]() {
-    if (!requireAuth()) return;
-    String error;
-    bool ok = simulation.setValuesFromJson(server.arg("plain"), error);
-    server.send(ok ? 200 : 400, "application/json", ok ? "{\"ok\":true}" : String("{\"ok\":false,\"error\":\"") + error + "\"}");
-  });
-  server.on("/api/simulation/set-values", HTTP_POST, [this]() {
-    if (!requireAuth()) return;
-    DynamicJsonDocument doc(1536);
-    if (deserializeJson(doc, server.arg("plain"))) {
-      server.send(400, "application/json", "{\"ok\":false,\"error\":\"JSON invalide\"}");
-      return;
-    }
-    DynamicJsonDocument normalized(2048);
-    JsonObject root = normalized.to<JsonObject>();
-    JsonObject jsy = root["jsy"].to<JsonObject>();
-    jsy["available"] = doc["jsyAvailable"] | true;
-    jsy["gridPowerW"] = doc["gridPowerW"] | state.gridPowerW;
-    jsy["voltageV"] = doc["voltageV"] | state.gridVoltageV;
-    jsy["currentA"] = doc["currentA"] | state.gridCurrentA;
-    jsy["powerFactor"] = doc["powerFactor"] | state.gridPowerFactor;
-    jsy["frequencyHz"] = doc["frequencyHz"] | state.gridFrequencyHz;
-    JsonObject tic = root["tic"].to<JsonObject>();
-    tic["available"] = doc["ticAvailable"] | true;
-    tic["apparentPowerVA"] = doc["apparentPowerVA"] | state.ticApparentPowerVA;
-    tic["currentA"] = doc["ticCurrentA"] | state.ticCurrentA;
-    tic["tariff"] = "BASE";
-    JsonArray ds = root["ds18b20"].to<JsonArray>();
-    const char *ids[] = {"sonde1", "sonde2", "sonde3"};
-    const char *keys[] = {"temperatureTop", "temperatureMiddle", "temperatureBottom"};
-    for (uint8_t i = 0; i < 3; i++) {
-      JsonObject item = ds.add<JsonObject>();
-      item["id"] = ids[i];
-      item["available"] = true;
-      item["temperatureC"] = doc[keys[i]] | state.ds18b20Temps[i];
-    }
-    String body;
-    serializeJson(normalized, body);
-    String error;
-    bool ok = simulation.setValuesFromJson(body, error);
-    server.send(ok ? 200 : 400, "application/json", ok ? "{\"ok\":true}" : String("{\"ok\":false,\"error\":\"") + error + "\"}");
   });
   server.on("/api/rules/validate", HTTP_GET, [this]() {
     if (!requireAuth()) return;
@@ -727,7 +614,7 @@ void WebUi::appendActuatorMeasurements(JsonArray items) {
 float WebUi::gridPowerForGraph() {
   const bool usesTic = state.gridPowerSource == "TIC" ||
       (state.gridPowerSource == "AUTO" && state.ticAvailable && isfinite(state.ticGridPowerW));
-  if (state.simulationMode || usesTic) return state.gridPowerW;
+  if (usesTic) return state.gridPowerW;
   const auto sample = sensors.gridPowerSample("grid", "gridPowerW", millis());
   return sample.valid ? sample.watts : NAN;
 }
@@ -799,9 +686,6 @@ void WebUi::sendStatusLite() {
   out["safetyTripped"] = state.safetyTripped;
   out["safetyLevel"] = state.safetyLevel;
   out["safetyReason"] = state.safetyReason;
-  out["simulationMode"] = state.simulationMode;
-  out["simulationType"] = system["simulation"]["mode"] | state.simulationType.c_str();
-  out["simulationRemainingMs"] = state.simulationRemainingMs;
   out["mqttEnabled"] = state.mqttEnabled;
   out["mqttConnected"] = state.mqttConnected;
   out["mqttStatus"] = state.mqttStatus;
@@ -1146,7 +1030,6 @@ void WebUi::sendSystemInfo() {
   }
   out["safetyLevel"] = state.safetyLevel.length() ? state.safetyLevel : "N/A";
   out["safetyReason"] = state.safetyReason.length() ? state.safetyReason : "N/A";
-  out["simulationMode"] = state.simulationMode;
 
   const esp_partition_t *running = esp_ota_get_running_partition();
   const esp_partition_t *boot = esp_ota_get_boot_partition();
@@ -1395,8 +1278,6 @@ void WebUi::saveConfig(const char *name, const char *path) {
   if (ok && strcmp(name, "rules") == 0) rules.loadRules();
   if (ok && strcmp(name, "device") == 0) state.begin(config);
   if (ok && strcmp(name, "system") == 0) {
-    state.simulationType = config.system()["simulation"]["mode"] | state.simulationType.c_str();
-    state.simulationScenario = config.system()["simulation"]["scenario"] | state.simulationScenario.c_str();
     state.gridPowerSource = config.system()["router"]["gridPowerSource"] | state.gridPowerSource.c_str();
   }
   if (ok && strcmp(name, "sensors") == 0) sensors.reloadConfiguration();
@@ -1457,9 +1338,9 @@ String WebUi::litePage() {
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>RouteurSolaireESP32 Lite</title>
 <style>
-body{margin:0;background:#111827;color:#F9FAFB;font-family:system-ui,Segoe UI,sans-serif}nav{background:#050505;padding:12px;display:flex;gap:8px;flex-wrap:wrap;position:sticky;top:0}button{background:#1F2937;color:#F9FAFB;border:1px solid #374151;border-radius:8px;padding:10px 12px}main{padding:14px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px}.card{background:#1F2937;border:1px solid #374151;border-radius:8px;padding:12px}.label{color:#9CA3AF;font-size:12px}.value{font-size:22px;margin-top:6px}.ok{color:#22C55E}.bad{color:#F44336}.warn{color:#FF9800}table{width:100%;border-collapse:collapse;background:#1F2937;margin-top:10px}td,th{padding:8px;border-bottom:1px solid #374151;text-align:left}input,select{width:100%;background:#0B1220;color:#F9FAFB;border:1px solid #374151;border-radius:8px;padding:9px}.row{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px}.banner{background:#7f1d1d;border:1px solid #F44336;border-radius:8px;padding:10px;margin:8px 0}.sim{background:#2a1b08;border:1px solid #FF9800;border-radius:8px;padding:10px;margin:8px 0}
+body{margin:0;background:#111827;color:#F9FAFB;font-family:system-ui,Segoe UI,sans-serif}nav{background:#050505;padding:12px;display:flex;gap:8px;flex-wrap:wrap;position:sticky;top:0}button{background:#1F2937;color:#F9FAFB;border:1px solid #374151;border-radius:8px;padding:10px 12px}main{padding:14px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px}.card{background:#1F2937;border:1px solid #374151;border-radius:8px;padding:12px}.label{color:#9CA3AF;font-size:12px}.value{font-size:22px;margin-top:6px}.ok{color:#22C55E}.bad{color:#F44336}.warn{color:#FF9800}input,select{width:100%;background:#0B1220;color:#F9FAFB;border:1px solid #374151;border-radius:8px;padding:9px}.row{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px}.banner{background:#7f1d1d;border:1px solid #F44336;border-radius:8px;padding:10px;margin:8px 0}.sim{background:#2a1b08;border:1px solid #FF9800;border-radius:8px;padding:10px;margin:8px 0}
 </style></head><body>
-<nav><button onclick="show('dash')">Dashboard</button><button onclick="show('sim')">Simulation</button><button onclick="show('diag')">Diagnostic</button><button onclick="show('wifi')">WiFi</button><button onclick="location.href='/app'">Interface principale</button><button onclick="location.href='/recovery'">Recovery</button></nav>
+<nav><button onclick="show('dash')">Dashboard</button><button onclick="show('wifi')">WiFi</button><button onclick="location.href='/app'">Interface principale</button><button onclick="location.href='/recovery'">Recovery</button></nav>
 <main id="v">Chargement...</main>
 <script>
 let status={}, current='dash';
@@ -1468,18 +1349,12 @@ function esc(v){return String(v==null?'':v).replace(/[&<>"']/g,function(m){retur
 function fmt(v){return typeof v==='number'?Math.round(v*10)/10:v}
 async function api(p,o){let r=await fetch(p,o);let t=await r.text();if(!r.ok)throw new Error('HTTP '+r.status+' '+t);try{return JSON.parse(t)}catch(e){return t}}
 function card(l,v,u,c){return '<div class="card"><div class="label">'+l+'</div><div class="value '+(c||'')+'">'+esc(fmt(v))+' '+(u||'')+'</div></div>'}
-function emptyStatus(){return {networkMode:'inconnu',localIp:'-',stationIp:'-',apIp:'192.168.4.1',wifiConnected:false,wifiSsid:'-',rssi:0,injectionW:0,gridPowerW:0,ssr1PowerPct:0,ssr2PowerPct:0,robotDynPowerPct:0,temperature1C:0,temperature2C:0,temperature3C:0,heapFree:0,events:[]}}
-async function load(diag){try{status=await api(diag?'/api/diagnostic':'/api/status-lite')}catch(e){status=emptyStatus();status.loadError=e.message}}
-function top(){return (status.safetyTripped?'<div class="banner">SECURITE: '+esc(status.safetyReason)+'</div>':'')+(status.simulationMode?'<div class="sim">MODE SIMULATION ACTIF - sorties puissance OFF</div>':'')}
+function emptyStatus(){return {networkMode:'inconnu',localIp:'-',stationIp:'-',apIp:'192.168.4.1',wifiConnected:false,wifiSsid:'-',rssi:0,injectionW:0,gridPowerW:0,ssr1PowerPct:0,ssr2PowerPct:0,robotDynPowerPct:0,temperature1C:0,temperature2C:0,temperature3C:0,heapFree:0}}
+async function load(){try{status=await api('/api/status-lite')}catch(e){status=emptyStatus();status.loadError=e.message}}
+function top(){return status.safetyTripped?'<div class="banner">SECURITE: '+esc(status.safetyReason)+'</div>':''}
 async function show(p){current=p;await render()}
-async function render(){q('#v').innerHTML='<h2>RouteurSolaireESP32</h2><p>Chargement API...</p>';await load(current==='diag');let h='<h2>RouteurSolaireESP32</h2>'+(status.loadError?'<div class="banner">Erreur API: '+esc(status.loadError)+'<br>Teste /api/ping puis /api/status</div>':'')+top();if(current==='dash')h+=dash();if(current==='sim')h+=sim();if(current==='diag')h+=diag();if(current==='wifi')h+=wifi();q('#v').innerHTML=h}
+async function render(){q('#v').innerHTML='<h2>RouteurSolaireESP32</h2><p>Chargement API...</p>';await load();let h='<h2>RouteurSolaireESP32</h2>'+(status.loadError?'<div class="banner">Erreur API: '+esc(status.loadError)+'<br>Teste /api/ping puis /api/status</div>':'')+top();if(current==='dash')h+=dash();if(current==='wifi')h+=wifi();q('#v').innerHTML=h}
 function dash(){return '<div class="grid">'+card('Mode reseau',status.networkMode,'')+card('IP box',status.stationIp||status.localIp,'')+card('IP AP',status.apIp||'192.168.4.1','')+card('Injection',status.injectionW,'W','ok')+card('Reseau',status.gridPowerW,'W')+card('SSR1',status.ssr1PowerPct,'%')+card('SSR2',status.ssr2PowerPct,'%')+card('RobotDyn',status.robotDynPowerPct,'%')+card('Sonde1',status.temperature1C,'C')+card('Sonde2',status.temperature2C,'C')+card('Sonde3',status.temperature3C,'C')+card('Heap',status.heapFree,'o')+'</div>'}
-function sim(){return '<h3>Simulation sans capteurs</h3><div class="row"><div><label>gridPowerW</label><input id="g" type="number" value="'+(status.gridPowerW||-800)+'"></div><div><label>Tension</label><input id="vlt" type="number" value="'+(status.gridVoltageV||231)+'"></div><div><label>Courant</label><input id="cur" type="number" value="'+(status.gridCurrentA||4)+'"></div><div><label>Sonde1</label><input id="t1" type="number" value="'+(status.temperature1C||45)+'"></div><div><label>Sonde2</label><input id="t2" type="number" value="'+(status.temperature2C||42)+'"></div><div><label>Sonde3</label><input id="t3" type="number" value="'+(status.temperature3C||38)+'"></div></div><p><button onclick="simOn()">Activer</button> <button onclick="simValues()">Appliquer</button> <button onclick="simRand()">Aleatoire</button> <button onclick="simOff()">Desactiver</button></p>'+dash()}
-async function simOn(){await fetch('/api/simulation/enable',{method:'POST'});await render()}
-async function simOff(){await fetch('/api/simulation/disable',{method:'POST'});await render()}
-async function simRand(){await fetch('/api/simulation/randomize',{method:'POST'});await render()}
-async function simValues(){let body={jsy:{available:true,gridPowerW:Number(q('#g').value),voltageV:Number(q('#vlt').value),currentA:Number(q('#cur').value),powerFactor:.96,frequencyHz:50},tic:{available:true,apparentPowerVA:900,currentA:Number(q('#cur').value),tariff:'BASE'},ds18b20:[{id:'sonde1',available:true,temperatureC:Number(q('#t1').value)},{id:'sonde2',available:true,temperatureC:Number(q('#t2').value)},{id:'sonde3',available:true,temperatureC:Number(q('#t3').value)}]};await fetch('/api/simulation/values',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});await render()}
-function diag(){let ev=status.events||[];return dash()+'<h3>Evenements</h3><table><tr><th>ms</th><th>Niveau</th><th>Code</th><th>Message</th></tr>'+ev.map(function(e){return '<tr><td>'+e.timestampMs+'</td><td>'+esc(e.level)+'</td><td>'+esc(e.code)+'</td><td>'+esc(e.message)+'</td></tr>'}).join('')+'</table>'}
 function wifi(){return '<div class="grid">'+card('Mode',status.networkMode,'')+card('WiFi connecte',status.wifiConnected,'')+card('SSID',status.wifiSsid,'')+card('RSSI',status.rssi,'')+card('IP box',status.stationIp,'')+card('IP AP',status.apIp,'')+'</div><p>Si tu es connecte au point d&#39;acces local RouteurSolaire_Config, ouvre http://192.168.4.1</p>'}
 setInterval(function(){if(current==='dash')render()},5000);render();
 </script></body></html>

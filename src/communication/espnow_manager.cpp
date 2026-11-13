@@ -4,6 +4,7 @@
 #include "../build_info.h"
 #include <LittleFS.h>
 #include <math.h>
+#include "../diagnostics/serial_capture.h"
 
 static EspNowManager *gEspNow = nullptr;
 static const uint8_t ESPNOW_BROADCAST_MAC[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
@@ -173,7 +174,7 @@ void EspNowManager::sendActuatorState(const String &id, float commandPercent, fl
   msg.ttlMs = controlToken; // Status metadata, not a command expiry.
   msg.commandPercent = isfinite(commandPercent) ? constrain(commandPercent, 0.0f, 100.0f) : 0.0f;
   msg.value = isfinite(outputPercent) ? constrain(outputPercent, 0.0f, 100.0f) : 0.0f;
-  msg.reservedCounter = (outputOn ? 1U : 0U) | (enabled ? 2U : 0U) | (locked ? 4U : 0U) | (state.simulationMode ? 8U : 0U);
+  msg.reservedCounter = (outputOn ? 1U : 0U) | (enabled ? 2U : 0U) | (locked ? 4U : 0U);
   for (JsonVariant peer : config.system()["peers"].as<JsonArray>()) sendMessage(peer.as<String>(), msg);
 }
 
@@ -221,7 +222,8 @@ void EspNowManager::receiveActuatorState(const String &mac, const EspNowMessage 
   slot->outputOn = message.reservedCounter & 1U;
   slot->enabled = message.reservedCounter & 2U;
   slot->safetyLocked = message.reservedCounter & 4U;
-  slot->simulated = message.reservedCounter & 8U;
+  // Legacy bit 3 still inhibits old peer outputs; never emitted by this firmware.
+  slot->legacyOutputInhibited = message.reservedCounter & 8U;
   slot->receivedMs = millis();
   strlcpy(slot->controlMode, message.mode, sizeof(slot->controlMode));
   slot->controlToken = message.ttlMs;
@@ -243,6 +245,7 @@ void EspNowManager::onSent(const uint8_t *mac, esp_now_send_status_t status) {
 }
 
 void EspNowManager::handleReceive(const uint8_t *mac, const uint8_t *data, int len) {
+  ++state.espNowRawRxCount;
   String peer = macToString(mac);
   // Legacy MSG_STATUS is also 4. Its 0xff layout marker distinguishes it
   // from generic v4 packets; otherwise all actuator status frames are dropped.
@@ -338,6 +341,8 @@ void EspNowManager::handleReceive(const uint8_t *mac, const uint8_t *data, int l
 }
 
 void EspNowManager::handleSendStatus(const uint8_t *mac, esp_now_send_status_t status) {
+  if (status == ESP_NOW_SEND_SUCCESS) ++state.espNowTxSuccessCount;
+  else ++state.espNowTxFailureCount;
   if (status != ESP_NOW_SEND_SUCCESS && millis() - lastSendFailureLogMs > 5000UL) {
     lastSendFailureLogMs = millis();
     state.addLog("ESP-NOW send failed: " + macToString(mac));
@@ -380,6 +385,51 @@ bool EspNowManager::isNodeKnown(const String &mac) {
     if (macToString(discoveredNodes[i].mac).equalsIgnoreCase(mac)) return true;
   }
   return false;
+}
+
+bool EspNowManager::peerDiagnostic(uint8_t index, EspNowPeerDiagnostic &out) {
+  JsonArray peers = config.system()["peers"].as<JsonArray>();
+  if (index >= peers.size()) return false;
+  String peer = peers[index].as<String>();
+  peer.toUpperCase();
+  peer.toCharArray(out.mac, sizeof(out.mac));
+  uint8_t mac[6]{};
+  if (!parseMac(peer, mac)) return true;
+  esp_now_peer_info_t info{};
+  out.registered = esp_now_get_peer(mac, &info) == ESP_OK;
+  if (out.registered) { out.channel = info.channel; out.interfaceId = info.ifidx; }
+  for (const auto &node : discoveredNodes) {
+    if (!node.used || memcmp(node.mac, mac, 6)) continue;
+    const uint32_t lastSeen = node.lastSeenMs;
+    out.seen = lastSeen != 0;
+    if (out.seen) out.ageMs = millis() - lastSeen;
+    break;
+  }
+  return true;
+}
+
+uint32_t EspNowManager::configuredPeerSilenceMs(uint16_t &peerCount, uint32_t &signature) {
+  peerCount = 0;
+  signature = 2166136261UL;
+  uint32_t youngestAge = UINT32_MAX;
+  for (JsonVariant item : config.system()["peers"].as<JsonArray>()) {
+    String peer = item.as<String>();
+    uint8_t mac[6]{};
+    if (!parseMac(peer, mac)) continue;
+    bool broadcast = true;
+    for (uint8_t byte : mac) if (byte != 0xff) broadcast = false;
+    if (broadcast || (mac[0] & 1)) continue;
+    ++peerCount;
+    for (uint8_t byte : mac) signature = (signature ^ byte) * 16777619UL;
+    for (const auto &node : discoveredNodes) {
+      if (!node.used || memcmp(node.mac, mac, 6)) continue;
+      const uint32_t lastSeen = node.lastSeenMs;
+      if (!lastSeen) continue;
+      const uint32_t age = millis() - lastSeen;
+      if (age < youngestAge) youngestAge = age;
+    }
+  }
+  return youngestAge;
 }
 
 bool EspNowManager::isNodeOk(const String &mac, uint32_t maxAgeMs) {
@@ -583,7 +633,10 @@ bool EspNowManager::sendDiscovery() {
   lastDiscoverySentMs = packet.uptimeMs;
 
   esp_err_t result = esp_now_send(ESPNOW_BROADCAST_MAC, reinterpret_cast<const uint8_t *>(&packet), sizeof(packet));
+  ++state.espNowDiscoveryAttempts;
+  state.espNowDiscoveryResult = result;
   if (result != ESP_OK) {
+    ++state.espNowDiscoveryFailures;
     state.addLog("ESP-NOW discovery TX failed");
     return false;
   }

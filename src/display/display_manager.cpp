@@ -1,4 +1,5 @@
 #include "display_manager.h"
+#include "../diagnostics/serial_capture.h"
 
 void DisplayManager::begin() {
   loadConfig();
@@ -186,7 +187,7 @@ void DisplayManager::renderOutputs() {
   drawText(0, 16, String("SSR1 ") + fmtFloat(state.ssr1PowerPct) + "%");
   drawText(0, 28, String("SSR2 ") + fmtFloat(state.ssr2PowerPct) + "%");
   drawText(0, 40, String("TRIAC ") + fmtFloat(state.robotDynPowerPct) + "%");
-  drawText(0, 52, state.simulationMode ? "SIMULATION" : state.systemMode);
+  drawText(0, 52, state.systemMode);
 }
 
 String DisplayManager::fmtFloat(float value, uint8_t decimals) {

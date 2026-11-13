@@ -116,4 +116,14 @@ Valider les commandes partagées, les expirations et la perte/reprise du lien su
 - reduction LittleFS sans mesure prealable.
 
 
-Les conditions calendaires, variables utilisateur, simulation complète de règle et imbrication limitée à deux niveaux restent des extensions de l'automate après stabilisation ; voir [ROADMAP_AUTOMATE.md](ROADMAP_AUTOMATE.md).
+## Extensions de l'automate après stabilisation
+
+Consolidation documentaire du 11 novembre 2026. Le PID commun, les décisions par actionneur, OFF et les commandes partagées sont décrits dans [PID unique](PID_UNIQUE.md) et l'[audit du 4 novembre](AUDIT_2026-11-04.md). Leur présence ne remplace pas les essais sur banc.
+
+- Stabiliser l'éditeur SI / ALORS / SINON existant et les conditions plates ET/OU avant les extensions.
+- Étudier conditions calendaires avec heure valide, variables virtuelles utilisateur, imbrication limitée à deux niveaux et simulation complète de règle.
+- Conserver RuleEngine et PIDController comme producteurs de propositions, AutomateManager pour l'arbitrage, SafetyManager prioritaire et ActuatorManager pour l'application physique.
+- Publier les transitions et l'état automate dans RuntimeState, l'API et les diagnostics, sans dépendance du recovery vers l'automate.
+- Examiner RECOVERY_REQUEST et préserver la demande explicite de passage en factory.
+
+Les rôles MASTER/BACKUP et leur redondance, retirés le 21 octobre, ne font plus partie de la feuille de route. Les critères de réception sont centralisés dans [les priorités](TODO_PRIORITES.md).

@@ -18,13 +18,13 @@ Depuis la racine, avec Node disponible :
 
 ```powershell
 node --check data/www/app.js
-Get-ChildItem tools/test_*.js | ForEach-Object {
+Get-ChildItem tools/tests/test_*.js | ForEach-Object {
     & node $_.FullName
     if ($LASTEXITCODE -ne 0) { throw ('Echec du test : ' + $_.Name) }
 }
 ```
 
-Les 24 scripts `tools/test_*.js` passent au 4 novembre. Ils couvrent des fonctions WebUI et des blocs C++ extraits ou simulés. Le test de `/lite` vérifie le script embarqué. Les contrôles ne remplacent pas une compilation ni un essai ESP32.
+Les 24 scripts `tools/tests/test_*.js` passent au 4 novembre. Ils couvrent des fonctions WebUI et des blocs C++ extraits ou simulés. Le test de `/lite` vérifie le script embarqué. Les contrôles ne remplacent pas une compilation ni un essai ESP32.
 
 Ce fichier est le point de reference rapide pour eviter de rechercher a chaque fois la configuration Arduino, le schema de partitions, les scripts, les noms de fichiers et les emplacements.
 
@@ -202,8 +202,8 @@ ota_0 : 1966080 octets
 Scripts directs selon le port :
 
 ```bat
-tools\Televerser_Firmware_COM3.bat
-tools\Televerser_Firmware_COM4.bat
+Televerser_Firmware_COM3.bat
+Televerser_Firmware_COM4.bat
 ```
 
 Ces scripts televersent le firmware principal vers `ota_0`.
@@ -220,11 +220,11 @@ Le 18 octobre 2026, la compilation a reussi mais la connexion sur COM4 a echoue 
 Invalid head of packet (0x65): Possible serial noise or corruption.
 ```
 
-La vitesse dans `tools\Televerser_Firmware_COM4.bat` a ete reduite de `921600` a `115200` bauds pour tenter de fiabiliser le transfert. Le succes d'un televersement apres cette modification n'a pas ete confirme dans cet echange. Cette modification concerne seulement ce script, pas les scripts COM3, LittleFS ou recovery.
+La vitesse dans `Televerser_Firmware_COM4.bat` a ete reduite de `921600` a `115200` bauds pour tenter de fiabiliser le transfert. Le succes d'un televersement apres cette modification n'a pas ete confirme dans cet echange. Cette modification concerne seulement ce script, pas les scripts COM3, LittleFS ou recovery.
 
 En cas de `Wrong boot mode`, ou si la connexion n'aboutit pas :
 
-1. Relancer `tools\Televerser_Firmware_COM4.bat`.
+1. Relancer `Televerser_Firmware_COM4.bat`.
 2. A l'apparition de `Connecting...`, maintenir `BOOT`.
 3. Appuyer brievement sur `EN` / `RESET` en gardant `BOOT` appuye.
 4. Relacher `BOOT` lorsque l'ecriture commence (`Writing...` ou progression).
@@ -262,8 +262,8 @@ data\README_LITTLEFS.txt
 Scripts selon le port :
 
 ```bat
-tools\Televerser_LittleFS_COM3.bat
-tools\Televerser_LittleFS_COM4.bat
+Televerser_LittleFS_COM3.bat
+Televerser_LittleFS_COM4.bat
 ```
 
 Ces scripts :
@@ -294,8 +294,8 @@ size   : 0x100000
 Direct USB :
 
 ```bat
-tools\Televerser_LittleFS_COM3.bat
-tools\Televerser_LittleFS_COM4.bat
+Televerser_LittleFS_COM3.bat
+Televerser_LittleFS_COM4.bat
 ```
 
 Le script pose la question :
@@ -345,11 +345,13 @@ Il ne doit pas contenir :
 Scripts selon le port :
 
 ```bat
-tools\Televerser_Recovery_COM3.bat
-tools\Televerser_Recovery_COM4.bat
+02_Installer_Recovery.bat -Port COM3
+02_Installer_Recovery.bat -Port COM4
 ```
 
-Ces scripts concernent la partition `factory`.
+Ces raccourcis historiques effectuent l’installation complete (bootloader, table, otadata et factory) sur carte neuve/effacee.
+
+Pour remplacer uniquement le firmware Recovery sans reecrire ces autres zones, utiliser `02b_Mettre_A_Jour_Recovery_Seule.bat` a la racine, avec un binaire applicatif Recovery deja construit. Voir [procedure et controles](INSTALLATION_PAR_PHASES.md#remplacer-uniquement-la-recovery-sur-un-esp-deja-installe).
 
 Ne pas utiliser ces scripts pour mettre a jour le firmware principal.
 
@@ -359,14 +361,14 @@ Scripts disponibles :
 
 ```text
 COM3 :
-tools\Televerser_Firmware_COM3.bat
-tools\Televerser_LittleFS_COM3.bat
-tools\Televerser_Recovery_COM3.bat
+Televerser_Firmware_COM3.bat
+Televerser_LittleFS_COM3.bat
+02_Installer_Recovery.bat -Port COM3
 
 COM4 :
-tools\Televerser_Firmware_COM4.bat
-tools\Televerser_LittleFS_COM4.bat
-tools\Televerser_Recovery_COM4.bat
+Televerser_Firmware_COM4.bat
+Televerser_LittleFS_COM4.bat
+02_Installer_Recovery.bat -Port COM4
 ```
 
 Pour voir les cartes branchees depuis Arduino CLI :

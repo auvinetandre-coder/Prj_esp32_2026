@@ -3,6 +3,7 @@
 #include <esp_system.h>
 #include <driver/gpio.h>
 #include <hal/gpio_ll.h>
+#include "../diagnostics/serial_capture.h"
 
 ActuatorManager *ActuatorManager::instance = nullptr;
 
@@ -10,8 +11,6 @@ void ActuatorManager::begin() {
   instance = this;
   espnow.setActuatorCommandHandler(&ActuatorManager::handleEspNowActuatorCommand, this);
   commandTimeoutMs = config.system()["router"]["commandTimeoutMs"] | 5000;
-  simulationMode = state.simulationMode;
-  previousSimulationMode = simulationMode;
 
   for (JsonObject actuator : config.actuators()) {
     if (actuator["source"].as<String>() != "local") continue;
@@ -36,25 +35,6 @@ void ActuatorManager::begin() {
 
 void ActuatorManager::loop(uint32_t now) {
   commandTimeoutMs = config.system()["router"]["commandTimeoutMs"] | commandTimeoutMs;
-  simulationMode = state.simulationMode;
-
-  if (!previousSimulationMode && simulationMode) {
-    // Simulation skips digitalWrite: first release any real output left ON.
-    allOff();
-    state.addLog("Entree en mode simulation: sorties physiques OFF");
-  }
-  if (previousSimulationMode && !simulationMode) {
-    allOff();
-    realModeHoldUntilMs = now + 2000UL;
-    state.addLog("Sortie du mode simulation: sorties OFF pendant 2 s");
-  }
-  previousSimulationMode = simulationMode;
-
-  if (!simulationMode && realModeHoldUntilMs && now < realModeHoldUntilMs) {
-    allOff();
-    return;
-  }
-  if (realModeHoldUntilMs && now >= realModeHoldUntilMs) realModeHoldUntilMs = 0;
 
   if (state.safetyTripped) lockAllForSafety(state.safetyReason);
   else if (safetyLocked) unlockSafety();
@@ -251,7 +231,7 @@ void ActuatorManager::setCommandPercent(const String &id, float percent) {
       channel->espNowLeaseMs = 0;
       channel->currentState = percent > 0.5f;
     }
-    if (!state.simulationMode) espnow.sendActuatorCommand(actuator["mac"] | "", remoteId, percent, actuator["mode"] | "OFF", actuator["ttlMs"] | 1000, channel ? channel->sharedControl.token : 0);
+    espnow.sendActuatorCommand(actuator["mac"] | "", remoteId, percent, actuator["mode"] | "OFF", actuator["ttlMs"] | 1000, channel ? channel->sharedControl.token : 0);
   } else {
     Actuator *channel = channelFor(id);
     if (channel) {
@@ -266,8 +246,8 @@ void ActuatorManager::setCommandPercent(const String &id, float percent) {
     if (Actuator *channel = channelForExisting(id)) stopTimedSsr(channel);
   }
   publishPower(id, percent);
-  state.lastActuatorCommandLog = String(simulationMode ? "SIM " : "REEL ") + id + " = " + String(percent, 1) + "%";
-  if (simulationMode || (actuator["debug"] | false)) state.logEvent("INFO", "ACTUATOR_COMMAND", state.lastActuatorCommandLog, "ActuatorManager");
+  state.lastActuatorCommandLog = String("REEL ") + id + " = " + String(percent, 1) + "%";
+  if (actuator["debug"] | false) state.logEvent("INFO", "ACTUATOR_COMMAND", state.lastActuatorCommandLog, "ActuatorManager");
 }
 
 void ActuatorManager::setPowerWatts(const String &actuatorId, float watts) {
@@ -305,7 +285,6 @@ bool ActuatorManager::requestSharedControl(const String &id, const String &mode,
   if (!findActuator(id, actuator) || (mode != "manual" && mode != "auto") || !isfinite(value)) return false;
   Actuator *channel = channelFor(id);
   if (!channel) return false;
-  if (state.simulationMode) return true; // No real control intents from simulation.
   uint32_t token = esp_random();
   if (!token) token = 1;
   const auto next = value <= 0 ? SharedActuatorControl::OFF : SharedActuatorControl::MANUAL;
@@ -347,7 +326,7 @@ bool ActuatorManager::handleEspNowActuatorCommand(void *context, const String &a
   JsonObject actuator;
   if (!self->findActuator(actuatorId, actuator)) return false;
   if (actuator["source"].as<String>() == "espnow") return false;
-  if (!(actuator["enabled"] | false) || self->state.simulationMode || self->state.safetyTripped ||
+  if (!(actuator["enabled"] | false) || self->state.safetyTripped ||
       self->state.safetyActive || self->safetyLocked) return false;
   // A local manual override remains authoritative, including a latched OFF.
   String routerMode = self->config.system()["router"]["mode"] | "AUTO";
@@ -564,14 +543,14 @@ void ActuatorManager::runtimeToJson(JsonArray out) {
         item["outputOn"] = reported.outputOn;
         item["source"] = reported.source;
         item["safetyLocked"] = channelSafetyLocked || reported.safetyLocked;
-        item["remoteSimulationMode"] = reported.simulated;
+        item["remoteOutputInhibited"] = reported.legacyOutputInhibited;
         if (reported.controlMode[0]) item["controlMode"] = reported.controlMode;
         else item["controlMode"] = nullptr;
         item["stateAgeMs"] = uint32_t(millis() - reported.receivedMs);
-        item["ok"] = enabled && reported.enabled && !channelSafetyLocked && !reported.safetyLocked && !reported.simulated && !remoteNodeLost;
+        item["ok"] = enabled && reported.enabled && !channelSafetyLocked && !reported.safetyLocked && !reported.legacyOutputInhibited && !remoteNodeLost;
         item["timedOut"] = false;
         item["state"] = item["ok"].as<bool>() ? "OK" : "DEGRADED";
-        item["lastError"] = reported.simulated ? "REMOTE_SIMULATION" : (reported.safetyLocked ? "REMOTE_SAFETY" : "");
+        item["lastError"] = reported.legacyOutputInhibited ? "REMOTE_OUTPUT_INHIBITED" : (reported.safetyLocked ? "REMOTE_SAFETY" : "");
         if (maxPowerW > 0) item["estimatedPowerW"] = maxPowerW * reported.percent / 100.0f;
       } else {
         item["commandPercent"] = nullptr;
@@ -694,8 +673,8 @@ bool ActuatorManager::updateTimedSsr(Actuator *channel, bool demiSinus) {
   const uint32_t ttl = channel->espNowLeaseMs ? channel->espNowLeaseMs : commandTimeoutMs;
   const uint32_t age = millis() - channel->lastCommandMs;
   if (!channel->enabled || !channel->lastCommandMs || age >= ttl ||
-      safetyLocked || channel->safetyLocked || state.safetyTripped || state.simulationMode ||
-      realModeHoldUntilMs || !isfinite(percent) || percent <= 0 ||
+      safetyLocked || channel->safetyLocked || state.safetyTripped ||
+      !isfinite(percent) || percent <= 0 ||
       channel->gpio < 0 || channel->gpio >= GPIO_NUM_MAX ||
       !GPIO_IS_VALID_OUTPUT_GPIO(channel->gpio)) {
     stopTimedSsr(channel);
@@ -726,11 +705,6 @@ bool ActuatorManager::updateTimedSsr(Actuator *channel, bool demiSinus) {
     gpio_ll_set_level(&GPIO, channel->gpio, !channel->activeHigh);
   }
   portENTER_CRITICAL(&ssrMux);
-  const bool traceFrame = state.automateDebug && !ssr.demiSinus &&
-                          ssr.frameAppliedMs != ssr.frameLoggedMs;
-  const uint32_t frameMs = ssr.frameAppliedMs;
-  const SsrFrame appliedFrame = ssr.frame;
-  ssr.frameLoggedMs = frameMs;
   if (!ssrTimingFault && revision == ssrRevision[index]) {
     ssr.pin = channel->gpio;
     ssr.activeHigh = channel->activeHigh;
@@ -747,11 +721,6 @@ bool ActuatorManager::updateTimedSsr(Actuator *channel, bool demiSinus) {
   }
   const bool on = ssr.on && !ssrTimingFault && revision == ssrRevision[index];
   portEXIT_CRITICAL(&ssrMux);
-  if (traceFrame) {
-    state.logAutomateDebug(frameMs, "SSR_TRAME",
-        String(channel->id) + " ON_ms=" + String(appliedFrame.on * 10) +
-        " total_ms=" + String(appliedFrame.total * 10));
-  }
   return on;
 }
 
@@ -793,10 +762,6 @@ void IRAM_ATTR ActuatorManager::onSsrTick(void *context) {
       ssr.halfWave.lastOnPhase = false;
       continue;
     }
-    if (!ssr.demiSinus && (ssr.step == 0 || ssr.requested.total == 1) &&
-        (ssr.frame.on != ssr.requested.on || ssr.frame.total != ssr.requested.total)) {
-      ssr.frameAppliedMs = uint32_t(now / 1000);
-    }
     const bool on = ssr.demiSinus ? ssrHalfWaveAdvance(ssr.halfWave, ssr.halfWavePercent)
                                  : ssrAdvance(ssr.frame, ssr.requested, ssr.step);
     if (ssr.on != on) gpio_ll_set_level(&GPIO, ssr.pin, on == ssr.activeHigh);
@@ -825,7 +790,6 @@ void ActuatorManager::updateRobotDyn(JsonObject actuator, uint32_t now) {
 
 void ActuatorManager::printStatus() {
   Serial.println(F("=== ActuatorManager status ==="));
-  Serial.print(F("simulation=")); Serial.println(simulationMode ? F("true") : F("false"));
   Serial.print(F("safetyLocked=")); Serial.println(safetyLocked ? F("true") : F("false"));
   for (uint8_t i = 0; i < channelCount; i++) {
     Serial.print(channels[i].id);
@@ -900,7 +864,7 @@ void ActuatorManager::setOutput(Actuator *channel, int pin, bool on, bool writeP
   if (id == config.routingActuatorId()) state.ssr1PinHigh = pinHigh;
   if (id == "ssr2_aux") state.ssr2PinHigh = pinHigh;
   if (id == "robotdyn_triac") state.robotDynPinHigh = pinHigh;
-  if (writePin && !simulationMode) digitalWrite(pin, pinHigh ? HIGH : LOW);
+  if (writePin) digitalWrite(pin, pinHigh ? HIGH : LOW);
 }
 
 uint32_t ActuatorManager::configuredCycleMs(JsonObject actuator) {
@@ -1003,7 +967,7 @@ void ActuatorManager::scheduleTriacFire() {
 
 void ActuatorManager::fireTriacGate() {
   if (!triacPhaseEnabled || triacControlPin < 0) return;
-  if (!simulationMode) digitalWrite(triacControlPin, HIGH);
+  digitalWrite(triacControlPin, HIGH);
   if (triacOffTimer) {
     esp_timer_stop(triacOffTimer);
     esp_timer_start_once(triacOffTimer, 120);
@@ -1011,5 +975,5 @@ void ActuatorManager::fireTriacGate() {
 }
 
 void ActuatorManager::stopTriacGate() {
-  if (triacControlPin >= 0 && !simulationMode) digitalWrite(triacControlPin, LOW);
+  if (triacControlPin >= 0) digitalWrite(triacControlPin, LOW);
 }

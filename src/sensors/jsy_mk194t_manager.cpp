@@ -1,4 +1,5 @@
 #include "jsy_mk194t_manager.h"
+#include "../diagnostics/serial_capture.h"
 
 void JSYMK194TManager::begin() {
   configureFromJson();

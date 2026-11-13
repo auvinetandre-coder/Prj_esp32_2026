@@ -1,3 +1,4 @@
 @echo off
-cd /d "%~dp0"
-call ".\tools\Effacer_Flash_ESP32.bat"
+rem Raccourci historique vers la phase explicite avec confirmation.
+call "%~dp001_Effacer_ESP32_OPTIONNEL.bat" %*
+exit /b %errorlevel%

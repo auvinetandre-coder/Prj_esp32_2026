@@ -22,7 +22,7 @@ Les historiques temporaires du navigateur utilisent le schema v5 : ils redemarre
 
 ## Livraison et verification
 
-- Compiler le main ESP32 et executer tous les `tools/test_*.js`, puis `node --check data/www/app.js`.
+- Compiler le main ESP32 et executer tous les `tools/tests/test_*.js`, puis `node --check data/www/app.js`.
 - Construire LittleFS depuis `data`, sans injecter de dossier config ; extraire l'image et comparer chaque fichier.
 - Exporter les cinq fichiers de configuration avant toute mise a jour LittleFS. Celle-ci remplace la partition complete ; la migration applicative ne remplace pas une sauvegarde.
 - Utiliser uniquement le passage explicite en factory recovery pour installer le firmware et LittleFS. Aucun flash n'est effectue par ce travail.

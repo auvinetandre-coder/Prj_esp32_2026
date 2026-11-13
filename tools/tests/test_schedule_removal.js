@@ -1,0 +1,13 @@
+const fs=require('fs'),path=require('path'),assert=require('assert/strict'),vm=require('vm');
+const read=p=>fs.readFileSync(path.join(__dirname,'../..',p),'utf8');
+const ui=read('data/www/app.js'),cpp=read('src/logic/automate_manager.cpp'),header=read('src/logic/automate_manager.h');
+assert.doesNotMatch(ui,/forcedSchedule|scheduleEnabled|scheduleActuator|scheduleStart|scheduleEnd|schedulePercent|Forcage horaire/);
+assert.doesNotMatch(cpp+header,/scheduledCommand|scheduledActuatorId|SCHEDULE_FORCE|parseScheduleTime|forcedSchedule/);
+const migration=read('src/config/legacy_config_migration.h');
+assert.doesNotMatch(migration,/forcedSchedule/);
+const elements=new Map();const element=id=>{if(!elements.has(id))elements.set(id,{innerHTML:''});return elements.get(id);};
+const context={cache:{rules:{rules:[]}},$:element,banner:()=>'',helpBox:()=>'',dirtyNotice:()=>'',esc:String};
+vm.createContext(context);vm.runInContext(ui.match(/function drawLogicPage\(\) \{[^]*?\n\}/)[0],context);context.drawLogicPage();
+assert.match(element('app').innerHTML,/Nouveau scénario/);assert.doesNotMatch(element('app').innerHTML,/horaire|schedule/i);
+assert.match(cpp,/PRIORITY_MANUAL_FORCE/);assert.match(cpp,/PRIORITY_RULE_ENGINE/);assert.match(cpp,/actuators.allOff\(\)/);
+console.log('PASS: schedule runtime and UI removed; legacy migration removed; manual, rules and safety retained; Automate page renders');

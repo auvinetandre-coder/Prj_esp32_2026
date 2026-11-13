@@ -75,8 +75,7 @@ AutomateManager::FinalCommand AutomateManager::arbitrate(uint32_t now, Priority 
   state.safetyActive = state.safetyTripped || state.safetyLevel == "CRITICAL";
   state.errorActive = errorDetected();
 
-  if (state.manualCommandPersistent && (state.safetyActive || state.errorActive || recoveryRequested ||
-      state.simulationMode != state.manualCommandSimulationMode)) {
+  if (state.manualCommandPersistent && (state.safetyActive || state.errorActive || recoveryRequested)) {
     state.manualCommandPending = false;
     state.manualCommandPersistent = false;
   }
@@ -257,10 +256,6 @@ void AutomateManager::transitionTo(AutomateState next, const String &reason, uin
   state.automateState = stateName(currentState);
   state.automateReason = reason;
   state.automateLastTransitionMs = now;
-  if (state.automateDebug) {
-    state.logAutomateDebug(now, "AUTOMATE_ETAT",
-        state.previousAutomateState + " -> " + state.automateState + " " + reason);
-  }
   state.addLog(String("Automate ") + state.previousAutomateState + " -> " + state.automateState + " : " + reason);
 }
 

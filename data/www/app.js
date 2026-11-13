@@ -38,7 +38,6 @@ var realtimeHistory = [];
 var graphData = loadStoredHistory(graphDataStorageKey);
 var graphPollTimer = null;
 var lastGraphDrawMs = 0;
-var lastSimulationModeSeen = null;
 var graphConfig = loadGraphConfig();
 var dashboardConfig = defaultDashboardConfig();
 var dashboardConfigLoaded = false;
@@ -93,9 +92,6 @@ var state = {
   safetyLevel: "INIT",
   safetyReason: "",
   safetyTripped: false,
-  simulationMode: false,
-  simulationType: "off",
-  simulationRemainingMs: 0,
   mqttEnabled: false,
   mqttConnected: false,
   mqttStatus: "MQTT_DISABLED",
@@ -208,7 +204,7 @@ var ruleSources = [
   {id:"sonde2", label:"sonde2", measures:[["temperatureC","number","C"],["available","boolean",""],["lastValidReadAgeMs","number","ms"]]},
   {id:"sonde3", label:"sonde3", measures:[["temperatureC","number","C"],["available","boolean",""],["lastValidReadAgeMs","number","ms"]]},
   {id:"solar", label:"Production", measures:[["powerW","number","W"],["available","boolean",""]]},
-  {id:"Systeme", label:"Systeme", measures:[["simulationMode","boolean",""],["wifiStatus","enum","",["CONNECTED","AP_FALLBACK","DISCONNECTED"]],["uptimeMs","number","ms"],["freeHeap","number","B"]]},
+  {id:"Systeme", label:"Systeme", measures:[["wifiStatus","enum","",["CONNECTED","AP_FALLBACK","DISCONNECTED"]],["uptimeMs","number","ms"],["freeHeap","number","B"]]},
   {id:"Securite", label:"Securite", measures:[["safetyLevel","enum","",["OK","WARNING","DEGRADED","CRITICAL"]],["safetyReason","text",""],["isCritical","boolean",""]]},
 ];
 var ruleCommands = ["setActuatorPercent", "setPower", "setPowerFromSurplus", "setPowerWatts", "stop", "off", "on", "toggle", "setMode", "safetyShutdown", "logEvent", "setSafetyWarning"];
@@ -271,7 +267,6 @@ var measureLabels = {
   temperatureC:"Temperature",
   available:"Capteur disponible",
   safetyLevel:"Niveau securite",
-  simulationMode:"Mode simulation",
 };
 var helpTexts = {
   dashboard: [
@@ -302,8 +297,7 @@ var helpTexts = {
   ],
   diagnostic: [
     ["Diagnostic", "Page pour comprendre rapidement ce qui fonctionne ou bloque."],
-    ["Simulation", "Permet de tester les regles sans capteurs physiques et sans activer les sorties 230 V."],
-    ["Logs", "Historique court des evenements importants du systeme."],
+    ["Console série", "Messages récents du firmware et commandes de consultation."],
     ["Perte JSY", "Scenario utile pour verifier que les securites reagissent correctement."]
   ],
   settings: [
@@ -465,7 +459,7 @@ function loadDashboardArchive() {
 }
 
 function archiveDashboardPoint(point) {
-  if (point.simulationMode) return;
+  if (point.simulationMode || point.legacySyntheticSample) return; // Ignore archived synthetic points.
   var minute = Math.floor(point.t / dashboardArchiveStepMs);
   if (minute === dashboardArchiveMinute) return;
   dashboardArchiveMinute = minute;
@@ -869,17 +863,7 @@ function dsValue(index, temp) {
 function banner() {
   var html = "";
   if (state.safetyTripped) html += '<div class="banner">SECURITE: ' + esc(state.safetyReason) + '</div>';
-  if (state.simulationMode) html += '<div class="sim">MODE SIMULATION ACTIF - sorties 230 V forcees OFF - arret auto dans ' + esc(simRemainingText()) + '</div>';
   return html;
-}
-
-function simRemainingText() {
-  var ms = Number(state.simulationRemainingMs) || 0;
-  if (!ms) return "5 min max";
-  var s = Math.ceil(ms / 1000);
-  var m = Math.floor(s / 60);
-  var r = s % 60;
-  return m + " min " + (r < 10 ? "0" : "") + r + " s";
 }
 
 function helpBox(name) {
@@ -1291,7 +1275,7 @@ function handleRealtimeGraphPoint(data) {
     temp2: finiteOrNull(data.temp2),
     temp3: finiteOrNull(data.temp3),
     tempSafety: finiteOrNull(data.tempSafety),
-    simulationMode: !!data.simulationMode
+    legacySyntheticSample: !!data.simulationMode
   };
   appendSmoothedFields(point);
   graphData.push(point);
@@ -3035,7 +3019,6 @@ function systemHealthPanel() {
     statusMini("ESP-NOW", h.espnow || (state.espNowReady ? "OK" : "N/A")) +
     statusMini("MQTT", h.mqtt || (state.mqttEnabled ? state.mqttStatus : "N/A")) +
     statusMini("Securite", h.safety || state.safetyLevel || "OK") +
-    blockMetric("Simulation", state.simulationMode ? "active" : "OFF", "", state.simulationMode ? "warn" : "muted", state.simulationMode ? simRemainingText() : "mesures reelles") +
     blockMetric("Uptime", formatDuration(h.uptimeMs || state.uptimeMs), "", "muted", "depuis boot") +
     blockMetric("Heap", h.heapFree || state.heapFree, "B", "info", "memoire libre") +
     blockMetric("Capteurs OK", okCount, "", okCount ? "ok" : "warn", okCount + "/" + sensors.length + " actifs") +
@@ -3067,7 +3050,6 @@ function routerMoodPanel(extraClass) {
   var cls = "muted";
   var icon = "😴";
   if (state.safetyTripped || state.safetyLevel === "CRITICAL") { icon = "🛑"; text = "Securite active"; cls = "bad"; }
-  else if (state.simulationMode) { icon = "🧪"; text = "Simulation"; cls = "warn"; }
   else if (!sensorOk || sensorLost) { icon = "⚠️"; text = "Capteurs degrades"; cls = "warn"; }
   else if (String(p.status || "").toUpperCase().indexOf("OSC") >= 0) { icon = "⚠️"; text = "Oscillation PID"; cls = "warn"; }
   else if (grid > 50) { icon = "⚡"; text = "Achat reseau"; cls = "consume"; }
@@ -3874,8 +3856,8 @@ function hideChartTooltip() {
 function updateNavStatus() {
   var box = $("navStatus");
   if (!box) return;
-  var cls = state.safetyTripped ? "bad" : (state.simulationMode ? "warn" : (state.wifiConnected || state.networkMode ? "ok" : "muted"));
-  var label = state.safetyTripped ? "Safety CRITICAL" : (state.simulationMode ? "Simulation" : (state.wifiConnected ? "Connected" : (state.networkMode || "Local")));
+  var cls = state.safetyTripped ? "bad" : (state.wifiConnected || state.networkMode ? "ok" : "muted");
+  var label = state.safetyTripped ? "Safety CRITICAL" : (state.wifiConnected ? "Connected" : (state.networkMode || "Local"));
   box.className = "navStatus " + cls;
   box.innerHTML = "<i></i><span>" + esc(label) + "</span>";
 }
@@ -3886,11 +3868,8 @@ function updateDocumentTitle() {
 }
 
 async function loadStatus() {
-  var previousSimulationMode = lastSimulationModeSeen;
-  state = await api(page === "diagnostic" ? "/api/diagnostic" : "/api/status-lite");
+  state = await api("/api/status-lite");
   dashboardStateTime = Date.now();
-  if (previousSimulationMode === true && state.simulationMode === false) resetDashboardGraphBuffers();
-  lastSimulationModeSeen = !!state.simulationMode;
   updateDocumentTitle();
 }
 
@@ -4124,7 +4103,7 @@ function recordDashboardHistory() {
     ssr2PowerPct: sanitizeHistoryValue({key:"ssr2PowerPct"}, state.ssr2PowerPct),
     robotDynPowerPct: sanitizeHistoryValue({key:"robotDynPowerPct"}, state.robotDynPowerPct),
     heapFree: Number(state.heapFree) || 0,
-    simulationMode: !!state.simulationMode
+    legacySyntheticSample: false
   };
   dashHistory.push(point);
   archiveDashboardPoint(point);
@@ -4142,7 +4121,6 @@ function dashboardHeader() {
     '<header class="yasTopbar cockpitHeader"><div class="cockpitTitle"><div><span>Vue d\'ensemble</span><h1>' + esc(moduleName) + '</h1></div></div><div class="statusBadges">' +
       statusBadge("WiFi", state.wifiConnected ? "connecte" : "AP local", wifiCls, ssid) +
       statusBadge("Safety", state.safetyLevel || "OK", safetyCls, state.safetyReason || "aucun defaut") +
-      statusBadge("Simulation", state.simulationMode ? "active" : "off", state.simulationMode ? "warn" : "muted", state.simulationMode ? simRemainingText() : "reel") +
     '</div></header><div class="dashboardSummary">' + routerMoodPanel("headerMood") + '</div>';
 }
 
@@ -6336,121 +6314,8 @@ async function saveRules() {
   }
 }
 
-function simulationPage() {
-  $("app").innerHTML = banner() +
-    '<h1>Simulation</h1><div class="form">' +
-    field("grid", "gridPowerW", state.gridPowerW || -800) +
-    field("voltage", "Tension V", 231) +
-    field("current", "Courant A", 4) +
-    field("jsyP1", "JSY puissance active 1 W", state.activePowerW1 || state.gridPowerW || -800) +
-    field("jsyC1", "JSY courant 1 A", state.currentA1 || 4) +
-    field("jsyP2", "JSY puissance active 2 W", state.activePowerW2 || 0) +
-    field("jsyC2", "JSY courant 2 A", state.currentA2 || 0) +
-    field("t1", "Sonde 1 C", state.temperature1C || 45) +
-    field("t2", "Sonde 2 C", state.temperature2C || 42) +
-    field("t3", "Sonde 3 C", state.temperature3C || 38) +
-    '</div><p><button onclick="simEnable()">Activer</button> <button onclick="simValues()">Appliquer</button> <button onclick="simRandom()">Aleatoire</button> <button onclick="simScenario(\'temperature_overheat\')">Surchauffe</button> <button onclick="simScenario(\'jsy_lost\')">Perte JSY</button> <button onclick="simDisable()">Desactiver</button></p>' +
-    dashboard();
-}
-
 function field(id, label, value) {
   return '<label>' + esc(label) + '<input id="' + id + '" type="number" step="0.1" value="' + esc(value) + '"></label>';
-}
-
-async function simEnable() {
-  var mode = $("simMode") ? $("simMode").value : "manual";
-  var response = await fetch("/api/simulation/enable", {method:"POST"});
-  if (!response.ok) return alert("Activation simulation refusee: " + await response.text());
-  if (mode === "random") {
-    response = await fetch("/api/simulation/randomize", {method:"POST"});
-    if (!response.ok) return alert("Simulation aleatoire refusee: " + await response.text());
-  } else if (mode === "scenario") {
-    var scenario = $("simScenario") ? $("simScenario").value : "normal";
-    response = await fetch("/api/simulation/scenario", {method:"POST", headers:{"Content-Type":"application/x-www-form-urlencoded"}, body:new URLSearchParams({scenario:scenario})});
-    if (!response.ok) return alert("Scenario simulation refuse: " + await response.text());
-  } else {
-    response = await fetch("/api/simulation/mode", {method:"POST", headers:{"Content-Type":"application/x-www-form-urlencoded"}, body:new URLSearchParams({mode:"manual"})});
-    if (!response.ok) return alert("Mode simulation refuse: " + await response.text());
-    await simValues(false);
-    return;
-  }
-  await refresh();
-}
-async function simDisable() {
-  if (!confirm("Desactiver la simulation et revenir au reel ? Les sorties seront forcees OFF.")) return;
-  await fetch("/api/simulation/disable", {method:"POST"});
-  clearSimulationHistory();
-  await refresh();
-  if (!state.simulationMode) {
-    zeroDashboardPowerOutputs();
-    render();
-  }
-}
-
-function clearSimulationHistory() {
-  resetDashboardGraphBuffers();
-}
-
-function zeroDashboardPowerOutputs() {
-  state.productionW = 0;
-  state.surplusW = 0;
-  state.consumptionW = 0;
-  state.outputPowerW = 0;
-  state.pidOutputPercent = 0;
-  state.commandPercent = 0;
-  state.ssr1PowerPct = 0;
-  state.ssr2PowerPct = 0;
-  state.robotDynPowerPct = 0;
-  state.energy = state.energy || {};
-  state.energy.productionW = 0;
-  state.energy.surplusW = 0;
-  state.energy.consumptionW = null;
-  state.energy.outputPowerW = 0;
-  state.energy.outputPercent = 0;
-  state.pid = state.pid || {};
-  state.pid.outputPowerW = 0;
-  state.pid.outputPercent = 0;
-  state.pid.commandPercent = 0;
-}
-async function simRandom() {
-  await fetch("/api/simulation/randomize", {method:"POST"});
-  await refresh();
-}
-async function simScenario(name) {
-  await fetch("/api/simulation/scenario", {method:"POST", headers:{"Content-Type":"application/x-www-form-urlencoded"}, body:new URLSearchParams({scenario:name})});
-  await refresh();
-}
-
-async function simModeApply() {
-  var mode = $("simMode") ? $("simMode").value : "manual";
-  await fetch("/api/simulation/mode", {method:"POST", headers:{"Content-Type":"application/x-www-form-urlencoded"}, body:new URLSearchParams({mode:mode})});
-  await refresh();
-}
-
-async function simScenarioApply() {
-  var scenario = $("simScenario") ? $("simScenario").value : "normal";
-  await simScenario(scenario);
-}
-
-async function simValues(enableFirst) {
-  if (enableFirst !== false) {
-    var enableResponse = await fetch("/api/simulation/enable", {method:"POST"});
-    if (!enableResponse.ok) return alert("Activation simulation refusee: " + await enableResponse.text());
-  }
-  var modeResponse = await fetch("/api/simulation/mode", {method:"POST", headers:{"Content-Type":"application/x-www-form-urlencoded"}, body:new URLSearchParams({mode:"manual"})});
-  if (!modeResponse.ok) return alert("Mode simulation refuse: " + await modeResponse.text());
-  var body = {
-    jsy: {available:true, gridPowerW:Number($("grid").value), voltageV:Number($("voltage").value), currentA:Number($("current").value), activePowerW1:Number($("jsyP1").value), activePowerW2:Number($("jsyP2").value), currentA1:Number($("jsyC1").value), currentA2:Number($("jsyC2").value), powerFactor:0.96, frequencyHz:50},
-    tic: {available:true, apparentPowerVA:900, currentA:Number($("current").value), tariff:"BASE"},
-    ds18b20: [
-      {id:"sonde1", available:true, temperatureC:Number($("t1").value)},
-      {id:"sonde2", available:true, temperatureC:Number($("t2").value)},
-      {id:"sonde3", available:true, temperatureC:Number($("t3").value)}
-    ]
-  };
-  var response = await postJson("/api/simulation/values", body);
-  if (!response.ok) return alert("Simulation refusee: " + await response.text());
-  await refresh();
 }
 
 function routingActuatorOptions(selected) {
@@ -6570,7 +6435,6 @@ async function saveSettings() {
   s.wifi = s.wifi || {};
   s.router = s.router || {};
   s.safety = s.safety || {};
-  s.simulation = s.simulation || {};
   s.webAuth = s.webAuth || {};
   d.name = $("devName").value;
   d.deviceName = d.name;
@@ -6965,80 +6829,93 @@ function tipLine(label, value, unit, cls) {
   return '<div><span>' + esc(label) + '</span><b class="' + esc(cls || tipValueClass(value)) + '">' + esc(fmt(value)) + (unit ? ' <em>' + esc(unit) + '</em>' : '') + '</b></div>';
 }
 
-function sensorHoverTip(kind, index) {
-  if (kind === "jsy") {
-    return tipLine("Etat", state.jsyOnline ? "OK" : "Absent", "", state.jsyOnline ? "ok" : "bad") +
-      tipLine("Source routeur", state.gridPowerSource || "N/A", "") +
-      tipLine("Puissance reseau", state.jsyGridPowerW, "W") +
-      tipLine(jsyChannelName(0), state.activePowerW1, "W") +
-      tipLine("Voie 1 courant", state.currentA1, "A") +
-      tipLine("Voie 1 tension", state.voltageV1, "V") +
-      tipLine(jsyChannelName(1), state.activePowerW2, "W") +
-      tipLine("Voie 2 courant", state.currentA2, "A") +
-      tipLine("Voie 2 tension", state.voltageV2, "V") +
-      tipLine("Frequence", state.gridFrequencyHz, "Hz") +
-      tipLine("Derniere lecture", timeFromUptimeMs(state.lastJsyReadMs), "");
+function espNowServiceLabel() {
+  if (typeof state.espNowReady === "boolean") return state.espNowReady ? "pret" : "indisponible";
+  var health = state.systemHealth || {};
+  if (health.espnow === "OK") return "pret";
+  if (health.espnow === "N/A") return "indisponible";
+  return "etat inconnu";
+}
+
+function workbenchBytes(value) {
+  return hasValue(value) ? bytesHuman(value) : "indisponible";
+}
+
+function wifiDiagnosticsHtml(data) {
+  var action = '<button onclick="loadWifiDiagnostics()">Actualiser Wi-Fi et historique</button>';
+  if (!data) return action + '<p class="muted">Capture sur demande. Les 32 derniers evenements restent disponibles et sont sauvegardes dans LittleFS, meme lorsque cette page est fermee.</p>';
+  var rows = (data.history || []).map(function (entry) {
+    var time = entry.epochMs ? new Date(entry.epochMs).toLocaleString("fr-FR") : "Boot " + (hasValue(entry.bootId) ? entry.bootId : "?") + " + " + fmt(Number(entry.uptimeMs) / 1000) + " s";
+    return '<tr><td>' + esc(time) + '</td><td>' + esc(entry.event) + '</td><td>' + esc(entry.reasonLabel || "—") + (hasValue(entry.reason) ? " (" + esc(entry.reason) + ")" : "") + '</td><td>' + esc(hasValue(entry.ageMs) ? ageLabel(entry.ageMs) : "demarrage anterieur") + '</td><td>' + esc(entry.bssid || '—') + (hasValue(entry.rssi) ? ' · ' + esc(entry.rssi) + ' dBm' : '') + '</td></tr>';
+  }).join("");
+  var last = data.lastConnectedSnapshot;
+  var previous = last ? miniState("Derniere photo connectee", (last.ip || "—") + " · canal " + fmt(last.channel) + " · " + fmt(last.rssi) + " dBm · " + (hasValue(last.ageMs) ? "age " + ageLabel(last.ageMs) : "boot " + last.bootId), "muted") : miniState("Derniere photo connectee", "aucune depuis le boot", "muted");
+  return previous + action + '<p class="muted">Capture figee a ' + esc(new Date(cache.wifiDiagnosticCapturedAt).toLocaleTimeString("fr-FR")) + '. Historique : ' + esc(data.retained) + '/' + esc(data.totalEvents) + ' evenements conserves. Sauvegarde : ' + esc(data.persistenceStatus || 'inconnue') + (data.eventsPendingSave ? ' · nouveaux evenements en attente' : '') + '.</p>' +
+    miniState("Association / IP locale presente", (data.associated ? "associe" : "non associe") + " / " + (data.connected ? "oui" : "non"), data.connected ? "ok" : "warn") +
+    miniState("Statut / mode radio", fmt(data.statusCode) + " / " + fmt(data.modeCode), "muted") +
+    miniState("Canal / BSSID", fmt(data.channel) + " / " + (data.bssid || "indisponible"), "info") +
+    miniState("RSSI actuel", hasValue(data.rssi) ? fmt(data.rssi) + " dBm" : "indisponible", "info") +
+    miniState("RSSI min / max depuis boot", hasValue(data.rssiMin) ? fmt(data.rssiMin) + " / " + fmt(data.rssiMax) + " dBm" : "indisponible", "muted") +
+    miniState("IP / passerelle", (data.ip || "—") + " / " + (data.gateway || "—"), "info") +
+    miniState("Masque", data.subnet || "—", "muted") +
+    miniState("DNS", (data.dns1 || "—") + " / " + (data.dns2 || "—"), "muted") +
+    miniState("AP de secours", (data.apActive ? "actif" : "inactif") + " · " + fmt(data.apClients) + " client(s)", "info") +
+    miniState("Duree avec IP", hasValue(data.connectedForMs) ? ageLabel(data.connectedForMs) : "non connecte", "info") +
+    miniState("Deconnexions / pertes IP", fmt(data.disconnects) + " / " + fmt(data.lostIpEvents), "muted") +
+    miniState("Dernier motif pilote", data.lastReasonLabel || "inconnu", "muted") +
+    miniState("Derniere coupure terminee", hasValue(data.lastOutageMs) ? ageLabel(data.lastOutageMs) : "aucune observee", "muted") +
+    (data.outageActive ? miniState("Coupure en cours", ageLabel(data.outageForMs), "warn") : "") +
+    '<details><summary>Chronologie Wi-Fi — ' + esc(data.retained) + ' evenements</summary><div class="tableScroll wifiHistory"><table><thead><tr><th>Heure navigateur / boot</th><th>Evenement</th><th>Motif pilote</th><th>Age lors de la capture</th><th>Point d’acces / RSSI</th></tr></thead><tbody>' + (rows || '<tr><td colspan="5">Aucun evenement observe.</td></tr>') + '</tbody></table></div></details>';
+}
+
+async function loadWifiDiagnostics() {
+  try {
+    cache.wifiDiagnostic = await api("/api/diagnostic/wifi");
+    cache.wifiDiagnosticCapturedAt = Date.now();
+    if (page === "diagnostic") diagnosticPage();
+  } catch (error) {
+    alert("Diagnostic Wi-Fi indisponible : " + error.message);
   }
-  if (kind === "tic") {
-    return tipLine("Etat", state.ticStatus || "N/A", "", state.ticAvailable ? "ok" : "warn") +
-      tipLine("Puissance", state.ticGridPowerW, "W") +
-      tipLine("Apparente", state.ticApparentPowerVA, "VA") +
-      tipLine("Courant", state.ticCurrentA, "A") +
-      tipLine("Index", state.ticEnergyWh, "Wh") +
-      tipLine("Tarif", state.ticTariff || "N/A", "") +
-      tipLine("Periode", state.ticPeriod || "N/A", "") +
-      tipLine("Derniere lecture", timeFromUptimeMs(state.lastTicReadMs), "") +
-      tipLine("Erreurs", state.ticErrorCount, "");
-  }
-  var temp = dsTemperature(index);
-  var available = dsAvailable(index, temp);
-  return tipLine("Etat", available ? "OK" : "Absent / non lu", "", available ? "ok" : "bad") +
-    tipLine("Usage", "usage non configure", "") +
-    tipLine("Temperature", available ? temp : "N/A", available ? "C" : "") +
-    tipLine("Derniere lecture", timeFromUptimeMs(dsLastReadMs(index)), "") +
-    tipLine("Nom", dsLabel(index), "");
 }
 
 function diagnosticPage() {
-  var events = state.events || [];
-  var localJsy = configuredLocalSensorByType("JSY-MK-194T", "jsy_grid");
-  var localTic = configuredLocalSensorByType("TIC Linky", "tic_linky");
-  var actuatorStates = diagnosticActuatorStates();
-  var dsStates = [
-    dsConfigured(0) ? miniState(dsLabel(0), dsAvailable(0, dsTemperature(0)) ? fmt(dsTemperature(0)) + " C" : "Absent / non lu", dsAvailable(0, dsTemperature(0)) ? tempClass(dsTemperature(0)) : "bad", sensorHoverTip("ds", 0)) : "",
-    dsConfigured(1) ? miniState(dsLabel(1), dsAvailable(1, dsTemperature(1)) ? fmt(dsTemperature(1)) + " C" : "Absent / non lu", dsAvailable(1, dsTemperature(1)) ? tempClass(dsTemperature(1)) : "bad", sensorHoverTip("ds", 1)) : "",
-    dsConfigured(2) ? miniState(dsLabel(2), dsAvailable(2, dsTemperature(2)) ? fmt(dsTemperature(2)) + " C" : "Absent / non lu", dsAvailable(2, dsTemperature(2)) ? tempClass(dsTemperature(2)) : "bad", sensorHoverTip("ds", 2)) : ""
-  ].join("") || miniState("DS18B20", "Aucune sonde configuree", "muted");
-  var localSensorStates = (localJsy ? miniState(localJsy.name || "JSY-MK-194T", state.jsyOnline ? "OK" : "Absent", state.jsyOnline ? "ok" : "bad", sensorHoverTip("jsy")) : "") +
-    (localTic ? miniState(localTic.name || "TIC Linky", state.ticAvailable ? "OK" : "Absent", state.ticAvailable ? "ok" : "warn", sensorHoverTip("tic")) : "") +
-    dsStates;
-  $("app").innerHTML = banner() + '<h1>Diagnostic & Simulation</h1>' + helpBox("diagnostic") + '<div class="settingsGrid diagnosticGrid"><div class="diagnosticColumn">' +
-    '<section class="panel"><h2>Diagnostic systeme</h2>' +
-      miniState("Securite", state.safetyLevel || "-", state.safetyTripped ? "bad" : "ok") +
-      miniState("Raison", state.safetyReason || "aucune", state.safetyTripped ? "bad" : "muted") +
-      miniState("WiFi", state.wifiConnected ? "connecte" : "AP/local", state.wifiConnected ? "ok" : "warn") +
-      miniState("Mode reseau", state.networkMode || "-", "info") +
-      miniState("Heap libre", state.heapFree ? Math.round(state.heapFree / 1024) + " Ko" : "-", "ok") +
-      '<p><button onclick="identifyRouterLeds()">Identifier ESP 2 min</button></p>' +
-      '<p class="muted">Fait clignoter rapidement les LED bleue et rouge configurees ensemble.</p>' +
-      '<p><a href="/fs">Voir LittleFS</a> <a href="/api/diagnostic">JSON diagnostic</a></p>' +
-    '</section>' +
-    '<section class="panel"><h2>Simulation</h2>' + simulationControlsHtml() + '</section>' +
+  var sensors = activeSensorsList();
+  var perf = state.performance || {};
+  var badSensors = sensors.filter(function (sensor) { return !sensor.disabled && sensorStatusInfo(sensor).key !== "ok"; });
+  var health = state.safetyTripped || state.safetyLevel === "CRITICAL" ? "bad" : (state.safetyLevel !== "OK" || badSensors.length ? "warn" : "ok");
+  var healthText = health === "bad" ? "Protection active" : (health === "warn" ? "Points a examiner" : "Aucun defaut signale");
+  var sensorRows = sensors.map(function (sensor) {
+    var status = sensorStatusInfo(sensor);
+    return '<tr><td>' + esc(sensor.name || sensor.id) + '</td><td>' + esc(sensor.origin || "LOCAL") + '</td><td><span class="badge ' + esc(status.cls) + '">' + esc(status.label) + '</span></td><td>' + esc(hasValue(sensor.ageMs) ? ageLabel(sensor.ageMs) : "non recue") + '</td><td>' + esc(sensor.lastError || status.detail || "—") + '</td><td>' + sensorValuesLine(sensor.values, status.stale) + '</td></tr>';
+  }).join("");
+  $("app").innerHTML = banner() +
+    '<header class="workbenchHeader"><div><span class="workbenchEyebrow">POSTE DE PILOTAGE</span><h1>Diagnostic</h1><p>Comprendre ce qui se passe, du capteur a la sortie.</p></div><span class="badge ' + health + '">' + esc(healthText) + '</span></header>' +
+    '<div class="settingsGrid diagnosticGrid"><div class="diagnosticColumn">' +
+      '<section class="panel"><h2><span aria-hidden="true">🩺</span> Bilan de sante</h2>' +
+        miniState("Securite", state.safetyLevel || "inconnue", stateClass(state.safetyLevel)) +
+        miniState("Motif", state.safetyReason || "Aucun defaut signale", health) +
+        miniState("Automate", state.automateState || "inconnu", "info") +
+        miniState("Decision", state.automateReason || "non renseignee", "muted") +
+        miniState("Origine de commande", state.commandSource || "non renseignee", "info") +
+        miniState("Wi-Fi / ESP-NOW", (state.wifiConnected ? "connecte" : "hors ligne") + " / " + espNowServiceLabel(), "info") +
+        miniState("MQTT", state.mqttEnabled ? (state.mqttStatus || "etat inconnu") : "desactive", "muted") +
+        '<p><a href="/api/diagnostic" target="_blank" rel="noopener">JSON diagnostic</a></p></section>' +
+      '<section class="panel"><h2><span aria-hidden="true">⏱️</span> Sous le capot</h2>' +
+        miniState("Boucle / maximum", fmt(perf.loopDurationMs) + " / " + fmt(perf.maxLoopDurationMs) + " ms", "info") +
+        miniState("Construction API", fmt(perf.apiStateBuildMs) + " ms", "info") +
+        miniState("RAM libre", workbenchBytes(perf.heapFree), "info") +
+        miniState("RAM minimum", workbenchBytes(perf.heapMin), "muted") +
+        miniState("Plus grand bloc RAM", workbenchBytes(perf.heapMaxAlloc), "muted") +
+        miniState("Dernier module lent", perf.lastSlowModule || "aucun signale", "muted") +
+        '<p class="muted">Les maxima sont observes depuis le demarrage. Ils ne prouvent pas une panne actuelle.</p></section>' +
+      '<section class="panel"><h2>📶 Memoire Wi-Fi</h2>' + wifiDiagnosticsHtml(cache.wifiDiagnostic) + '</section>' +
     '</div><div class="diagnosticColumn">' +
-    '<section class="panel"><h2>Capteurs</h2>' +
-      localSensorStates +
-    '</section>' +
-    '<section class="panel"><h2>Sorties calculees</h2>' +
-      actuatorStates +
-      '<p class="muted">En simulation, les sorties 230 V restent forcees OFF.</p>' +
-    '</section>' +
-    '</div></div><h2>Evenements</h2><p><button onclick="clearLogs()">Reset logs</button> ' +
-    '<button onclick="toggleAutomateDebug()">Debug AUTOMATE ' + (state.automateDebug ? "actif · Désactiver" : "inactif · Activer") + '</button> ' +
-    '<a href="/api/logs/automate" target="_blank" rel="noopener">Ouvrir le journal AUTOMATE (JSON)</a></p>' +
-    '<table><tr><th>Heure</th><th>Niveau</th><th>Source</th><th>Code</th><th>Message</th></tr>' +
-    events.map(function (event) {
-      return '<tr><td>' + esc(event.epochMs ? new Date(event.epochMs).toLocaleTimeString("fr-FR", {hour:"2-digit", minute:"2-digit", second:"2-digit", fractionalSecondDigits:3}) : timeFromUptimeMs(event.timestampMs)) + '</td><td>' + esc(event.level) + '</td><td>' + esc(event.source || "") + '</td><td>' + esc(event.code) + '</td><td>' + esc(event.message) + '</td></tr>';
-    }).join("") + '</table>';
+      '<section class="panel"><h2><span aria-hidden="true">📡</span> Capteurs a la loupe</h2><div class="tableScroll"><table><thead><tr><th>Capteur</th><th>Origine</th><th>Etat</th><th>Age</th><th>Detail</th><th>Mesures</th></tr></thead><tbody>' +
+        (sensorRows || '<tr><td colspan="6">Aucun capteur configure.</td></tr>') + '</tbody></table></div></section>' +
+      '<section class="panel"><h2><span aria-hidden="true">🎛️</span> Chaine de commande</h2>' + diagnosticActuatorStates() +
+        '<p class="muted">Les pourcentages sont des etats logiciels. Une puissance electrique exige une mesure associee.</p></section>' +
+    '</div></div><section class="workbenchConsole"><h2><span aria-hidden="true">📟</span> Boite noire</h2><p class="muted">Console serie en direct. Les commandes envoyees peuvent agir sur l’appareil.</p><div id="serialConsoleSlot"></div></section>';
+  if (typeof mountSerialConsole === "function") mountSerialConsole($("serialConsoleSlot"));
 }
 
 function diagnosticActuatorStates() {
@@ -7047,7 +6924,8 @@ function diagnosticActuatorStates() {
   return actuators.map(function (actuator) {
     var pct = actuator.outputPercent;
     var status = actuatorRuntimeStatus(actuator);
-    return (hasValue(actuator.outputPercent) ? actuatorBar(actuator.name || actuator.id || "Actionneur", pct) : miniState(actuator.name || actuator.id || "Actionneur", "-- %", "warn")) +
+    return miniState((actuator.name || actuator.id || "Actionneur") + " demande retenue", hasValue(actuator.commandPercent) ? fmt(actuator.commandPercent) + " %" : "indisponible", "info") +
+      (hasValue(actuator.outputPercent) ? actuatorBar(actuator.name || actuator.id || "Actionneur", pct) : miniState(actuator.name || actuator.id || "Actionneur", "-- %", "warn")) +
       miniState((actuator.name || actuator.id || "Actionneur") + " etat", status.label, status.cls) +
       miniState((actuator.name || actuator.id || "Actionneur") + " origine", actuatorOrigin(actuator), actuatorOrigin(actuator) === "ESP-NOW" ? "info" : "muted");
   }).join("");
@@ -7088,139 +6966,52 @@ function gpioRowsFromConfig() {
 }
 
 async function systemPage() {
+  var requestedPage = page;
   var sys = await api("/api/system-info");
   if (!cache.sensors) cache.sensors = await api("/api/sensors");
   if (!cache.actuators) cache.actuators = await api("/api/actuators");
-  var gpioRows = gpioRowsFromConfig();
+  if (page !== requestedPage) return;
   var storage = sys.storage || {};
-  var services = sys.services || {};
   var ota = sys.ota || {};
-  var deviceName = (sys.device && sys.device.name) || sys.deviceName || "N/A";
-  var firmwareVersion = sys.firmwareVersion || "N/A";
-  var littleFsVersion = sys.littleFsVersion || storage.version || "N/A";
-  var littleFsStatus = storage.status || "N/A";
-  var activePartition = ota.runningLabel || ota.runningSlot || "N/A";
-  var networkMode = sys.networkMode || "N/A";
-  var appMargin = Number(ota.runningRemainingBytes || 0);
-  var appMarginCls = appMargin > 250000 ? "ok" : "warn";
-  var ntpCls = sys.ntpSynced ? "ok" : "warn";
-  var wifiFallback = String(networkMode).toUpperCase().indexOf("AP") >= 0 && String(networkMode).toUpperCase().indexOf("STA") < 0;
-  var littleFsMismatch = firmwareVersion !== "N/A" && littleFsVersion !== "N/A" && firmwareVersion !== littleFsVersion;
-  var summaryItems = [
-    ["Nom ESP", deviceName, "info"],
-    ["Wi-Fi", networkMode, wifiFallback ? "warn" : "info"],
-    ["Firmware", firmwareVersion, littleFsMismatch ? "warn" : "ok"],
-    ["LittleFS", littleFsStatus, stateClass(littleFsStatus)],
-    ["Partition", activePartition, "info"]
-  ];
-  var warnings = [];
-  if (littleFsMismatch) warnings.push(["warn", "Firmware et LittleFS ont des versions differentes"]);
-  if (String(littleFsStatus).toUpperCase() !== "OK") warnings.push(["bad", "LittleFS n est pas OK"]);
-  if (appMargin <= 250000) warnings.push(["warn", "Marge app faible: " + bytesHuman(appMargin)]);
-  if (!sys.ntpSynced) warnings.push(["warn", "NTP non synchronise"]);
-  if (wifiFallback) warnings.push(["warn", "Wi-Fi en fallback AP"]);
-  function systemSummaryCard(item) {
-    return '<div class="systemSummaryCard ' + esc(item[2]) + '"><span>' + esc(item[0]) + '</span><b>' + esc(item[1]) + '</b></div>';
-  }
-  function warningStrip() {
-    if (!warnings.length) return "";
-    return '<div class="systemAlertStrip">' + warnings.map(function (item) {
-      return '<span class="badge ' + esc(item[0]) + '">' + esc(item[1]) + '</span>';
-    }).join("") + '</div>';
-  }
-  function otaSlotCard(title, slot) {
-    slot = slot || {};
-    var version = slot.routeurVersion || slot.version || "N/A";
-    return '<div class="miniCard ' + (slot.running ? 'okCard' : '') + '">' +
-      '<div class="miniTitle">' + esc(title) + (slot.running ? ' <span class="badge ok">ACTIVE</span>' : '') + '</div>' +
-      '<div class="miniValue">' + esc(version) + '</div>' +
-      '<div class="miniSub">' + esc(slot.label || "N/A") + ' - ' + (slot.valid ? 'image valide' : 'vide / invalide') + '</div>' +
-      '<div class="miniSub">Taille slot: ' + bytesHuman(slot.size) + '</div>' +
-      '<div class="miniSub">Adresse: ' + (slot.address == null ? 'N/A' : '0x' + Number(slot.address).toString(16)) + '</div>' +
-    '</div>';
-  }
-  var gpioTable = '<table><tr><th>GPIO</th><th>Usage</th><th>Champ</th><th>Detail</th></tr>' +
-    (gpioRows.length ? gpioRows.map(function (row) {
-      return '<tr><td>GPIO' + esc(row.gpio) + '</td><td>' + esc(row.owner) + '</td><td>' + esc(row.field) + '</td><td>' + esc(row.detail) + '</td></tr>';
-    }).join("") : '<tr><td colspan="4">Aucun GPIO configure.</td></tr>') +
-    '</table>';
-  var advancedHtml =
-    '<details id="systemAdvanced" class="systemAdvanced" ' + (systemAdvancedOpen ? 'open ' : '') + 'ontoggle="setSystemAdvancedOpen(this.open)"><summary>Details avances</summary>' +
-      '<div class="settingsGrid">' +
-        dashboardBlock("Informations build", "compatibilite et diagnostic",
-          '<div class="blockMetricGrid">' +
-            blockMetric("Version build", sys.buildVersion || "N/A", "", "info", "format YYYYMMDD-NN") +
-            blockMetric("Compilation", sys.buildDate || "N/A", "", "muted", "") +
-            blockMetric("Build timestamp", sys.buildTimestamp || "N/A", "", "muted", "") +
-            blockMetric("Cause reset", sys.resetReason || "N/A", "", stateClass(sys.resetReason === "Power on" ? "OK" : "Attention"), "") +
-            blockMetric("Uptime ms", sys.uptime || "N/A", "", "muted", "") +
-          '</div>', "advanced") +
-        dashboardBlock("Reseau avance", "adresses secondaires",
-          '<div class="blockMetricGrid">' +
-            blockMetric("SSID", sys.ssid || "N/A", "", sys.ssid && sys.ssid !== "N/A" ? "ok" : "muted", "") +
-            blockMetric("RSSI", sys.rssi == null ? "N/A" : sys.rssi, sys.rssi == null ? "" : "dBm", stateClass(sys.wifiQuality), sys.wifiQuality || "N/A") +
-            blockMetric("Qualite WiFi", sys.wifiQuality || "N/A", "", stateClass(sys.wifiQuality), "") +
-            blockMetric("IP station", sys.stationIp || "N/A", "", "info", "") +
-            blockMetric("IP AP", sys.apIp || "N/A", "", "info", "") +
-          '</div>', "advanced") +
-        dashboardBlock("Boot detaille", "factory recovery et ota_0",
-          '<div class="blockMetricGrid">' +
-            blockMetric("Boot configure", ota.bootLabel || ota.bootSlot || "N/A", "", "info", ota.bootSlot || "") +
-            blockMetric("Partition main", ota.mainInfo || "N/A", "", "info", "") +
-            blockMetric("Next update", ota.nextUpdateLabel || "N/A", "", "muted", ota.nextUpdateSlot || "") +
-            blockMetric("Running info", ota.runningInfo || "N/A", "", "muted", "") +
-            blockMetric("Boot info", ota.bootInfo || "N/A", "", "muted", "") +
-            blockMetric("Libre sketch", bytesHuman(ota.freeSketchSpace), "", "muted", "") +
-          '</div><div class="miniGrid">' + otaSlotCard("Factory recovery", ota.factory) + otaSlotCard("Main ota_0", ota.app0) + '</div>', "advanced") +
-        dashboardBlock("Services et securite", "etat technique",
-          '<div class="statusMiniGrid">' +
-            statusMini("WiFi", services.wifi) +
-            statusMini("NTP", services.ntp) +
-            statusMini("MQTT", services.mqtt) +
-            statusMini("Capteurs", services.sensors) +
-            statusMini("ESP-NOW", services.espnow) +
-            statusMini("Safety", services.safety) +
-          '</div><div class="blockMetricGrid">' +
-            blockMetric("RAM libre", bytesHuman(sys.freeHeap), "", "ok", "") +
-            blockMetric("RAM mini observee", bytesHuman(sys.minFreeHeap), "", "warn", "") +
-            blockMetric("CPU", sys.cpuFreqMHz == null ? "N/A" : sys.cpuFreqMHz, sys.cpuFreqMHz == null ? "" : "MHz", "info", "") +
-            blockMetric("Safety", sys.safetyLevel || "N/A", "", stateClass(sys.safetyLevel), sys.safetyReason || "N/A") +
-          '</div>', "advanced") +
-      '</div><h2>GPIO utilises</h2>' + gpioTable +
-    '</details>';
-  $("app").innerHTML = banner() + '<h1>Systeme</h1><div class="toolbar"><button onclick="refresh()">Actualiser</button><button class="danger" onclick="restartSystemPage()">Redemarrer ESP32</button><a href="/api/system-info">JSON systeme</a></div>' +
-    '<section class="systemSummaryBand">' + summaryItems.map(systemSummaryCard).join("") + '</section>' +
-    warningStrip() +
+  var name = (sys.device && sys.device.name) || sys.deviceName || "Nom indisponible";
+  var gpioRows = gpioRowsFromConfig();
+  var gpioTable = '<div class="tableScroll"><table><thead><tr><th>GPIO</th><th>Usage</th><th>Champ</th><th>Detail</th></tr></thead><tbody>' + gpioRows.map(function (row) {
+    return '<tr><td>GPIO' + esc(row.gpio) + '</td><td>' + esc(row.owner) + '</td><td>' + esc(row.field) + '</td><td>' + esc(row.detail) + '</td></tr>';
+  }).join("") + '</tbody></table></div>';
+  $("app").innerHTML = banner() +
+    '<header class="workbenchHeader"><div><span class="workbenchEyebrow">POSTE DE PILOTAGE</span><h1>Systeme</h1><p>Identifier cet ESP et preparer sa maintenance.</p></div><button onclick="refresh()">Actualiser</button></header>' +
     '<div class="settingsGrid systemMainGrid">' +
-    dashboardBlock("Identite ESP", "exploitation",
-      '<div class="blockMetricGrid">' +
-        blockMetric("Nom ESP", deviceName, "", "info", sys.deviceId || "") +
-        blockMetric("Uptime", uptimeHuman(sys.uptime), "", "ok", "") +
-      '</div>', "identity") +
-    dashboardBlock("Versions", "firmware et interface",
-      '<div class="blockMetricGrid">' +
-        blockMetric("Firmware", firmwareVersion, "", littleFsMismatch ? "warn" : "ok", "") +
-        blockMetric("LittleFS", littleFsVersion, "", littleFsMismatch ? "warn" : "info", "") +
-        blockMetric("Etat LittleFS", littleFsStatus, "", stateClass(littleFsStatus), "") +
-      '</div>', "versions") +
-    dashboardBlock("Reseau", "acces local",
-      '<div class="blockMetricGrid">' +
-        blockMetric("Mode WiFi", networkMode, "", wifiFallback ? "warn" : "info", "") +
-        blockMetric("IP active", sys.ip || "N/A", "", "info", "") +
-        blockMetric("MAC WiFi", sys.mac || "N/A", "", "muted", "") +
-        blockMetric("NTP", sys.localDateTime || "N/A", "", ntpCls, sys.ntpStatus || "N/A") +
-      '</div>', "network") +
-    dashboardBlock("Stockage / partitions", "memoire flash",
-      '<div class="blockMetricGrid">' +
-        blockMetric("Partition active", activePartition, "", "ok", ota.runningSlot || "") +
-        blockMetric("Taille app", bytesHuman(ota.runningSlotSize), "", "info", "partition app") +
-        blockMetric("Firmware utilise", bytesHuman(ota.sketchSize), "", "muted", "") +
-        blockMetric("Marge app", bytesHuman(appMargin), "", appMarginCls, "marge firmware") +
-        blockMetric("LittleFS utilise", bytesHuman(storage.used) + " / " + bytesHuman(storage.total), "", stateClass(littleFsStatus), "") +
-      '</div><p class="muted"><a href="/fs">Voir les fichiers LittleFS</a></p>', "storage") +
-    dashboardBlock("Actions systeme", "commandes locales",
-      '<p><button class="danger" onclick="restartSystemPage()">Redemarrer ESP32</button> <button class="danger" onclick="bootRecoveryPage()">Passer en recovery</button></p><p class="muted">Le redemarrage normal reste sur ota_0. Le bouton recovery redemarre sur la factory recovery pour les mises a jour.</p>', "actions") +
-    '</div>' + advancedHtml;
+      dashboardBlock("🪪 Carte d’identite", "cet appareil",
+        '<div class="blockMetricGrid">' +
+          blockMetric("Nom", name, "", "info", sys.deviceId || "") +
+          blockMetric("MAC Wi-Fi", sys.mac || "indisponible", "", "muted", "") +
+          blockMetric("Uptime", uptimeHuman(sys.uptime), "", "info", "depuis le demarrage") +
+          blockMetric("Dernier reset", sys.resetReason || "indisponible", "", "muted", "") + '</div>', "identity") +
+      dashboardBlock("🏷️ Versions", "firmware et interface",
+        '<div class="blockMetricGrid">' +
+          blockMetric("Firmware", sys.firmwareVersion || "indisponible", "", "info", "") +
+          blockMetric("LittleFS", sys.littleFsVersion || storage.version || "indisponible", "", "info", "") +
+          blockMetric("Compilation", sys.buildDate || "indisponible", "", "muted", "") + '</div><p class="muted">Des versions differentes ne signifient pas automatiquement une incompatibilite.</p>', "versions") +
+      dashboardBlock("🌐 Carnet d’adresses", "acces local",
+        '<div class="blockMetricGrid">' +
+          blockMetric("Mode reseau", sys.networkMode || "inconnu", "", "info", "") +
+          blockMetric("IP active", sys.ip || "indisponible", "", "info", "") +
+          blockMetric("Wi-Fi", sys.ssid || "non connecte", "", "muted", "") +
+          blockMetric("IP station / AP", (sys.stationIp || "—") + " / " + (sys.apIp || "—"), "", "muted", "") +
+          blockMetric("Heure locale", sys.localDateTime || "indisponible", "", sys.ntpSynced ? "info" : "warn", sys.ntpStatus || "non synchronisee") + '</div>', "network") +
+      dashboardBlock("💾 Stockage et demarrage", "flash et partitions",
+        '<div class="blockMetricGrid">' +
+          blockMetric("Partition active", ota.runningLabel || ota.runningSlot || "inconnue", "", "info", "") +
+          blockMetric("Prochain boot", ota.bootLabel || ota.bootSlot || "inconnu", "", "info", "") +
+          blockMetric("Firmware / partition", workbenchBytes(ota.sketchSize) + " / " + workbenchBytes(ota.runningSlotSize), "", "info", "") +
+          blockMetric("Marge application", workbenchBytes(ota.runningRemainingBytes), "", "muted", "") +
+          blockMetric("LittleFS utilise", workbenchBytes(storage.used) + " / " + workbenchBytes(storage.total), "", stateClass(storage.status), storage.status || "etat inconnu") + '</div><p><a href="/fs">Explorer LittleFS</a></p>', "storage") +
+    '</div><details id="systemAdvanced" class="systemAdvanced" ' + (systemAdvancedOpen ? 'open ' : '') + 'ontoggle="setSystemAdvancedOpen(this.open)"><summary>🔎 Fiche technique — partitions et GPIO</summary>' +
+      '<p>' + esc(ota.runningInfo || "") + '</p><p>' + esc(ota.bootInfo || "") + '</p><p>Main : ' + esc(ota.mainInfo || "indisponible") + '</p>' +
+      '<p>Build : ' + esc(sys.buildVersion || "indisponible") + ' · ' + esc(sys.buildTimestamp || "") + '</p>' + gpioTable + '</details>' +
+    '<section class="panel workbenchMaintenance"><h2>🧰 Atelier maintenance</h2><p><button onclick="identifyRouterLeds()">Identifier cet ESP par ses LED</button></p>' +
+      '<p class="muted">Clignotement des LED configurees pendant deux minutes.</p><div class="toolbar"><button class="danger" onclick="restartSystemPage()">Redemarrer ESP32</button><button class="danger" onclick="bootRecoveryPage()">Passer en recovery</button></div>' +
+      '<p class="muted">Le redemarrage normal reste sur ota_0. La recovery permet les mises a jour manuelles ; sauvegarder les cinq JSON avant LittleFS.</p><a href="/api/system-info" target="_blank" rel="noopener">JSON systeme</a></section>';
 }
 
 function setSystemAdvancedOpen(open) {
@@ -7229,7 +7020,8 @@ function setSystemAdvancedOpen(open) {
 
 async function restartSystemPage() {
   if (!confirm("Redemarrer ESP32 maintenant ?")) return;
-  await fetch("/api/restart", {method:"POST"});
+  var response = await fetch("/api/restart", {method:"POST"});
+  if (!response.ok) return alert("Redemarrage refuse : " + await response.text());
   $("app").innerHTML = '<h1>Redemarrage...</h1><div class="panel">Attends quelques secondes puis recharge /app.</div>';
 }
 
@@ -7237,63 +7029,7 @@ async function bootRecoveryPage() {
   if (!confirm("Redemarrer en recovery pour maintenance ?")) return;
   var response = await fetch("/api/system/recovery", {method:"POST"});
   if (!response.ok) return alert("Passage recovery refuse: " + await response.text());
-  $("app").innerHTML = '<h1>Passage en recovery...</h1><div class="panel">Connecte-toi a RouteurSolaire_Recovery ou ouvre l IP locale si le recovery rejoint le WiFi.</div>';
-}
-
-function simulationControlsHtml() {
-  var scenarios = [
-    ["normal", "Retour normal"],
-    ["production_low", "Production faible"],
-    ["injection_medium", "Injection moyenne"],
-    ["injection_high", "Forte injection"],
-    ["temperature_near_limit", "Temperature presque chaud"],
-    ["temperature_overheat", "Surchauffe equipement"],
-    ["critical_sensor_lost", "Perte capteur critique"],
-    ["jsy_lost", "Perte JSY"]
-  ];
-  return '<div class="blockStates">' +
-      blockState("Etat", state.simulationMode ? "active" : "inactive", state.simulationMode ? "warn" : "muted") +
-      blockState("Temps restant", state.simulationMode ? simRemainingText() : "-", state.simulationMode ? "warn" : "muted") +
-      blockState("Mode", state.simulationType || "manual", "info") +
-      blockState("Scenario", state.simulationScenario || "normal", "info") +
-    '</div>' +
-    '<div class="form simForm">' +
-    '<label>Mode<select id="simMode">' + options(["manual", "random", "scenario"], state.simulationType || "manual") + '</select></label>' +
-    '<label>Scenario<select id="simScenario">' + scenarios.map(function (item) { return '<option value="' + esc(item[0]) + '" ' + ((state.simulationScenario || "normal") === item[0] ? "selected" : "") + '>' + esc(item[1]) + '</option>'; }).join("") + '</select></label>' +
-    field("grid", "gridPowerW", state.gridPowerW || -800) +
-    field("voltage", "Tension V", 231) +
-    field("current", "Courant A", 4) +
-    field("jsyP1", "JSY puissance active 1 W", state.activePowerW1 || state.gridPowerW || -800) +
-    field("jsyC1", "JSY courant 1 A", state.currentA1 || 4) +
-    field("jsyP2", "JSY puissance active 2 W", state.activePowerW2 || 0) +
-    field("jsyC2", "JSY courant 2 A", state.currentA2 || 0) +
-    field("t1", "Sonde 1 C", state.temperature1C || 45) +
-    field("t2", "Sonde 2 C", state.temperature2C || 42) +
-    field("t3", "Sonde 3 C", state.temperature3C || 38) +
-    '</div><div class="toolbar">' +
-      '<button onclick="simEnable()">Activer</button>' +
-      '<button onclick="simModeApply()">Appliquer mode</button>' +
-      '<button onclick="simScenarioApply()">Appliquer scenario</button>' +
-      '<button onclick="simValues()">Appliquer manuel</button>' +
-      '<button onclick="simRandom()">Aleatoire</button>' +
-      '<button onclick="simScenario(\'temperature_overheat\')">Surchauffe</button>' +
-      '<button onclick="simScenario(\'jsy_lost\')">Perte JSY</button>' +
-      '<button class="danger" onclick="simDisable()">Desactiver</button>' +
-    '</div><p class="muted">La simulation se coupe automatiquement apres 5 minutes et ne reste pas active apres reboot. Les sorties 230 V restent OFF.</p>';
-}
-
-async function toggleAutomateDebug() {
-  var response = await fetch("/api/logs/automate", {
-    method: "POST",
-    body: new URLSearchParams({enabled: String(!state.automateDebug)})
-  });
-  if (!response.ok) return alert("Debug AUTOMATE indisponible (" + response.status + ").");
-  await refresh();
-}
-
-async function clearLogs() {
-  await fetch("/api/logs/clear", {method:"POST"});
-  await refresh();
+  $("app").innerHTML = '<h1>Passage en recovery...</h1><div class="panel">Connecte-toi a RSrecoverymode_XXXX ou ouvre l IP locale si le recovery rejoint le WiFi.</div>';
 }
 
 async function jsonEditor(name) {

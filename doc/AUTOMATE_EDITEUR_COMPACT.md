@@ -48,12 +48,12 @@ Sauvegarder affiche le JSON localement. Aucun scenario Jeedom n'a ete modifie.
 
 Fichiers de production modifies : `data/www/app.js`, `data/www/style.css`,
 `data/www/index.html` (cache v48). Apercu : `preview_automate.html` et
-`tools/preview_automate_server.js`. Tests : `tools/test_scenario_editor.js`,
+`tools/preview_automate_server.js`. Tests : `tools/tests/test_scenario_editor.js`,
 adaptations des bancs `test_linky_routing.js` et `test_schedule_removal.js`.
 
 ## Verification et installation
 
-Syntaxe JavaScript et tous les `tools/test_*.js`. Le nouveau test verifie SINON,
+Syntaxe JavaScript et tous les `tools/tests/test_*.js`. Le nouveau test verifie SINON,
 les types de valeurs, les champs supplementaires, les alias, les valeurs hors
 limites et l'avertissement d'ordre d'execution. Verification navigateur de
 l'ouverture d'un scenario, des parametres de commande et d'une sauvegarde
@@ -130,7 +130,7 @@ et ActuatorManager, avec les gardes de securite existantes.
 Fichiers : `data/www/app.js`, `data/www/index.html` (cache v49),
 `src/actuators/actuator_manager.cpp`, `src/actuators/actuator_manager.h`,
 `src/logic/rule_engine.cpp`, les marqueurs de version et ces notes.
-Tests : nouveau `tools/test_ssr_commands.js` (menus par cible, alias, conversion
+Tests : nouveau `tools/tests/test_ssr_commands.js` (menus par cible, alias, conversion
 complete jusqu'a FinalCommand, bornes, valeurs invalides et on/off), adaptation
 des bancs d'editeur et Linky. Douze scripts passent. Le navigateur local a
 verifie les six commandes SSR, le passage a Actions systeme et une sauvegarde

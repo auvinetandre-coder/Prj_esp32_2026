@@ -50,7 +50,7 @@ intentions partagees, meme si elles affichent deja un retour de puissance.
 L'installation se fait par recovery explicite, avec sauvegarde verifiee des
 cinq configurations de chaque ESP avant LittleFS et restauration si necessaire.
 
-Validation logicielle : `tools/test_shared_actuator_control.js` execute les corps
+Validation logicielle : `tools/tests/test_shared_actuator_control.js` execute les corps
 C++ de demande, reception et observation dans deux contextes ESP simules, ainsi
 que le controleur de session. Cas testes : MANUEL/OFF/AUTO dans les deux sens,
 ancien renouvellement refuse, changement de pilote, autre sortie preservee,
@@ -77,7 +77,7 @@ pilote encore la sortie. Les priorites du firmware, dont le manuel local du SSR
 et Safety, restent identiques. Ce changement synchronise l'affichage et ne
 fusionne pas des ordres contradictoires ni ne commande les sorties par polling.
 
-Correction dans `data/www/app.js`, tests dans `tools/test_espnow_actuator_state.js`
+Correction dans `data/www/app.js`, tests dans `tools/tests/test_espnow_actuator_state.js`
 et marqueur LittleFS. Les 15 tests doivent passer. Firmware 20261025-08 compatible,
 pas de reconstruction firmware necessaire. Installer LittleFS 20261026-02 sur
 les deux ESP par recovery apres sauvegarde verifiee de leurs configurations.
@@ -95,7 +95,7 @@ Le retour annonce du SSR reste separe ; un etat UNKNOWN avec un ESP eteint
 ne bloque pas la remise a zero de la consigne affichee.
 
 Correction WebUI uniquement dans `data/www/app.js`. Le firmware 20261025-08
-reste utilisable. `tools/test_manual_actuator.js` reproduit 47 % puis OFF/AUTO,
+reste utilisable. `tools/tests/test_manual_actuator.js` reproduit 47 % puis OFF/AUTO,
 avec reponse HTTP retardee et nouvelle saisie pendant l'attente. Les commandes
 en attente restent annulees avant OFF/AUTO. Aucun ordre supplementaire n'est
 genere pour remettre le curseur a zero. Validation sur cartes encore necessaire.
@@ -135,8 +135,8 @@ consignes peuvent donc differer volontairement, avec une sortie annoncee commune
 
 Fichiers : `src/communication/espnow_manager.h/.cpp`,
 `src/actuators/actuator_manager.h/.cpp`, `data/www/app.js` et marqueurs de version.
-Tests : `tools/test_espnow_actuator_state.js`, adaptation du banc
-`tools/test_ssr_nan.js`, puis ensemble des tests existants et compilation ESP32.
+Tests : `tools/tests/test_espnow_actuator_state.js`, adaptation du banc
+`tools/tests/test_ssr_nan.js`, puis ensemble des tests existants et compilation ESP32.
 
 Sur banc : installer le firmware sur les deux ESP et LittleFS avec sauvegarde
 prealable de `/config`, via passage explicite en recovery. Verifier export et
@@ -176,10 +176,10 @@ comme capteur ne constitue pas une cible de commande. Les deux ESP doivent
 autoriser mutuellement leurs MAC STA dans leurs peers. La discovery seule ne
 garantit pas cette autorisation.
 
-Tests locaux : `tools/test_espnow_actuator_command.js` execute les blocs de
+Tests locaux : `tools/tests/test_espnow_actuator_command.js` execute les blocs de
 production d'acceptation, maintien, expiration et arbitrage (boots decales, peers,
 Safety, manuel, autres canaux, rebouclage d'horloge).
-`tools/test_manual_actuator.js` conserve la verification du manuel.
+`tools/tests/test_manual_actuator.js` conserve la verification du manuel.
 
 Sur banc : commander 25 puis 60 puis 0 %, verifier la sortie sur l'ESP du SSR,
 redemarrer les ESP separement, remettre 60 % puis interrompre le pilote pour verifier la coupure
@@ -223,7 +223,7 @@ reste 30 s ; la soustraction non signee fonctionne au rebouclage de `millis()`.
 Les delais des capteurs et les imports manuels sont preserves.
 
 Fichiers : `src/communication/espnow_manager.cpp`,
-`tools/test_espnow_node_liveness.js`. Le test execute le corps du controleur
+`tools/tests/test_espnow_node_liveness.js`. Le test execute le corps du controleur
 C++ traduit mecaniquement et verifie une reception plus recente que la boucle,
 une vraie expiration, le retour du noeud, les notifications uniques et le
 rebouclage d'horloge. Sur ESP, verifier la disparition des couples LOST/RESTORED

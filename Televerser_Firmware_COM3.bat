@@ -1,3 +1,3 @@
 @echo off
-cd /d "%~dp0"
-call ".\tools\Televerser_Firmware_COM3.bat"
+call "%~dp0tools\Televerser_Firmware.bat" COM3 921600
+exit /b %errorlevel%

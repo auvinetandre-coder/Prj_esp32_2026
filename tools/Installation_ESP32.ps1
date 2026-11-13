@@ -1,7 +1,8 @@
 param(
   [Parameter(Mandatory = $true)]
-  [ValidateSet('Effacer', 'Recovery')][string]$Phase,
-  [ValidatePattern('^COM[1-9][0-9]*$')][string]$Port
+  [ValidateSet('Effacer', 'Recovery', 'RecoverySeule')][string]$Phase,
+  [ValidatePattern('^COM[1-9][0-9]*$')][string]$Port,
+  [string]$RecoveryBin
 )
 
 $ErrorActionPreference = 'Stop'
@@ -15,7 +16,7 @@ function Invoke-Checked([string]$Program, [string[]]$Arguments) {
 try {
   if (!$Port) {
     Write-Host ('Ports presents : ' + ([IO.Ports.SerialPort]::GetPortNames() -join ', '))
-    $Port = (Read-Host 'Port du nouvel ESP32 (exemple COM4)').Trim().ToUpperInvariant()
+    $Port = (Read-Host 'Port ESP32 (exemple COM4)').Trim().ToUpperInvariant()
   }
   if ($Port -notmatch '^COM[1-9][0-9]*$') { throw 'Port COM invalide.' }
   if (!(Test-Path -LiteralPath $env:ESPTOOL)) { throw 'esptool introuvable.' }
@@ -29,6 +30,12 @@ try {
     }
     Invoke-Checked $env:ESPTOOL @('--chip','esp32','--port',$Port,'--baud','115200','erase_flash')
     Write-Host 'Flash effacee. Executer maintenant 02_Installer_Recovery.bat.'
+    exit 0
+  }
+
+  if ($Phase -eq 'RecoverySeule') {
+    & (Join-Path $PSScriptRoot 'Recovery_Seule.ps1') -Port $Port -RecoveryBin $RecoveryBin
+    if ($LASTEXITCODE -ne 0) { throw 'Mise a jour Recovery seule echouee.' }
     exit 0
   }
 

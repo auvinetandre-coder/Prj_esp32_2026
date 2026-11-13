@@ -28,21 +28,3 @@ void Logger::logEvent(const String &level, const String &code, const String &mes
   state->logEvent(level, code, message, source);
 }
 
-void Logger::getRecentEvents(JsonArray out) {
-  if (!state) return;
-  state->eventsToJson(out);
-}
-
-void Logger::clearEvents() {
-  if (!state) return;
-  state->clearEvents();
-}
-
-void Logger::exportEventsJson(String &out) {
-  out = "{}";
-  if (!state) return;
-  DynamicJsonDocument doc(8192);
-  JsonArray events = doc["events"].to<JsonArray>();
-  state->eventsToJson(events);
-  serializeJson(doc, out);
-}

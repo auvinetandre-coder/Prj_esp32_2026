@@ -44,12 +44,6 @@ void SensorManager::begin() {
 
 void SensorManager::loop(uint32_t now) {
   refreshMqttProduction();
-  // En simulation, les valeurs capteurs viennent du SimulationManager.
-  // On ne laisse donc pas les lectures physiques ecraser ces valeurs.
-  if (state.simulationMode) {
-    return;
-  }
-
   startMetersForCurrentSource();
   if (jsyStarted) jsy.loop(now);
   if (ticStarted) tic.loop(now);
@@ -65,7 +59,7 @@ void SensorManager::refreshMqttProduction() {
   topic.trim();
   const bool enabled = cfg["enabled"] | false;
   if (enabled != state.mqttProductionEnabled || topic != mqttProductionTopic) {
-    if (state.mqttProductionEnabled && !state.simulationMode) state.productionW = NAN;
+    if (state.mqttProductionEnabled) state.productionW = NAN;
     mqttProductionReceived = false;
     mqttProductionW = NAN;
     state.lastMqttProductionMs = 0;
@@ -93,24 +87,23 @@ void SensorManager::applyMqttProduction() {
     state.mqttProductionStatus = "DISABLED";
     return;
   }
-  if (state.simulationMode || !(config.system()["mqtt"]["enabled"] | false)) mqttProductionReceived = false;
+  if (!(config.system()["mqtt"]["enabled"] | false)) mqttProductionReceived = false;
   const bool expired = mqttProductionReceived && millis() - state.lastMqttProductionMs >= state.mqttProductionTimeoutMs;
-  const bool available = mqttProductionReceived && !expired && !state.simulationMode &&
+  const bool available = mqttProductionReceived && !expired &&
                         (config.system()["mqtt"]["enabled"] | false);
   if (expired && state.mqttProductionStatus != "TIMEOUT") {
     state.logEvent("WARNING", "MQTT_PRODUCTION_TIMEOUT", "Production MQTT sans nouvelle mesure", "SensorManager");
   }
   if (expired) state.mqttProductionStatus = "TIMEOUT";
-  else if (state.simulationMode) state.mqttProductionStatus = "SIMULATION";
   else if (!(config.system()["mqtt"]["enabled"] | false)) state.mqttProductionStatus = "MQTT_DISABLED";
   else if (available) state.mqttProductionStatus = "OK";
-  else if (state.mqttProductionStatus == "SIMULATION" || state.mqttProductionStatus == "MQTT_DISABLED" || state.mqttProductionStatus == "DISABLED") state.mqttProductionStatus = "WAITING";
+  else if (state.mqttProductionStatus == "MQTT_DISABLED" || state.mqttProductionStatus == "DISABLED") state.mqttProductionStatus = "WAITING";
   state.mqttProductionAvailable = available;
-  if (!state.simulationMode) state.productionW = available ? mqttProductionW : NAN;
+  state.productionW = available ? mqttProductionW : NAN;
 }
 
 bool SensorManager::receiveMqttProduction(const String &payload) {
-  if (!state.mqttProductionEnabled || state.simulationMode) return false;
+  if (!state.mqttProductionEnabled) return false;
   char *end = nullptr;
   errno = 0;
   const float value = strtof(payload.c_str(), &end);
@@ -1092,11 +1085,6 @@ void SensorManager::reloadConfiguration() {
 SensorManager::PowerSample SensorManager::gridPowerSample(const String &sensorId, const String &variable, uint32_t now) {
   PowerSample result;
   if (variable != "gridPowerW" && variable != "jsyGridPowerW") return result;
-  if (state.simulationMode) {
-    result.watts = state.gridPowerW; result.timestampMs = now;
-    result.source = "SIMULATION"; result.valid = isfinite(result.watts);
-    return result;
-  }
   if (sensorId == "grid") {
     // Resolve AUTO in the sensor layer. The PID sees only a canonical sample.
     const String choice = configuredGridPowerSource();

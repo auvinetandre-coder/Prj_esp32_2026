@@ -1,4 +1,5 @@
 #include "safety_manager.h"
+#include "../diagnostics/serial_capture.h"
 
 void SafetyManager::begin() {
   level = SAFETY_OK;
